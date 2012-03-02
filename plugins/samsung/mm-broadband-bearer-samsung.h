@@ -50,7 +50,7 @@ GType mm_broadband_bearer_samsung_get_type (void);
 
 /* Default 3GPP bearer creation implementation */
 void mm_broadband_bearer_samsung_new (MMBroadbandModemSamsung *modem,
-                                      MMCommonBearerProperties *properties,
+                                      MMBearerProperties *properties,
                                       GCancellable *cancellable,
                                       GAsyncReadyCallback callback,
                                       gpointer user_data);

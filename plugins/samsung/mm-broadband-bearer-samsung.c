@@ -450,7 +450,7 @@ mm_broadband_bearer_samsung_new_finish (GAsyncResult *res,
 }
 
 void mm_broadband_bearer_samsung_new (MMBroadbandModemSamsung *modem,
-                                      MMCommonBearerProperties *properties,
+                                      MMBearerProperties *properties,
                                       GCancellable *cancellable,
                                       GAsyncReadyCallback callback,
                                       gpointer user_data)
