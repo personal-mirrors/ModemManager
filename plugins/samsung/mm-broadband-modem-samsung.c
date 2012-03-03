@@ -29,6 +29,7 @@
 #include "mm-broadband-modem-samsung.h"
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-3gpp.h"
+#include "mm-modem-helpers.h"
 #include "mm-log.h"
 
 static void iface_modem_init (MMIfaceModem *iface);
@@ -199,6 +200,226 @@ load_current_bands (MMIfaceModem *self,
         result);
 }
 
+static MMModemMode
+load_supported_modes_finish (MMIfaceModem *self,
+                             GAsyncResult *res,
+                             GError **error)
+{
+    return (MMModemMode) GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
+                                               G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static void
+load_supported_modes (MMIfaceModem *self,
+                      GAsyncReadyCallback callback,
+                      gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        load_supported_modes);
+
+    g_simple_async_result_set_op_res_gpointer (result,
+                                               GUINT_TO_POINTER (MM_MODEM_MODE_2G |
+                                                                 MM_MODEM_MODE_3G),
+                                               NULL);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
+}
+
+typedef struct {
+    MMModemMode allowed;
+    MMModemMode preferred;
+} ModePair;
+
+static gboolean
+load_allowed_modes_finish (MMIfaceModem *self,
+                           GAsyncResult *res,
+                           MMModemMode *allowed,
+                           MMModemMode *preferred,
+                           GError **error)
+{
+    ModePair *pair;
+
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return FALSE;
+
+    pair = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
+    *allowed = pair->allowed;
+    *preferred = pair->preferred;
+    return TRUE;
+}
+
+static void
+load_allowed_modes_ready (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          GSimpleAsyncResult *operation_result)
+{
+    const gchar *response;
+    GError *error = NULL;
+    MMModemMode allowed, preferred;
+    int mode, domain;
+
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
+    if (!response) {
+        g_simple_async_result_take_error (operation_result, error);
+        g_simple_async_result_complete (operation_result);
+        g_object_unref (operation_result);
+        return;
+    }
+
+    allowed = preferred = MM_MODEM_MODE_NONE;
+    response = mm_strip_tag (response, "%IPSYS:");
+
+    if (sscanf (response, " %d,%d", &mode, &domain)) {
+        switch (mode) {
+            case 0:
+                allowed = preferred = MM_MODEM_MODE_2G;
+                break;
+            case 1:
+                allowed = preferred = MM_MODEM_MODE_3G;
+                break;
+            case 2:
+                allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+                preferred = MM_MODEM_MODE_2G;
+                break;
+            case 3:
+                allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+                preferred = MM_MODEM_MODE_3G;
+                break;
+            case 5:
+                allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+                break;
+        }
+    }
+
+    if (allowed == MM_MODEM_MODE_NONE) {
+        g_simple_async_result_set_error (operation_result,
+                                         MM_CORE_ERROR,
+                                         MM_CORE_ERROR_FAILED,
+                                         "Invalid supported modes response: '%s'",
+                                         response);
+    } else {
+        ModePair *pair;
+
+        pair = g_new0 (ModePair, 1);
+        pair->allowed = allowed;
+        pair->preferred = preferred;
+        g_simple_async_result_set_op_res_gpointer (operation_result,
+                                                   pair,
+                                                   g_free);
+    }
+    g_simple_async_result_complete_in_idle (operation_result);
+    g_object_unref (operation_result);
+}
+
+static void
+load_allowed_modes (MMIfaceModem *self,
+                         GAsyncReadyCallback callback,
+                         gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        load_allowed_modes);
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        "%IPSYS?",
+        3,
+        FALSE,
+        NULL,
+        (GAsyncReadyCallback)load_allowed_modes_ready,
+        result);
+}
+
+static gboolean
+set_allowed_modes_finish (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+set_allowed_modes_ready (MMBaseModem *self,
+                         GAsyncResult *res,
+                         GSimpleAsyncResult *operation_result)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error))
+        /* Let the error be critical */
+        g_simple_async_result_take_error (operation_result, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (operation_result, TRUE);
+
+    g_simple_async_result_complete (operation_result);
+    g_object_unref (operation_result);
+}
+
+static void
+set_allowed_modes (MMIfaceModem *self,
+                   MMModemMode modes,
+                   MMModemMode preferred,
+                   GAsyncReadyCallback callback,
+                   gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+    gint value;
+    gchar *command;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        set_allowed_modes);
+
+    /*
+     * The core has checked the following:
+     *  - that 'modes' are a subset of the allowed modes
+     *  - that 'preferred' is one mode, and a subset of 'modes'
+     */
+    if (modes == MM_MODEM_MODE_2G)
+        value = 0;
+    else if (modes == MM_MODEM_MODE_3G)
+        value = 1;
+    else if (modes == (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G) &&
+             preferred == MM_MODEM_MODE_2G)
+        value = 2;
+    else if (modes == (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G) &&
+             preferred == MM_MODEM_MODE_3G)
+        value = 3;
+    else if (modes == (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G) &&
+             preferred == MM_MODEM_MODE_NONE)
+        value = 5;
+    else {
+        g_simple_async_result_set_error (result,
+                                         MM_CORE_ERROR,
+                                         MM_CORE_ERROR_INVALID_ARGS,
+                                         "Couldn't set allowed modes, "
+                                         "unsupported combination of allowed (%d) and "
+                                         "preferred (%d)",
+                                         modes, preferred);
+        g_simple_async_result_complete_in_idle (result);
+        g_object_unref (result);
+        return;
+    }
+
+    command = g_strdup_printf ("%%IPSYS=%d", value);
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        command,
+        3,
+        FALSE,
+        NULL,
+        (GAsyncReadyCallback)set_allowed_modes_ready,
+        result);
+    g_free (command);
+}
+
 MMBroadbandModemSamsung *
 mm_broadband_modem_samsung_new (const gchar *device,
                                  const gchar *driver,
@@ -289,6 +510,12 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_supported_bands_finish = load_supported_bands_finish;
     iface->load_current_bands = load_current_bands;
     iface->load_current_bands_finish = load_current_bands_finish;
+    iface->load_supported_modes = load_supported_modes;
+    iface->load_supported_modes_finish = load_supported_modes_finish;
+    iface->load_allowed_modes = load_allowed_modes;
+    iface->load_allowed_modes_finish = load_allowed_modes_finish;
+    iface->set_allowed_modes = set_allowed_modes;
+    iface->set_allowed_modes_finish = set_allowed_modes_finish;
 }
 
 static void
