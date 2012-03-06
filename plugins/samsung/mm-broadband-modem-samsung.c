@@ -130,7 +130,7 @@ load_current_bands_ready (MMIfaceModem *self,
     if (!response) {
         mm_dbg ("Couldn't query supported bands: '%s'", error->message);
         g_simple_async_result_take_error (operation_result, error);
-        g_simple_async_result_complete_in_idle (operation_result);
+        g_simple_async_result_complete (operation_result);
         g_object_unref (operation_result);
         return;
     }
@@ -175,7 +175,7 @@ load_current_bands_ready (MMIfaceModem *self,
     g_simple_async_result_set_op_res_gpointer (operation_result,
                                                bands,
                                                (GDestroyNotify)g_array_unref);
-    g_simple_async_result_complete_in_idle (operation_result);
+    g_simple_async_result_complete (operation_result);
     g_object_unref (operation_result);
 }
 
@@ -311,7 +311,7 @@ load_allowed_modes_ready (MMIfaceModem *self,
                                                    pair,
                                                    g_free);
     }
-    g_simple_async_result_complete_in_idle (operation_result);
+    g_simple_async_result_complete (operation_result);
     g_object_unref (operation_result);
 }
 

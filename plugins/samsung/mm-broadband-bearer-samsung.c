@@ -43,16 +43,21 @@ typedef struct {
     MMAtSerialPort *primary;
     GCancellable *cancellable;
     GSimpleAsyncResult *result;
-    GError *saved_error;
 
     guint cid;
     guint timeout_id;
 } DialContext;
 
+typedef struct {
+    MMBroadbandBearerSamsung *self;
+    GSimpleAsyncResult *result;
+    guint timeout_id;
+} DisconnectContext;
+
 struct _MMBroadbandBearerSamsungPrivate {
-    guint cid;
+    guint connected_cid;
     DialContext *pending_dial;
-    GSimpleAsyncResult *pending_disconnect;
+    DisconnectContext *pending_disconnect;
 };
 
 static DialContext *
@@ -83,9 +88,7 @@ dial_context_new (MMBroadbandBearerSamsung *self,
 static void
 dial_context_complete_and_free (DialContext *ctx)
 {
-    if (ctx->saved_error)
-        g_error_free (ctx->saved_error);
-    g_simple_async_result_complete_in_idle (ctx->result);
+    g_simple_async_result_complete (ctx->result);
     g_object_unref (ctx->result);
     g_object_unref (ctx->cancellable);
     g_object_unref (ctx->primary);
@@ -115,12 +118,15 @@ dial_3gpp_finish (MMBroadbandBearer *self,
 static gboolean
 dial_3gpp_timeout (DialContext *ctx)
 {
+    MMBroadbandBearerSamsung *self = ctx->self;
 
     g_simple_async_result_set_error (ctx->result,
                                      MM_SERIAL_ERROR,
                                      MM_SERIAL_ERROR_RESPONSE_TIMEOUT,
                                      "Timed out waiting for connection to complete");
     dial_context_complete_and_free (ctx);
+    self->priv->connected_cid = 0;
+    self->priv->pending_dial = NULL;
 
     return FALSE;
 }
@@ -131,7 +137,7 @@ dial_3gpp_done (MMBroadbandBearerSamsung *self,
                 DialContext *ctx)
 {
 
-    self->priv->cid = self->priv->pending_dial->cid;
+    self->priv->connected_cid = self->priv->pending_dial->cid;
 
     if (ctx->timeout_id) {
         g_source_remove (ctx->timeout_id);
@@ -144,7 +150,7 @@ dial_3gpp_done (MMBroadbandBearerSamsung *self,
 
 static void
 disconnect_3gpp_done (MMBroadbandBearerSamsung *self,
-                      GSimpleAsyncResult *result);
+                      DisconnectContext *result);
 
 static void
 ipdpact_received (MMAtSerialPort *port,
@@ -159,9 +165,9 @@ ipdpact_received (MMAtSerialPort *port,
     cid = atoi (str);
     g_free (str);
 
-    if (cid != self->priv->cid) {
-        mm_dbg ("Recieved %%IPDPACT message for CID other than the current one (%d).",
-                self->priv->cid);
+    if (cid != self->priv->connected_cid) {
+        mm_warn ("Recieved %%IPDPACT message for CID other than the current one (%d).",
+                 self->priv->connected_cid);
         return;
     }
 
@@ -174,7 +180,7 @@ ipdpact_received (MMAtSerialPort *port,
         case 0:
             /* deactivated */
             if (self->priv->pending_disconnect == NULL) {
-                mm_dbg ("Recieved %%IPDPACT disconnect while not disconnecting.");
+                mm_warn ("Recieved %%IPDPACT disconnect while not disconnecting.");
                 /* TODO(njw): How do we tell the system that this disconnected? */
                 return;
             }
@@ -183,7 +189,7 @@ ipdpact_received (MMAtSerialPort *port,
         case 1:
             /* activated */
             if (self->priv->pending_dial == NULL) {
-                mm_dbg ("Recieved %%IPDPACT connect while not connecting.");
+                mm_warn ("Recieved %%IPDPACT connect while not connecting.");
                 return;
             }
             dial_3gpp_done (self, self->priv->pending_dial);
@@ -205,11 +211,12 @@ dial_3gpp_wait (MMBaseModem *modem,
                 GAsyncResult *res,
                 DialContext *ctx)
 {
-    mm_base_modem_at_command_finish (modem, res, &ctx->saved_error);
+    GError *error = NULL;
 
-    if (ctx->saved_error) {
-        g_simple_async_result_take_error (ctx->result,
-                                          ctx->saved_error);
+    mm_base_modem_at_command_finish (modem, res, &error);
+
+    if (error) {
+        g_simple_async_result_take_error (ctx->result, error);
         dial_context_complete_and_free (ctx);
         return;
     }
@@ -225,16 +232,12 @@ dial_3gpp_activate (MMBaseModem *modem,
 {
     gchar *command;
 
-    mm_base_modem_at_command_finish (modem, res, &ctx->saved_error);
-
-    if (ctx->saved_error) {
-        /* TODO(njw): retry up to 3 times with a 1-second delay */
-        /* Return an error */
-        g_simple_async_result_take_error (ctx->result,
-                                          ctx->saved_error);
-        dial_context_complete_and_free (ctx);
-        return;
-    }
+    /*
+     * Ignore any error here; %IPDPACT=ctx,0 will produce an error 767
+     * if the context is not, in fact, connected. This is annoying but
+     * harmless.
+     */
+    mm_base_modem_at_command_finish (modem, res, NULL);
 
     command = g_strdup_printf ("%%IPDPACT=%d,1", ctx->cid);
     mm_base_modem_at_command_in_port (
@@ -250,7 +253,44 @@ dial_3gpp_activate (MMBaseModem *modem,
 
     /* The unsolicited response to %IPDPACT may come before the OK does */
     ctx->self->priv->pending_dial = ctx;
-    ctx->self->priv->cid = ctx->cid;
+    ctx->self->priv->connected_cid = ctx->cid;
+}
+
+static void
+dial_3gpp_prepare (MMBaseModem *modem,
+                   GAsyncResult *res,
+                   DialContext *ctx)
+{
+    gchar *command;
+    GError *error = NULL;
+
+    mm_base_modem_at_command_finish (modem, res, &error);
+
+    if (error) {
+        /* TODO(njw): retry up to 3 times with a 1-second delay */
+        /* Return an error */
+        g_simple_async_result_take_error (ctx->result, error);
+        dial_context_complete_and_free (ctx);
+        return;
+    }
+
+    /*
+     * Deactivate the context we want to use before we try to activate
+     * it.  This handles the case where ModemManager crashed while
+     * connected and is now trying to reconnect. (Should some part of
+     * the core or modem driver have made sure of this already?)
+     */
+    command = g_strdup_printf ("%%IPDPACT=%d,0", ctx->cid);
+    mm_base_modem_at_command_in_port (
+        ctx->modem,
+        ctx->primary,
+        command,
+        60,
+        FALSE,
+        NULL, /* cancellable */
+        (GAsyncReadyCallback)dial_3gpp_activate,
+        ctx);
+    g_free (command);
 }
 
 static void
@@ -282,7 +322,7 @@ dial_3gpp (MMBroadbandBearer *self,
         60,
         FALSE,
         NULL, /* cancellable */
-        (GAsyncReadyCallback)dial_3gpp_activate,
+        (GAsyncReadyCallback)dial_3gpp_prepare,
         ctx);
     g_free (command);
 }
@@ -295,29 +335,63 @@ disconnect_3gpp_finish (MMBroadbandBearer *self,
     return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
 
-static void
-disconnect_3gpp_done (MMBroadbandBearerSamsung *self,
-                      GSimpleAsyncResult *result)
+static gboolean
+disconnect_3gpp_timeout (DisconnectContext *ctx)
 {
-    g_simple_async_result_set_op_res_gboolean (result, TRUE);
-    g_simple_async_result_complete_in_idle (result);
+    MMBroadbandBearerSamsung *self = ctx->self;
+
+    g_simple_async_result_set_error (ctx->result,
+                                     MM_SERIAL_ERROR,
+                                     MM_SERIAL_ERROR_RESPONSE_TIMEOUT,
+                                     "Timed out waiting for connection to complete");
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
 
     self->priv->pending_disconnect = NULL;
-    self->priv->cid = 0;
+    g_free (ctx);
+
+    return FALSE;
+}
+
+static void
+disconnect_3gpp_done (MMBroadbandBearerSamsung *self,
+                      DisconnectContext *ctx)
+{
+    if (ctx->timeout_id) {
+        g_source_remove (ctx->timeout_id);
+        ctx->timeout_id = 0;
+    }
+
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
+
+    self->priv->pending_disconnect = NULL;
+    self->priv->connected_cid = 0;
+    g_free (ctx);
 }
 
 static void
 disconnect_3gpp_ready (MMBaseModem *modem,
                        GAsyncResult *res,
-                       GSimpleAsyncResult *result)
+                       DisconnectContext *ctx)
 {
     GError *error = NULL;
 
     mm_base_modem_at_command_finish (MM_BASE_MODEM (modem), res, &error);
     if (error) {
-        mm_dbg ("PDP context deactivation failed (not fatal): %s", error->message);
-        g_error_free (error);
+        mm_dbg ("PDP context deactivation failed: %s", error->message);
+        g_simple_async_result_take_error (ctx->result, error);
+        g_simple_async_result_complete (ctx->result);
+        g_object_unref (ctx->result);
+
+        ctx->self->priv->pending_disconnect = NULL;
+        g_free (ctx);
+        return;
     }
+
+    /* Set a 60-second disconnection-failure timeout */
+    ctx->timeout_id = g_timeout_add_seconds (60, (GSourceFunc)disconnect_3gpp_timeout, ctx);
 }
 
 static void
@@ -331,14 +405,16 @@ disconnect_3gpp (MMBroadbandBearer *bearer,
 {
     MMBroadbandBearerSamsung *self = MM_BROADBAND_BEARER_SAMSUNG (bearer);
     gchar *command;
-    GSimpleAsyncResult *result;
+    DisconnectContext *ctx;
 
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        disconnect_3gpp);
+    ctx = g_new0 (DisconnectContext, 1);
+    ctx->self = self;
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             disconnect_3gpp);
 
-    command = g_strdup_printf ("%%IPDPACT=%d,0", self->priv->cid);
+    command = g_strdup_printf ("%%IPDPACT=%d,0", self->priv->connected_cid);
     mm_base_modem_at_command_in_port (
         MM_BASE_MODEM (modem),
         primary,
@@ -347,10 +423,10 @@ disconnect_3gpp (MMBroadbandBearer *bearer,
         FALSE,
         NULL, /* cancellable */
         (GAsyncReadyCallback)disconnect_3gpp_ready,
-        result);
+        ctx);
     g_free (command);
 
-    self->priv->pending_disconnect = result;
+    self->priv->pending_disconnect = ctx;
 }
 
 static void
@@ -387,13 +463,13 @@ set_unsolicited_result_codes (MMBroadbandBearerSamsung *self, gboolean enable)
 }
 
 static void
-finalize (GObject *object)
+dispose (GObject *object)
 {
     MMBroadbandBearerSamsung *self = MM_BROADBAND_BEARER_SAMSUNG (object);
 
     set_unsolicited_result_codes (self, FALSE);
 
-    G_OBJECT_CLASS (mm_broadband_bearer_samsung_parent_class)->finalize (object);
+    G_OBJECT_CLASS (mm_broadband_bearer_samsung_parent_class)->dispose (object);
 }
 
 static void
@@ -404,7 +480,7 @@ mm_broadband_bearer_samsung_init (MMBroadbandBearerSamsung *self)
                                               MMBroadbandBearerSamsungPrivate);
 
     /* Set defaults */
-    self->priv->cid = 0;
+    self->priv->connected_cid = 0;
     self->priv->pending_dial = NULL;
     self->priv->pending_disconnect = NULL;
 }
@@ -424,7 +500,7 @@ mm_broadband_bearer_samsung_class_init (MMBroadbandBearerSamsungClass *klass)
     bearer_class->disconnect_3gpp = disconnect_3gpp;
     bearer_class->disconnect_3gpp_finish = disconnect_3gpp_finish;
 
-    object_class->finalize = finalize;
+    object_class->dispose = dispose;
 }
 
 MMBearer *
