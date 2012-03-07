@@ -41,6 +41,125 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemSamsung, mm_broadband_modem_samsung, MM_
 
 /*****************************************************************************/
 
+static gboolean
+load_access_technologies_finish (MMIfaceModem *self,
+                                 GAsyncResult *res,
+                                 MMModemAccessTechnology *access_technologies,
+                                 guint *mask,
+                                 GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return FALSE;
+
+    *access_technologies = (MMModemAccessTechnology) GPOINTER_TO_UINT (
+        g_simple_async_result_get_op_res_gpointer (
+            G_SIMPLE_ASYNC_RESULT (res)));
+    *mask = MM_MODEM_ACCESS_TECHNOLOGY_ANY;
+    return TRUE;
+}
+
+static MMModemAccessTechnology
+nwstate_to_act (const char *str)
+{
+    /* small 'g' means CS, big 'G' means PS */
+    if (!strcmp (str, "2g"))
+        return MM_MODEM_ACCESS_TECHNOLOGY_GSM;
+    else if (!strcmp (str, "2G-GPRS"))
+        return MM_MODEM_ACCESS_TECHNOLOGY_GPRS;
+    else if (!strcmp (str, "2G-EDGE"))
+        return MM_MODEM_ACCESS_TECHNOLOGY_EDGE;
+    else if (!strcmp (str, "3G"))
+        return MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
+    else if (!strcmp (str, "3g"))
+        return MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
+    else if (!strcmp (str, "R99"))
+        return MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
+    else if (!strcmp (str, "3G-HSDPA") || !strcmp (str, "HSDPA"))
+        return MM_MODEM_ACCESS_TECHNOLOGY_HSDPA;
+    else if (!strcmp (str, "3G-HSUPA") || !strcmp (str, "HSUPA"))
+        return MM_MODEM_ACCESS_TECHNOLOGY_HSUPA;
+    else if (!strcmp (str, "3G-HSDPA-HSUPA") || !strcmp (str, "HSDPA-HSUPA"))
+        return MM_MODEM_ACCESS_TECHNOLOGY_HSPA;
+
+    return MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+}
+
+static void
+load_access_technologies_ready (MMIfaceModem *self,
+                                GAsyncResult *res,
+                                GSimpleAsyncResult *operation_result)
+{
+    GRegex *regex;
+    GMatchInfo *info;
+    gchar *str;
+    const gchar *response;
+    MMModemAccessTechnology act;
+    GError *error = NULL;
+
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
+    if (!response) {
+        mm_dbg ("Couldn't query access technology: '%s'", error->message);
+        g_simple_async_result_take_error (operation_result, error);
+        g_simple_async_result_complete (operation_result);
+        g_object_unref (operation_result);
+        return;
+    }
+
+    /*
+     * %NWSTATE: <rssi>,<mccmnc>,<tech>,<connection state>,<regulation>
+     *
+     * <connection state> shows the actual access technology in-use when a
+     * PS connection is active.
+     */
+    regex = g_regex_new (
+        "%NWSTATE:\\s*(-?\\d+),(\\d+),([^,]*),([^,]*),(\\d+)",
+        G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+
+    act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+    g_regex_match (regex, response, 0, &info);
+    if (g_match_info_matches (info)) {
+        str = g_match_info_fetch (info, 4);
+        if (!str || (strcmp (str, "-") == 0)) {
+            g_free (str);
+            str = g_match_info_fetch (info, 3);
+        }
+        if (str) {
+            act = nwstate_to_act (str);
+            g_free (str);
+        }
+    }
+    g_match_info_free (info);
+    g_regex_unref (regex);
+
+    g_simple_async_result_set_op_res_gpointer (operation_result,
+                                               GUINT_TO_POINTER (act),
+                                               NULL);
+    g_simple_async_result_complete_in_idle (operation_result);
+    g_object_unref (operation_result);
+}
+
+static void
+load_access_technologies (MMIfaceModem *self,
+                          GAsyncReadyCallback callback,
+                          gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        load_access_technologies);
+
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        "%NWSTATE",
+        3,
+        FALSE,
+        NULL, /* cancellable */
+        (GAsyncReadyCallback)load_access_technologies_ready,
+        result);
+}
+
 typedef struct {
     MMModemBand mm;
     char band[50];
@@ -516,6 +635,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_allowed_modes_finish = load_allowed_modes_finish;
     iface->set_allowed_modes = set_allowed_modes;
     iface->set_allowed_modes_finish = set_allowed_modes_finish;
+    iface->load_access_technologies = load_access_technologies;
+    iface->load_access_technologies_finish = load_access_technologies_finish;
 }
 
 static void
