@@ -240,13 +240,11 @@ dial_3gpp_activate (MMBaseModem *modem,
     mm_base_modem_at_command_finish (modem, res, NULL);
 
     command = g_strdup_printf ("%%IPDPACT=%d,1", ctx->cid);
-    mm_base_modem_at_command_in_port (
+    mm_base_modem_at_command (
         ctx->modem,
-        ctx->primary,
         command,
         60,
         FALSE,
-        NULL, /* cancellable */
         (GAsyncReadyCallback)dial_3gpp_wait,
         ctx);
     g_free (command);
@@ -281,13 +279,11 @@ dial_3gpp_prepare (MMBaseModem *modem,
      * the core or modem driver have made sure of this already?)
      */
     command = g_strdup_printf ("%%IPDPACT=%d,0", ctx->cid);
-    mm_base_modem_at_command_in_port (
+    mm_base_modem_at_command (
         ctx->modem,
-        ctx->primary,
         command,
         60,
         FALSE,
-        NULL, /* cancellable */
         (GAsyncReadyCallback)dial_3gpp_activate,
         ctx);
     g_free (command);
@@ -315,13 +311,11 @@ dial_3gpp (MMBroadbandBearer *self,
 
     /* TODO(njw): fetch user/password properties and use if present */
     command = g_strdup_printf ("%%IPDPCFG=%d,0,0,\"\",\"\"", cid);
-    mm_base_modem_at_command_in_port (
+    mm_base_modem_at_command (
         ctx->modem,
-        ctx->primary,
         command,
         60,
         FALSE,
-        NULL, /* cancellable */
         (GAsyncReadyCallback)dial_3gpp_prepare,
         ctx);
     g_free (command);
@@ -415,13 +409,11 @@ disconnect_3gpp (MMBroadbandBearer *bearer,
                                              disconnect_3gpp);
 
     command = g_strdup_printf ("%%IPDPACT=%d,0", self->priv->connected_cid);
-    mm_base_modem_at_command_in_port (
+    mm_base_modem_at_command (
         MM_BASE_MODEM (modem),
-        primary,
         command,
         60,
         FALSE,
-        NULL, /* cancellable */
         (GAsyncReadyCallback)disconnect_3gpp_ready,
         ctx);
     g_free (command);

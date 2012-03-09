@@ -155,7 +155,6 @@ load_access_technologies (MMIfaceModem *self,
         "%NWSTATE",
         3,
         FALSE,
-        NULL, /* cancellable */
         (GAsyncReadyCallback)load_access_technologies_ready,
         result);
 }
@@ -314,7 +313,6 @@ load_current_bands (MMIfaceModem *self,
         "%IPBM?",
         3,
         FALSE,
-        NULL,
         (GAsyncReadyCallback)load_current_bands_ready,
         result);
 }
@@ -450,7 +448,6 @@ load_allowed_modes (MMIfaceModem *self,
         "%IPSYS?",
         3,
         FALSE,
-        NULL,
         (GAsyncReadyCallback)load_allowed_modes_ready,
         result);
 }
@@ -533,7 +530,6 @@ set_allowed_modes (MMIfaceModem *self,
         command,
         3,
         FALSE,
-        NULL,
         (GAsyncReadyCallback)set_allowed_modes_ready,
         result);
     g_free (command);
