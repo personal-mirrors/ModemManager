@@ -33,6 +33,9 @@
 #define MM_IS_BROADBAND_BEARER_SAMSUNG_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass),  MM_TYPE_BROADBAND_BEARER_SAMSUNG))
 #define MM_BROADBAND_BEARER_SAMSUNG_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj),  MM_TYPE_BROADBAND_BEARER_SAMSUNG, MMBroadbandBearerSamsungClass))
 
+#define MM_BROADBAND_BEARER_SAMSUNG_USER         "broadband-bearer-samsung-user"
+#define MM_BROADBAND_BEARER_SAMSUNG_PASSWORD     "broadband-bearer-samsung-password"
+
 typedef struct _MMBroadbandBearerSamsung MMBroadbandBearerSamsung;
 typedef struct _MMBroadbandBearerSamsungClass MMBroadbandBearerSamsungClass;
 typedef struct _MMBroadbandBearerSamsungPrivate MMBroadbandBearerSamsungPrivate;
@@ -56,6 +59,5 @@ void mm_broadband_bearer_samsung_new (MMBroadbandModemSamsung *modem,
                                       gpointer user_data);
 MMBearer *mm_broadband_bearer_samsung_new_finish (GAsyncResult *res,
                                                   GError **error);
-
 
 #endif /* MM_BROADBAND_BEARER_SAMSUNG_H */
