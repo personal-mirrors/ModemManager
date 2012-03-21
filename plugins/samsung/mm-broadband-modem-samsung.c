@@ -378,8 +378,7 @@ static void
 set_one_band (MMIfaceModem *self,
               SetBandsContext *ctx)
 {
-    guint i, enable, band;
-    const gchar *name;
+    guint enable, band;
     gchar *command;
 
     /* Find the next band to enable or disable, always doing enables first */
@@ -408,20 +407,13 @@ set_one_band (MMIfaceModem *self,
     mm_dbg("2. enablebits %x disablebits %x",
            ctx->enablebits, ctx->disablebits);
 
-    name = NULL;
-    for (i = 0 ; i < G_N_ELEMENTS (modem_bands) ; i++) {
-        if (modem_bands[i].band == band) {
-            name = modem_bands[i].name;
-            break;
-        }
-    }
-    g_assert (name != NULL);
-
-    command = g_strdup_printf ("%%IPBM=\"%s\",%d", name, enable);
+    command = g_strdup_printf ("%%IPBM=\"%s\",%d",
+                               modem_bands[band].name,
+                               enable);
     mm_base_modem_at_command (
         MM_BASE_MODEM (self),
         command,
-        3,
+        10,
         FALSE,
         (GAsyncReadyCallback)set_bands_next,
         ctx);
@@ -432,13 +424,18 @@ static guint
 band_array_to_bandbits (GArray *bands)
 {
     MMModemBand band;
-    guint i, bandbits;
+    guint i, j, bandbits;
 
     bandbits = 0;
     for (i = 0 ; i < bands->len ; i++) {
         band = g_array_index (bands, MMModemBand, i);
-        g_assert (band < 32);
-        bandbits |= 1 << band;
+        for (j = 0 ; j < G_N_ELEMENTS (modem_bands) ; j++) {
+            if (modem_bands[j].band == band) {
+                bandbits |= 1 << j;
+                break;
+            }
+        }
+        g_assert (j <  G_N_ELEMENTS (modem_bands));
     }
 
     return bandbits;
@@ -481,7 +478,16 @@ set_bands (MMIfaceModem *self,
                                              user_data,
                                              set_bands);
     ctx->bandbits = band_array_to_bandbits (bands_array);
-
+    /*
+     * For the sake of efficiency, convert "ANY" to the actual set of
+     * bands; this matches what we get from load_current_bands and
+     * minimizes the number of changes we need to make.
+     *
+     * This requires that ANY is last in modem_bands and that all the
+     * other bits are valid.
+     */
+    if (ctx->bandbits == (1 << (G_N_ELEMENTS (modem_bands) - 1)))
+        ctx->bandbits--; /* clear the top bit, set all lower bits */
     load_current_bands (self,
                         (GAsyncReadyCallback)set_bands_got_current_bands,
                         ctx);
