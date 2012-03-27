@@ -35,9 +35,18 @@
 static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
 
+static MMIfaceModem3gpp *iface_modem_3gpp_parent;
+
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemSamsung, mm_broadband_modem_samsung, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init));
+
+struct _MMBroadbandModemSamsungPrivate {
+    GRegex *nwstate_regex;
+
+    /* Cache of the most recent value seen by the unsolicited-message handler */
+    MMModemAccessTechnology last_act;
+};
 
 /*****************************************************************************/
 
@@ -85,15 +94,12 @@ nwstate_to_act (const char *str)
 }
 
 static void
-load_access_technologies_ready (MMIfaceModem *self,
+load_access_technologies_ready (MMIfaceModem *modem,
                                 GAsyncResult *res,
                                 GSimpleAsyncResult *operation_result)
 {
-    GRegex *regex;
-    GMatchInfo *info;
-    gchar *str;
+    MMBroadbandModemSamsung *self = MM_BROADBAND_MODEM_SAMSUNG (modem);
     const gchar *response;
-    MMModemAccessTechnology act;
     GError *error = NULL;
 
     response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
@@ -106,33 +112,11 @@ load_access_technologies_ready (MMIfaceModem *self,
     }
 
     /*
-     * %NWSTATE: <rssi>,<mccmnc>,<tech>,<connection state>,<regulation>
-     *
-     * <connection state> shows the actual access technology in-use when a
-     * PS connection is active.
+     * The unsolicited message handler will already have run and
+     * removed the NWSTATE response, so we use the result from there.
      */
-    regex = g_regex_new (
-        "%NWSTATE:\\s*(-?\\d+),(\\d+),([^,]*),([^,]*),(\\d+)",
-        G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
-
-    act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
-    g_regex_match (regex, response, 0, &info);
-    if (g_match_info_matches (info)) {
-        str = g_match_info_fetch (info, 4);
-        if (!str || (strcmp (str, "-") == 0)) {
-            g_free (str);
-            str = g_match_info_fetch (info, 3);
-        }
-        if (str) {
-            act = nwstate_to_act (str);
-            g_free (str);
-        }
-    }
-    g_match_info_free (info);
-    g_regex_unref (regex);
-
     g_simple_async_result_set_op_res_gpointer (operation_result,
-                                               GUINT_TO_POINTER (act),
+                                               GUINT_TO_POINTER (self->priv->last_act),
                                                NULL);
     g_simple_async_result_complete_in_idle (operation_result);
     g_object_unref (operation_result);
@@ -851,14 +835,312 @@ load_unlock_retries (MMIfaceModem *self,
                                    load_unlock_retries));
 }
 
+/*****************************************************************************/
+/* Setup/Cleanup unsolicited events (3GPP interface) */
+
+static void
+nwstate_changed (MMAtSerialPort *port,
+                 GMatchInfo *info,
+                 MMBroadbandModemSamsung *self)
+{
+    int rssi = -1;
+    MMModemAccessTechnology act;
+    gchar *str;
+
+    /*
+     * %NWSTATE: <rssi>,<mccmnc>,<tech>,<connection state>,<regulation>
+     *
+     * <connection state> shows the actual access technology in-use when a
+     * PS connection is active.
+     */
+    str = g_match_info_fetch (info, 1);
+    if (str) {
+        rssi = atoi (str);
+        rssi = CLAMP (rssi, 0, 5) * 100 / 5;
+        g_free (str);
+    }
+
+    str = g_match_info_fetch (info, 4);
+    if (!str || (strcmp (str, "-") == 0)) {
+        g_free (str);
+        str = g_match_info_fetch (info, 3);
+    }
+    if (str) {
+        act = nwstate_to_act (str);
+        g_free (str);
+    }
+
+    self->priv->last_act = act;
+    mm_iface_modem_update_access_technologies (MM_IFACE_MODEM (self),
+                                               act,
+                                               MM_MODEM_ACCESS_TECHNOLOGY_ANY);
+    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self),
+                                          rssi);
+}
+
+static void
+set_unsolicited_events_handlers (MMBroadbandModemSamsung *self,
+                                 gboolean enable)
+{
+    MMAtSerialPort *ports[2];
+    guint i;
+
+    ports[0] = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
+    ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
+
+    /* Enable unsolicited events in given port */
+    for (i = 0; i < 2; i++) {
+        if (!ports[i])
+            continue;
+
+        /* Access technology related */
+        mm_at_serial_port_add_unsolicited_msg_handler (
+            ports[i],
+            self->priv->nwstate_regex,
+            enable ? (MMAtSerialUnsolicitedMsgFn)nwstate_changed : NULL,
+            enable ? self : NULL,
+            NULL);
+    }
+}
+
+static gboolean
+modem_3gpp_unsolicited_events_finish (MMIfaceModem3gpp *self,
+                                      GAsyncResult *res,
+                                      GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+parent_setup_unsolicited_events_ready (MMIfaceModem3gpp *self,
+                                       GAsyncResult *res,
+                                       GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+
+    if (!iface_modem_3gpp_parent->setup_unsolicited_events_finish (self, res, &error))
+        g_simple_async_result_take_error (simple, error);
+    else {
+        /* Our own setup now */
+        set_unsolicited_events_handlers (MM_BROADBAND_MODEM_SAMSUNG (self), TRUE);
+        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res), TRUE);
+    }
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+setup_unsolicited_events (MMIfaceModem3gpp *self,
+                          GAsyncReadyCallback callback,
+                          gpointer user_data)
+{
+    /* Chain up parent's setup */
+    iface_modem_3gpp_parent->setup_unsolicited_events (
+        self,
+        (GAsyncReadyCallback)parent_setup_unsolicited_events_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                   callback,
+                                   user_data,
+                                   setup_unsolicited_events));
+}
+
+static void
+parent_cleanup_unsolicited_events_ready (MMIfaceModem3gpp *self,
+                                         GAsyncResult *res,
+                                         GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+
+    if (!iface_modem_3gpp_parent->cleanup_unsolicited_events_finish (self, res, &error))
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res), TRUE);
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+cleanup_unsolicited_events (MMIfaceModem3gpp *self,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
+{
+    /* Our own cleanup first */
+    set_unsolicited_events_handlers (MM_BROADBAND_MODEM_SAMSUNG (self), FALSE);
+
+    /* And now chain up parent's cleanup */
+    iface_modem_3gpp_parent->cleanup_unsolicited_events (
+        self,
+        (GAsyncReadyCallback)parent_cleanup_unsolicited_events_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                   callback,
+                                   user_data,
+                                   cleanup_unsolicited_events));
+}
+
+/*****************************************************************************/
+/* Enabling unsolicited events (3GPP interface) */
+
+static void
+own_enable_unsolicited_events_ready (MMBaseModem *self,
+                                     GAsyncResult *res,
+                                     GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_at_sequence_full_finish (self, res, NULL, &error))
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+parent_enable_unsolicited_events_ready (MMIfaceModem3gpp *self,
+                                        GAsyncResult *res,
+                                        GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+
+    if (!iface_modem_3gpp_parent->enable_unsolicited_events_finish (self, res, &error)) {
+        g_simple_async_result_take_error (simple, error);
+        g_simple_async_result_complete (simple);
+        g_object_unref (simple);
+    }
+
+    /* Our own enable now */
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        "%NWSTATE=1",
+        3,
+        FALSE,
+        (GAsyncReadyCallback)own_enable_unsolicited_events_ready,
+        simple);
+}
+
+static void
+enable_unsolicited_events (MMIfaceModem3gpp *self,
+                           GAsyncReadyCallback callback,
+                           gpointer user_data)
+{
+    /* Chain up parent's enable */
+    iface_modem_3gpp_parent->enable_unsolicited_events (
+        self,
+        (GAsyncReadyCallback)parent_enable_unsolicited_events_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                   callback,
+                                   user_data,
+                                   enable_unsolicited_events));
+}
+
+/*****************************************************************************/
+/* Disabling unsolicited events (3GPP interface) */
+
+static void
+parent_disable_unsolicited_events_ready (MMIfaceModem3gpp *self,
+                                         GAsyncResult *res,
+                                         GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+
+    if (!iface_modem_3gpp_parent->disable_unsolicited_events_finish (self, res, &error))
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+own_disable_unsolicited_events_ready (MMBaseModem *self,
+                                      GAsyncResult *res,
+                                      GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_at_command_finish (self, res, &error)) {
+        g_simple_async_result_take_error (simple, error);
+        g_simple_async_result_complete (simple);
+        g_object_unref (simple);
+        return;
+    }
+
+    /* Next, chain up parent's disable */
+    iface_modem_3gpp_parent->disable_unsolicited_events (
+        MM_IFACE_MODEM_3GPP (self),
+        (GAsyncReadyCallback)parent_disable_unsolicited_events_ready,
+        simple);
+}
+
+static void
+disable_unsolicited_events (MMIfaceModem3gpp *self,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
+{
+    /* Our own disable first */
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        "%NWSTATE=0",
+        3,
+        FALSE,
+        (GAsyncReadyCallback)own_disable_unsolicited_events_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        disable_unsolicited_events));
+}
+
+/*****************************************************************************/
+/* Setup ports (Broadband modem class) */
+
+static void
+setup_ports (MMBroadbandModem *self)
+{
+    /* Call parent's setup ports first always */
+    MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_samsung_parent_class)->setup_ports (self);
+
+    /* Now reset the unsolicited messages we'll handle when enabled */
+    set_unsolicited_events_handlers (MM_BROADBAND_MODEM_SAMSUNG (self), FALSE);
+}
+
+/*****************************************************************************/
+
+static void
+finalize (GObject *object)
+{
+    MMBroadbandModemSamsung *self = MM_BROADBAND_MODEM_SAMSUNG (object);
+
+    g_regex_unref (self->priv->nwstate_regex);
+
+    G_OBJECT_CLASS (mm_broadband_modem_samsung_parent_class)->finalize (object);
+}
+
 static void
 mm_broadband_modem_samsung_init (MMBroadbandModemSamsung *self)
 {
+    self->priv = G_TYPE_INSTANCE_GET_PRIVATE ((self),
+                                              MM_TYPE_BROADBAND_MODEM_SAMSUNG,
+                                              MMBroadbandModemSamsungPrivate);
+
+    self->priv->nwstate_regex = g_regex_new(
+        "%NWSTATE:\\s*(-?\\d+),(\\d+),([^,]*),([^,]*),(\\d+)",
+        G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 }
 
 static void
 iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
 {
+    iface_modem_3gpp_parent = g_type_interface_peek_parent (iface);
+
+    iface->setup_unsolicited_events = setup_unsolicited_events;
+    iface->setup_unsolicited_events_finish = modem_3gpp_unsolicited_events_finish;
+    iface->cleanup_unsolicited_events = cleanup_unsolicited_events;
+    iface->cleanup_unsolicited_events_finish = modem_3gpp_unsolicited_events_finish;
+    iface->enable_unsolicited_events = enable_unsolicited_events;
+    iface->enable_unsolicited_events_finish = modem_3gpp_unsolicited_events_finish;
+    iface->disable_unsolicited_events = disable_unsolicited_events;
+    iface->disable_unsolicited_events_finish = modem_3gpp_unsolicited_events_finish;
 }
 
 static void
@@ -887,4 +1169,11 @@ iface_modem_init (MMIfaceModem *iface)
 static void
 mm_broadband_modem_samsung_class_init (MMBroadbandModemSamsungClass *klass)
 {
+    GObjectClass *object_class = G_OBJECT_CLASS (klass);
+    MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
+
+    g_type_class_add_private (object_class, sizeof (MMBroadbandModemSamsungPrivate));
+
+    object_class->finalize = finalize;
+    broadband_modem_class->setup_ports = setup_ports;
 }
