@@ -844,7 +844,7 @@ nwstate_changed (MMAtSerialPort *port,
                  MMBroadbandModemSamsung *self)
 {
     int rssi = -1;
-    MMModemAccessTechnology act;
+    MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
     gchar *str;
 
     /*
