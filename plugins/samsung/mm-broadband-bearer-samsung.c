@@ -193,9 +193,7 @@ ipdpact_received (MMAtSerialPort *port,
             /* deactivated */
             if (self->priv->pending_disconnect == NULL) {
                 mm_dbg ("Recieved spontaneous %%IPDPACT disconnect.");
-                g_object_set (self,
-                              MM_BEARER_STATUS, MM_BEARER_STATUS_DISCONNECTED,
-                              NULL);
+                mm_bearer_report_disconnection (MM_BEARER (self));
                 return;
             }
             disconnect_3gpp_done (self, self->priv->pending_disconnect);
