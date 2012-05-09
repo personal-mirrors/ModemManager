@@ -52,9 +52,6 @@ static GParamSpec *properties[PROP_LAST];
 struct _MMBroadbandBearerNovatelPrivate {
     /* timeout id for checking whether we're still connected */
     guint connection_poller;
-    /* modem whose connection is being checked */
-    MMBaseModem *connection_modem;
-
     /* Username for authenticating to APN */
     gchar *user;
     /* Password for authenticating to APN */
@@ -152,7 +149,6 @@ poll_connection_ready (MMBaseModem *modem,
             mm_bearer_report_disconnection (MM_BEARER (bearer));
             g_source_remove (bearer->priv->connection_poller);
             bearer->priv->connection_poller = 0;
-            bearer->priv->connection_modem = NULL;
         }
     }
 }
@@ -160,13 +156,18 @@ poll_connection_ready (MMBaseModem *modem,
 static gboolean
 poll_connection (MMBroadbandBearerNovatel *bearer)
 {
+    MMBaseModem *modem = NULL;
+    g_object_get (MM_BEARER (bearer),
+                  MM_BEARER_MODEM, &modem,
+                  NULL);
     mm_base_modem_at_command (
-        bearer->priv->connection_modem,
+        modem,
         "$NWQMISTATUS",
         3,
         FALSE,
         (GAsyncReadyCallback)poll_connection_ready,
         bearer);
+    g_object_unref (modem);
     return TRUE;
 }
 
@@ -193,7 +194,6 @@ connect_3gpp_qmistatus_ready (MMBaseModem *modem,
             bearer->priv->connection_poller = g_timeout_add_seconds (CONNECTION_CHECK_TIMEOUT_SEC,
                                                                      (GSourceFunc)poll_connection,
                                                                      bearer);
-            bearer->priv->connection_modem = modem;
             config = mm_bearer_ip_config_new ();
             mm_bearer_ip_config_set_method (config, MM_BEARER_IP_METHOD_DHCP);
             g_simple_async_result_set_op_res_gpointer (ctx->result,
@@ -421,7 +421,6 @@ disconnect_3gpp (MMBroadbandBearer *self,
     if (bearer->priv->connection_poller) {
         g_source_remove (bearer->priv->connection_poller);
         bearer->priv->connection_poller = 0;
-        bearer->priv->connection_modem = NULL;
     }
 
     ctx = detailed_disconnect_context_new (self, modem, primary, secondary,
@@ -540,7 +539,6 @@ mm_broadband_bearer_novatel_init (MMBroadbandBearerNovatel *self)
     self->priv->user = NULL;
     self->priv->password = NULL;
     self->priv->connection_poller = 0;
-    self->priv->connection_modem = NULL;
 }
 
 static void

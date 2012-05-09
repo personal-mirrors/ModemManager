@@ -359,6 +359,7 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_supported_bands_finish = load_supported_bands_finish;
     iface->load_current_bands = load_current_bands;
     iface->load_current_bands_finish = load_current_bands_finish;
+    /* No support for setting bands, as it destabilizes the modem. */
     iface->load_access_technologies = load_access_technologies;
     iface->load_access_technologies_finish = load_access_technologies_finish;
 }
