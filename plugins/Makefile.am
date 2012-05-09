@@ -35,6 +35,8 @@ udevrules_DATA =
 
 ########################################
 
+# The plugin (libmm-plugin-samsung.la) for Samsung Y3300/Y3400 modems is
+# temporarily disabled (see crosbug.com/30744 for details).
 pkglib_LTLIBRARIES = \
 	libmm-plugin-generic.la \
 	libmm-plugin-cinterion.la \
@@ -43,7 +45,6 @@ pkglib_LTLIBRARIES = \
 	libmm-plugin-gobi.la \
 	libmm-plugin-motorola.la \
 	libmm-plugin-novatel.la \
-	libmm-plugin-samsung.la \
 	libmm-plugin-option.la \
 	libmm-plugin-hso.la \
 	libmm-plugin-anydata.la \
