@@ -147,6 +147,61 @@ dial_3gpp_done (MMBroadbandBearerSamsung *self,
 }
 
 static void
+dial_3gpp_get_error_done (MMBaseModem *modem,
+                          GAsyncResult *res,
+                          DialContext *ctx)
+{
+    MMBroadbandBearerSamsung *self = ctx->self;
+    const gchar *response;
+    int activation_err;
+    GError *error = NULL;
+
+    response = mm_base_modem_at_command_finish (modem, res, &error);
+
+    if (error) {
+        g_simple_async_result_take_error (ctx->result, error);
+        dial_context_complete_and_free (ctx);
+        return;
+    }
+
+    response = mm_strip_tag (response, "%IER:");
+    if (sscanf (response, " %*d,%*d,%d", &activation_err) &&
+        (activation_err == 27 || activation_err == 33)) {
+        g_simple_async_result_set_error (ctx->result,
+                                         MM_MOBILE_EQUIPMENT_ERROR,
+                                         MM_MOBILE_EQUIPMENT_ERROR_GPRS_SERVICE_OPTION_NOT_SUBSCRIBED,
+                                         "Missing or unknown APN");
+    } else {
+        g_simple_async_result_set_error (ctx->result,
+                                         MM_CORE_ERROR,
+                                         MM_CORE_ERROR_FAILED,
+                                         "Call setup failed");
+    }
+
+    dial_context_complete_and_free (ctx);
+    self->priv->connected_cid = 0;
+    self->priv->pending_dial = NULL;
+}
+
+static void
+dial_3gpp_get_error (MMBroadbandBearerSamsung *self,
+                     DialContext *ctx)
+{
+    mm_dbg("checking what the error was");
+    if (ctx->timeout_id) {
+        g_source_remove (ctx->timeout_id);
+        ctx->timeout_id = 0;
+    }
+
+    mm_base_modem_at_command (ctx->modem,
+                              "%IER?",
+                              3,
+                              FALSE,
+                              (GAsyncReadyCallback)dial_3gpp_get_error_done,
+                              ctx);
+}
+
+static void
 disconnect_3gpp_done (MMBroadbandBearerSamsung *self,
                       DisconnectContext *result);
 
@@ -197,6 +252,11 @@ ipdpact_received (MMAtSerialPort *port,
             break;
         case 3:
             /* activation failed */
+            if (self->priv->pending_dial == NULL) {
+                mm_warn ("Recieved %%IPDPACT failure while not connecting.");
+                return;
+            }
+            dial_3gpp_get_error (self, self->priv->pending_dial);
             break;
         default:
             mm_warn ("Unknown connect status %d", status);
