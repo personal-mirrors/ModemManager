@@ -452,14 +452,14 @@ disconnect_3gpp_ready (MMBaseModem *modem,
         g_simple_async_result_take_error (ctx->result, error);
         g_simple_async_result_complete (ctx->result);
         g_object_unref (ctx->result);
-
+        if (ctx->timeout_id) {
+            g_source_remove (ctx->timeout_id);
+            ctx->timeout_id = 0;
+        }
         ctx->self->priv->pending_disconnect = NULL;
         g_free (ctx);
         return;
     }
-
-    /* Set a 60-second disconnection-failure timeout */
-    ctx->timeout_id = g_timeout_add_seconds (60, (GSourceFunc)disconnect_3gpp_timeout, ctx);
 }
 
 static void
@@ -494,6 +494,10 @@ disconnect_3gpp (MMBroadbandBearer *bearer,
     g_free (command);
 
     self->priv->pending_disconnect = ctx;
+
+    /* Set a 60-second disconnection-failure timeout */
+    ctx->timeout_id = g_timeout_add_seconds (
+        60, (GSourceFunc)disconnect_3gpp_timeout, ctx);
 }
 
 static void
