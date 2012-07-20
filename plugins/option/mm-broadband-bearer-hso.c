@@ -18,7 +18,6 @@
 #include <config.h>
 
 #include <stdio.h>
-#include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -120,7 +119,6 @@ ip_config_ready (MMBaseModem *modem,
     gchar *dns[3] = { 0 };
     guint i;
     guint dns_i;
-    guint32 tmp;
 
     response = mm_base_modem_at_command_full_finish (MM_BASE_MODEM (modem), res, &error);
     if (error) {
@@ -147,11 +145,10 @@ ip_config_ready (MMBaseModem *modem,
 
     for (i = 0, dns_i = 0; items[i]; i++) {
         if (i == 0) { /* CID */
-            glong num;
+            gint num;
 
-            errno = 0;
-            num = strtol (items[i], NULL, 10);
-            if (errno != 0 || num < 0 || (gint) num != ctx->cid) {
+            if (!mm_get_int_from_str (items[i], &num) ||
+                num != ctx->cid) {
                 error = g_error_new (MM_CORE_ERROR,
                                      MM_CORE_ERROR_FAILED,
                                      "Unknown CID in OWANDATA response ("
@@ -159,6 +156,8 @@ ip_config_ready (MMBaseModem *modem,
                 break;
             }
         } else if (i == 1) { /* IP address */
+            guint32 tmp;
+
             if (!inet_pton (AF_INET, items[i], &tmp))
                 break;
 
@@ -166,6 +165,8 @@ ip_config_ready (MMBaseModem *modem,
             mm_bearer_ip_config_set_method (ip_config, MM_BEARER_IP_METHOD_STATIC);
             mm_bearer_ip_config_set_address (ip_config,  items[i]);
         } else if (i == 3 || i == 4) { /* DNS entries */
+            guint32 tmp;
+
             if (!inet_pton (AF_INET, items[i], &tmp)) {
                 g_clear_object (&ip_config);
                 break;
@@ -464,15 +465,12 @@ activate_ready (MMBaseModem *modem,
 
     if (!mm_base_modem_at_command_full_finish (modem, res, &error)) {
         g_simple_async_result_take_error (ctx->result, error);
-        g_simple_async_result_complete (ctx->result);
-        g_object_unref (ctx->result);
+        dial_3gpp_context_complete_and_free (ctx);
         return;
     }
 
-    /* We will now setup a timeout and keep the context in the bearer's private.
-     * Reports of modem being connected will arrive via unsolicited messages. */
-    g_assert (ctx->self->priv->connect_pending == NULL);
-    ctx->self->priv->connect_pending = ctx;
+    /* We will now setup a timeout so that we don't wait forever to get the
+     * connection on */
     ctx->self->priv->connect_pending_id = g_timeout_add_seconds (30,
                                                                  (GSourceFunc)connect_timed_out_cb,
                                                                  ctx->self);
@@ -517,6 +515,11 @@ authenticate_ready (MMBaseModem *modem,
                                    (GAsyncReadyCallback)activate_ready,
                                    ctx);
     g_free (command);
+
+    /* We will now keep the context in the bearer's private.
+     * Reports of modem being connected will arrive via unsolicited messages. */
+    g_assert (ctx->self->priv->connect_pending == NULL);
+    ctx->self->priv->connect_pending = ctx;
 }
 
 const gchar *auth_commands[] = {
