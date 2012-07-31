@@ -108,8 +108,8 @@ context_free (Context *ctx)
 static void
 ensure_modem_time (void)
 {
-    if (mm_modem_get_unlock_required (mm_object_peek_modem (ctx->object)) != MM_MODEM_LOCK_NONE) {
-        g_printerr ("error: modem not unlocked yet\n");
+    if (mm_modem_get_state (mm_object_peek_modem (ctx->object)) < MM_MODEM_STATE_ENABLED) {
+        g_printerr ("error: modem not enabled yet\n");
         exit (EXIT_FAILURE);
     }
 
@@ -202,6 +202,10 @@ get_modem_ready (GObject      *source,
     ctx->object = mmcli_get_modem_finish (result, &ctx->manager);
     ctx->modem_time = mm_object_get_modem_time (ctx->object);
 
+    /* Setup operation timeout */
+    if (ctx->modem_time)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_time));
+
     ensure_modem_time ();
 
     /* Request to get network time from the modem? */
@@ -246,6 +250,10 @@ mmcli_modem_time_run_synchronous (GDBusConnection *connection)
                                         mmcli_get_common_modem_string (),
                                         &ctx->manager);
     ctx->modem_time = mm_object_get_modem_time (ctx->object);
+
+    /* Setup operation timeout */
+    if (ctx->modem_time)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_time));
 
     ensure_modem_time ();
 

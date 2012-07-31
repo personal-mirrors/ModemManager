@@ -1972,12 +1972,41 @@ reinitialize_ready (MMBaseModem *self,
     }
 }
 
-static gboolean
-restart_initialize_idle (MMIfaceModem *self)
+static void
+modem_after_sim_unlock_ready (MMIfaceModem *self,
+                              GAsyncResult *res)
 {
+    GError *error = NULL;
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->modem_after_sim_unlock_finish (self, res, &error)) {
+        mm_warn ("After SIM unlock failed setup: '%s'", error->message);
+        g_error_free (error);
+    }
+
+    /* Go on */
     mm_base_modem_initialize (MM_BASE_MODEM (self),
                               (GAsyncReadyCallback) reinitialize_ready,
                               NULL);
+}
+
+static gboolean
+restart_initialize_idle (MMIfaceModem *self)
+{
+    /* If we were asked to run something after having sent the PIN unlock,
+     * do it now. This may be just a timeout or some other command that gives us
+     * the real SIM state */
+    if (MM_IFACE_MODEM_GET_INTERFACE (self)->modem_after_sim_unlock != NULL &&
+        MM_IFACE_MODEM_GET_INTERFACE (self)->modem_after_sim_unlock_finish != NULL) {
+        MM_IFACE_MODEM_GET_INTERFACE (self)->modem_after_sim_unlock(
+            self,
+            (GAsyncReadyCallback)modem_after_sim_unlock_ready,
+            NULL);
+    } else {
+        /* If no wait needed, just go on */
+        mm_base_modem_initialize (MM_BASE_MODEM (self),
+                                  (GAsyncReadyCallback) reinitialize_ready,
+                                  NULL);
+    }
     return FALSE;
 }
 
@@ -2505,13 +2534,19 @@ enabling_context_complete_and_free (EnablingContext *ctx)
                                      MM_MODEM_STATE_ENABLED,
                                      MM_MODEM_STATE_CHANGE_REASON_USER_REQUESTED);
     else {
+        MMModemLock lock;
+
         /* Fallback to DISABLED/LOCKED */
+        lock = mm_gdbus_modem_get_unlock_required (ctx->skeleton);
         mm_iface_modem_update_state (
             ctx->self,
-            (mm_gdbus_modem_get_unlock_required (ctx->skeleton) == MM_MODEM_LOCK_NONE ?
+            ((lock == MM_MODEM_LOCK_NONE ||
+              lock == MM_MODEM_LOCK_SIM_PIN2 ||
+              lock == MM_MODEM_LOCK_SIM_PUK2) ?
              MM_MODEM_STATE_DISABLED :
              MM_MODEM_STATE_LOCKED),
             MM_MODEM_STATE_CHANGE_REASON_UNKNOWN);
+
         /* Close the ports if enabling failed */
         if (ctx->primary_open)
             mm_serial_port_close (MM_SERIAL_PORT (ctx->primary));

@@ -51,7 +51,6 @@ static gboolean disable_flag;
 static gboolean reset_flag;
 static gchar *factory_reset_str;
 static gchar *command_str;
-static gint command_timeout;
 static gboolean list_bearers_flag;
 static gchar *create_bearer_str;
 static gchar *delete_bearer_str;
@@ -83,10 +82,6 @@ static GOptionEntry entries[] = {
     { "command", 0, 0, G_OPTION_ARG_STRING, &command_str,
       "Send an AT command to the modem",
       "[COMMAND]"
-    },
-    { "command-timeout", 0, 0, G_OPTION_ARG_INT, &command_timeout,
-      "Timeout for AT command",
-      "[SECONDS]"
     },
     { "list-bearers", 0, 0, G_OPTION_ARG_NONE, &list_bearers_flag,
       "List packet data bearers available in a given modem",
@@ -554,6 +549,21 @@ command_ready (MMModem      *modem,
     mmcli_async_operation_done ();
 }
 
+static guint
+command_get_timeout (MMModem *modem)
+{
+    gint timeout;
+
+    /* If --timeout was given, it should already have been set in the proxy */
+    timeout = (g_dbus_proxy_get_default_timeout (G_DBUS_PROXY (modem)) / 1000) - 1;
+    if (timeout <= 0) {
+        g_printerr ("error: timeout is too short (%d)\n", timeout);
+        exit (EXIT_FAILURE);
+    }
+
+    return (guint)timeout;
+}
+
 static void
 list_bearers_process_reply (GList        *result,
                             const GError *error)
@@ -771,6 +781,14 @@ get_modem_ready (GObject      *source,
     ctx->modem_3gpp = mm_object_get_modem_3gpp (ctx->object);
     ctx->modem_cdma = mm_object_get_modem_cdma (ctx->object);
 
+    /* Setup operation timeout */
+    if (ctx->modem)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem));
+    if (ctx->modem_3gpp)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_3gpp));
+    if (ctx->modem_cdma)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_cdma));
+
     if (info_flag)
         g_assert_not_reached ();
 
@@ -839,10 +857,16 @@ get_modem_ready (GObject      *source,
 
     /* Request to send a command to the modem? */
     if (command_str) {
-        g_debug ("Asynchronously sending a command to the modem...");
+        guint timeout;
+
+        timeout = command_get_timeout (ctx->modem);
+
+        g_debug ("Asynchronously sending a command to the modem (%u seconds timeout)...",
+                 timeout);
+
         mm_modem_command (ctx->modem,
                           command_str,
-                          command_timeout ? command_timeout : 30,
+                          timeout,
                           ctx->cancellable,
                           (GAsyncReadyCallback)command_ready,
                           NULL);
@@ -956,6 +980,15 @@ mmcli_modem_run_synchronous (GDBusConnection *connection)
                                         &ctx->manager);
     ctx->modem = mm_object_get_modem (ctx->object);
     ctx->modem_3gpp = mm_object_get_modem_3gpp (ctx->object);
+    ctx->modem_cdma = mm_object_get_modem_cdma (ctx->object);
+
+    /* Setup operation timeout */
+    if (ctx->modem)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem));
+    if (ctx->modem_3gpp)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_3gpp));
+    if (ctx->modem_cdma)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_cdma));
 
     /* Request to get info from modem? */
     if (info_flag) {
@@ -1011,11 +1044,16 @@ mmcli_modem_run_synchronous (GDBusConnection *connection)
     /* Request to send a command to the modem? */
     if (command_str) {
         gchar *result;
+        guint timeout;
 
-        g_debug ("Synchronously sending command to modem...");
+        timeout = command_get_timeout (ctx->modem);
+
+        g_debug ("Synchronously sending command to modem (%u seconds timeout)...",
+                 timeout);
+
         result = mm_modem_command_sync (ctx->modem,
                                         command_str,
-                                        command_timeout ? command_timeout : 30,
+                                        timeout,
                                         NULL,
                                         &error);
         command_process_reply (result, error);

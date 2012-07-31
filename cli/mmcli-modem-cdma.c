@@ -108,8 +108,8 @@ context_free (Context *ctx)
 static void
 ensure_modem_cdma (void)
 {
-    if (mm_modem_get_unlock_required (mm_object_peek_modem (ctx->object)) != MM_MODEM_LOCK_NONE) {
-        g_printerr ("error: modem not unlocked yet\n");
+    if (mm_modem_get_state (mm_object_peek_modem (ctx->object)) < MM_MODEM_STATE_ENABLED) {
+        g_printerr ("error: modem not enabled yet\n");
         exit (EXIT_FAILURE);
     }
 
@@ -162,6 +162,10 @@ get_modem_ready (GObject      *source,
     ctx->object = mmcli_get_modem_finish (result, &ctx->manager);
     ctx->modem_cdma = mm_object_get_modem_cdma (ctx->object);
 
+    /* Setup operation timeout */
+    if (ctx->modem_cdma)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_cdma));
+
     ensure_modem_cdma ();
 
     /* Request to activate the modem? */
@@ -206,6 +210,10 @@ mmcli_modem_cdma_run_synchronous (GDBusConnection *connection)
                                         mmcli_get_common_modem_string (),
                                         &ctx->manager);
     ctx->modem_cdma = mm_object_get_modem_cdma (ctx->object);
+
+    /* Setup operation timeout */
+    if (ctx->modem_cdma)
+        mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_cdma));
 
     ensure_modem_cdma ();
 
