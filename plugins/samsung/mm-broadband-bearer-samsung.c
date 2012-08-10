@@ -380,7 +380,7 @@ dial_3gpp (MMBroadbandBearer *self,
         quoted_user = mm_at_serial_port_quote_string (user);
         quoted_password = mm_at_serial_port_quote_string (password);
         command = g_strdup_printf ("%%IPDPCFG=%d,0,1,%s,%s",
-                                   cid, user, password);
+                                   cid, quoted_user, quoted_password);
         g_free (quoted_user);
         g_free (quoted_password);
     }
