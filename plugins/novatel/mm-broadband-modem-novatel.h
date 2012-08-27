@@ -10,8 +10,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details:
  *
- * Copyright (C) 2012 Google Inc.
- * Author: Nathan Williams <njw@google.com>
+ * Copyright (C) 2008 - 2009 Novell, Inc.
+ * Copyright (C) 2009 - 2012 Red Hat, Inc.
+ * Copyright (C) 2012 Aleksander Morgado <aleksander@gnu.org>
  */
 
 #ifndef MM_BROADBAND_MODEM_NOVATEL_H
@@ -42,7 +43,7 @@ struct _MMBroadbandModemNovatelClass{
 GType mm_broadband_modem_novatel_get_type (void);
 
 MMBroadbandModemNovatel *mm_broadband_modem_novatel_new (const gchar *device,
-                                                         const gchar *driver,
+                                                         const gchar **drivers,
                                                          const gchar *plugin,
                                                          guint16 vendor_id,
                                                          guint16 product_id);

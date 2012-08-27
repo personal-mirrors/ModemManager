@@ -48,7 +48,7 @@ create_sim_finish (MMIfaceModem *self,
                    GAsyncResult *res,
                    GError **error)
 {
-    return mm_sim_new_finish (res, error);
+    return mm_sim_nokia_new_finish (res, error);
 }
 
 static void
@@ -61,6 +61,45 @@ create_sim (MMIfaceModem *self,
                       NULL, /* cancellable */
                       callback,
                       user_data);
+}
+
+/*****************************************************************************/
+/* Load supported modes (Modem interface) */
+
+static MMModemMode
+modem_load_supported_modes_finish (MMIfaceModem *self,
+                                   GAsyncResult *res,
+                                   GError **error)
+{
+    return (MMModemMode)GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
+                                              G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static void
+modem_load_supported_modes (MMIfaceModem *self,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+    MMModemMode mode;
+
+    /* Nokia phones don't seem to like AT+WS46?, they just report 2G even if
+     * 3G is supported, so we'll just assume they actually do 3G. */
+    mode = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+
+    /* Then, if the modem has LTE caps, it does 4G */
+    if (mm_iface_modem_is_3gpp_lte (MM_IFACE_MODEM (self)))
+            mode |= MM_MODEM_MODE_4G;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        modem_load_supported_modes);
+    g_simple_async_result_set_op_res_gpointer (result,
+                                               GUINT_TO_POINTER (mode),
+                                               NULL);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
 }
 
 /*****************************************************************************/
@@ -114,14 +153,14 @@ modem_init (MMIfaceModem *self,
 
 MMBroadbandModemNokia *
 mm_broadband_modem_nokia_new (const gchar *device,
-                              const gchar *driver,
+                              const gchar **drivers,
                               const gchar *plugin,
                               guint16 vendor_id,
                               guint16 product_id)
 {
     return g_object_new (MM_TYPE_BROADBAND_MODEM_NOKIA,
                          MM_BASE_MODEM_DEVICE, device,
-                         MM_BASE_MODEM_DRIVER, driver,
+                         MM_BASE_MODEM_DRIVERS, drivers,
                          MM_BASE_MODEM_PLUGIN, plugin,
                          MM_BASE_MODEM_VENDOR_ID, vendor_id,
                          MM_BASE_MODEM_PRODUCT_ID, product_id,
@@ -152,7 +191,7 @@ iface_modem_init (MMIfaceModem *iface)
     iface->create_sim = create_sim;
     iface->create_sim_finish = create_sim_finish;
 
-    /* Nokia headsets (at least N85) do not support "power on"; they do
+    /* Nokia handsets (at least N85) do not support "power on"; they do
      * support "power off" but you proabably do not want to turn off the
      * power on your telephone if something went wrong with connecting
      * process. So, disabling both these operations.  The Nokia GSM/UMTS command
@@ -165,6 +204,9 @@ iface_modem_init (MMIfaceModem *iface)
     iface->modem_power_up_finish = NULL;
     iface->modem_power_down = NULL;
     iface->modem_power_down_finish = NULL;
+
+    iface->load_supported_modes = modem_load_supported_modes;
+    iface->load_supported_modes_finish = modem_load_supported_modes_finish;
 }
 
 static void

@@ -91,10 +91,6 @@ example to update the signal quality value or check registration status.
      - MMModem (instead of MMBaseModem), MMModemBroadband, MMModemPots
      - MMBearer, MMBearerBroadband, MMBearerPots
 
-  ** MMPlugin: do we really need a separate interface for the plugin? Why not
-     just assume that all plugins need to provide objects subclassing
-     MMPluginBase?
-
   ** Test cases for CIEV responses.
 
   ** When a modem gets initialized for the first time it goes into DISABLED, but
@@ -112,3 +108,34 @@ example to update the signal quality value or check registration status.
      in the 3GPP disabling sequence.
 
   ** serial-parsers: convert the v1 parser to a GObject.
+
+  ** MMBroadbandBearer: include additional step for authentication, with
+     retries.
+
+  ** MMBroadbandBearer: include additional step for waiting to get connected via
+     unsolicited messages.
+
+  ** Huawei plugin: Seems to me that whenever we update the allowed modes OR the
+     bands, we're actually also changing the other one. This is because we're
+     using hardcoded values in ^SYSCFG write operations; we should instead read
+     current mode or band when updating the other.
+
+  ** Huawei plugin: The K4505, at least, doesn't like the default command to
+     setup messaging related unsolicited messages:
+     > AT+CNMI=2,1,2,1,0
+     +CMS ERROR: 303
+
+  ** ZTE plugin: The MF637, at least, doesn't like the default command to setup
+     messaging related unsolicited messages:
+     > AT+CNMI=2,1,2,1,0
+     +CMS ERROR: 303
+
+  ** Pantech plugin: The UMW190 needs some time to settle down after sending the
+     PIN, or it will end up stuck if we ask too many PIN-related stuff one after
+     the other.
+
+  ** HSO plugin: shouldn't we have the same logic for unsolicited messages
+     handling in both connect and disconnect contexts? See Icera plugin for ref.
+
+  ** Icera plugin: retry authentication step in 3gpp dialling to 3 times with 1s
+     delay.

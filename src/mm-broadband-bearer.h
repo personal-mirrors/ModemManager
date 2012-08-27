@@ -62,6 +62,7 @@ struct _MMBroadbandBearerClass {
                                       gpointer user_data);
     gboolean (* connect_3gpp_finish) (MMBroadbandBearer *self,
                                       GAsyncResult *res,
+                                      MMPort **data,
                                       MMBearerIpConfig **ipv4_config,
                                       MMBearerIpConfig **ipv6_config,
                                       GError **error);
@@ -70,6 +71,7 @@ struct _MMBroadbandBearerClass {
     void     (* dial_3gpp)        (MMBroadbandBearer *self,
                                    MMBaseModem *modem,
                                    MMAtSerialPort *primary,
+                                   MMPort *data,
                                    guint cid,
                                    GCancellable *cancellable,
                                    GAsyncReadyCallback callback,
@@ -118,6 +120,7 @@ struct _MMBroadbandBearerClass {
                                       gpointer user_data);
     gboolean (* connect_cdma_finish) (MMBroadbandBearer *self,
                                       GAsyncResult *res,
+                                      MMPort **data,
                                       MMBearerIpConfig **ipv4_config,
                                       MMBearerIpConfig **ipv6_config,
                                       GError **error);

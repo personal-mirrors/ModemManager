@@ -85,7 +85,7 @@ GList *mm_3gpp_parse_cops_test_response (const gchar *reply,
 /* AT+CGDCONT? (PDP context query) response parser */
 typedef struct {
     guint cid;
-    gchar *pdp_type;
+    MMBearerIpFamily pdp_type;
     gchar *apn;
 } MM3gppPdpContext;
 void mm_3gpp_pdp_context_list_free (GList *pdp_list);
@@ -152,6 +152,9 @@ MMModemAccessTechnology mm_string_to_access_tech (const gchar *string);
 gchar *mm_3gpp_parse_operator (const gchar *reply,
                                MMModemCharset cur_charset);
 
+const gchar      *mm_3gpp_get_pdp_type_from_ip_family (MMBearerIpFamily family);
+MMBearerIpFamily  mm_3gpp_get_ip_family_from_pdp_type (const gchar *pdp_type);
+
 /*****************************************************************************/
 /* CDMA specific helpers and utilities */
 /*****************************************************************************/
@@ -161,11 +164,11 @@ gboolean mm_cdma_parse_spservice_read_response (const gchar *reply,
                                                 MMModemCdmaRegistrationState *out_cdma_1x_state,
                                                 MMModemCdmaRegistrationState *out_evdo_state);
 
-/* AT$SPERI? response parser */
-gboolean mm_cdma_parse_speri_read_response (const gchar *reply,
-                                            gboolean *out_roaming,
-                                            guint32 *out_ind,
-                                            const gchar **out_desc);
+/* Generic ERI response parser */
+gboolean mm_cdma_parse_eri (const gchar *reply,
+                            gboolean *out_roaming,
+                            guint32 *out_ind,
+                            const gchar **out_desc);
 
 /* AT+CRM=? response parser */
 gboolean mm_cdma_parse_crm_test_response (const gchar *reply,

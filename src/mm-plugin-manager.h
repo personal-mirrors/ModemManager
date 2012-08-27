@@ -20,6 +20,7 @@
 
 #include <glib-object.h>
 
+#include "mm-device.h"
 #include "mm-plugin.h"
 #include "mm-base-modem.h"
 
@@ -30,46 +31,31 @@
 #define MM_IS_PLUGIN_MANAGER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((obj), MM_TYPE_PLUGIN_MANAGER))
 #define MM_PLUGIN_MANAGER_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), MM_TYPE_PLUGIN_MANAGER, MMPluginManagerClass))
 
+typedef struct _MMPluginManager MMPluginManager;
+typedef struct _MMPluginManagerClass MMPluginManagerClass;
 typedef struct _MMPluginManagerPrivate MMPluginManagerPrivate;
 
-typedef struct {
+struct _MMPluginManager {
     GObject parent;
     MMPluginManagerPrivate *priv;
-} MMPluginManager;
+};
 
-typedef struct {
+struct _MMPluginManagerClass {
     GObjectClass parent;
-} MMPluginManagerClass;
+};
 
 GType mm_plugin_manager_get_type (void);
 
 MMPluginManager *mm_plugin_manager_new (GError **error);
 
 /* Asynchronous operation to find the best plugin giving support to a
- * given port. */
-void      mm_plugin_manager_find_port_support        (MMPluginManager *self,
-                                                      const gchar *subsys,
-                                                      const gchar *name,
-                                                      const gchar *physdev_path,
-                                                      MMPlugin *suggested_plugin,
-                                                      MMBaseModem *existing,
-                                                      GAsyncReadyCallback callback,
-                                                      gpointer user_data);
-MMPlugin *mm_plugin_manager_find_port_support_finish (MMPluginManager *self,
-                                                      GAsyncResult *result,
-                                                      GError **error);
-
-/* Returns TRUE if there is an ongoing find operation on the given port */
-gboolean mm_plugin_manager_is_finding_port_support (MMPluginManager *self,
-                                                    const gchar *subsys,
-                                                    const gchar *name,
-                                                    const gchar *physdev_path);
-
-/* Returns TRUE if there is an ongoing find operation in a port of the given
- * device (and if so, returns subsystem and name of the port) */
-gboolean mm_plugin_manager_is_finding_device_support (MMPluginManager *self,
-                                                      const gchar *physdev_path,
-                                                      const gchar **subsys,
-                                                      const gchar **name);
+ * given device. */
+void     mm_plugin_manager_find_device_support        (MMPluginManager *self,
+                                                       MMDevice *device,
+                                                       GAsyncReadyCallback callback,
+                                                       gpointer user_data);
+gboolean mm_plugin_manager_find_device_support_finish (MMPluginManager *self,
+                                                       GAsyncResult *result,
+                                                       GError **error);
 
 #endif /* MM_PLUGIN_MANAGER_H */

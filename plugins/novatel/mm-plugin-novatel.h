@@ -16,14 +16,15 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 02111-1307, USA.
  *
- * Copyright (C) 2012 Google Inc.
- * Author: Nathan Williams <njw@google.com>
+ * Copyright (C) 2008 - 2009 Novell, Inc.
+ * Copyright (C) 2009 - 2012 Red Hat, Inc.
+ * Copyright (C) 2012 Aleksander Morgado <aleksander@gnu.org>
  */
 
 #ifndef MM_PLUGIN_NOVATEL_H
 #define MM_PLUGIN_NOVATEL_H
 
-#include "mm-plugin-base.h"
+#include "mm-plugin.h"
 
 #define MM_TYPE_PLUGIN_NOVATEL            (mm_plugin_novatel_get_type ())
 #define MM_PLUGIN_NOVATEL(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_PLUGIN_NOVATEL, MMPluginNovatel))
@@ -33,11 +34,11 @@
 #define MM_PLUGIN_NOVATEL_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj),  MM_TYPE_PLUGIN_NOVATEL, MMPluginNovatelClass))
 
 typedef struct {
-    MMPluginBase parent;
+    MMPlugin parent;
 } MMPluginNovatel;
 
 typedef struct {
-    MMPluginBaseClass parent;
+    MMPluginClass parent;
 } MMPluginNovatelClass;
 
 GType mm_plugin_novatel_get_type (void);

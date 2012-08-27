@@ -22,25 +22,37 @@
 #include "mm-plugin-simtech.h"
 #include "mm-broadband-modem-simtech.h"
 
-G_DEFINE_TYPE (MMPluginSimtech, mm_plugin_simtech, MM_TYPE_PLUGIN_BASE)
+G_DEFINE_TYPE (MMPluginSimtech, mm_plugin_simtech, MM_TYPE_PLUGIN)
 
 int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
 int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
 
-
 /*****************************************************************************/
 
 static MMBaseModem *
-grab_port (MMPluginBase *base,
-           MMBaseModem *existing,
+create_modem (MMPlugin *self,
+              const gchar *sysfs_path,
+              const gchar **drivers,
+              guint16 vendor,
+              guint16 product,
+              GList *probes,
+              GError **error)
+{
+    return MM_BASE_MODEM (mm_broadband_modem_simtech_new (sysfs_path,
+                                                          drivers,
+                                                          mm_plugin_get_name (self),
+                                                          vendor,
+                                                          product));
+}
+
+static gboolean
+grab_port (MMPlugin *self,
+           MMBaseModem *modem,
            MMPortProbe *probe,
            GError **error)
 {
-    MMBaseModem *modem = NULL;
     GUdevDevice *port;
     MMPortType ptype;
-    const gchar *name, *subsys;
-    guint16 vendor = 0, product = 0;
     MMAtPortFlag pflags = MM_AT_PORT_FLAG_NONE;
 
     /* The Simtech plugin cannot do anything with non-AT non-QCDM ports */
@@ -50,20 +62,10 @@ grab_port (MMPluginBase *base,
                              MM_CORE_ERROR,
                              MM_CORE_ERROR_UNSUPPORTED,
                              "Ignoring non-AT non-QCDM port");
-        return NULL;
+        return FALSE;
     }
 
-    port = mm_port_probe_get_port (probe); /* transfer none */
-    subsys = mm_port_probe_get_port_subsys (probe);
-    name = mm_port_probe_get_port_name (probe);
-
-    if (!mm_plugin_base_get_device_ids (base, subsys, name, &vendor, &product)) {
-        g_set_error_literal (error,
-                             MM_CORE_ERROR,
-                             MM_CORE_ERROR_FAILED,
-                             "Could not get modem product ID");
-        return NULL;
-    }
+    port = mm_port_probe_peek_port (probe);
 
     /* Look for port type hints; just probing can't distinguish which port should
      * be the data/primary port on these devices.  We have to tag them based on
@@ -84,26 +86,12 @@ grab_port (MMPluginBase *base,
     else
         ptype = mm_port_probe_get_port_type (probe);
 
-    /* If this is the first port being grabbed, create a new modem object */
-    if (!existing)
-        modem = MM_BASE_MODEM (mm_broadband_modem_simtech_new (mm_port_probe_get_port_physdev (probe),
-                                                               mm_port_probe_get_port_driver (probe),
-                                                               mm_plugin_get_name (MM_PLUGIN (base)),
-                                                               vendor,
-                                                               product));
-
-    if (!mm_base_modem_grab_port (existing ? existing : modem,
-                                  subsys,
-                                  name,
-                                  ptype,
-                                  pflags,
-                                  error)) {
-        if (modem)
-            g_object_unref (modem);
-        return NULL;
-    }
-
-    return existing ? existing : modem;
+    return mm_base_modem_grab_port (modem,
+                                    mm_port_probe_get_port_subsys (probe),
+                                    mm_port_probe_get_port_name (probe),
+                                    ptype,
+                                    pflags,
+                                    error);
 }
 
 /*****************************************************************************/
@@ -117,11 +105,11 @@ mm_plugin_create (void)
 
     return MM_PLUGIN (
         g_object_new (MM_TYPE_PLUGIN_SIMTECH,
-                      MM_PLUGIN_BASE_NAME, "SimTech",
-                      MM_PLUGIN_BASE_ALLOWED_SUBSYSTEMS, subsystems,
-                      MM_PLUGIN_BASE_ALLOWED_VENDOR_IDS, vendor_ids,
-                      MM_PLUGIN_BASE_ALLOWED_AT, TRUE,
-                      MM_PLUGIN_BASE_ALLOWED_QCDM, TRUE,
+                      MM_PLUGIN_NAME,               "SimTech",
+                      MM_PLUGIN_ALLOWED_SUBSYSTEMS, subsystems,
+                      MM_PLUGIN_ALLOWED_VENDOR_IDS, vendor_ids,
+                      MM_PLUGIN_ALLOWED_AT,         TRUE,
+                      MM_PLUGIN_ALLOWED_QCDM,       TRUE,
                       NULL));
 }
 
@@ -133,7 +121,8 @@ mm_plugin_simtech_init (MMPluginSimtech *self)
 static void
 mm_plugin_simtech_class_init (MMPluginSimtechClass *klass)
 {
-    MMPluginBaseClass *pb_class = MM_PLUGIN_BASE_CLASS (klass);
+    MMPluginClass *plugin_class = MM_PLUGIN_CLASS (klass);
 
-    pb_class->grab_port = grab_port;
+    plugin_class->create_modem = create_modem;
+    plugin_class->grab_port = grab_port;
 }

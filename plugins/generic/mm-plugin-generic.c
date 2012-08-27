@@ -32,7 +32,7 @@
 #include "mm-serial-parsers.h"
 #include "mm-log.h"
 
-G_DEFINE_TYPE (MMPluginGeneric, mm_plugin_generic, MM_TYPE_PLUGIN_BASE)
+G_DEFINE_TYPE (MMPluginGeneric, mm_plugin_generic, MM_TYPE_PLUGIN)
 
 int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
 int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
@@ -40,74 +40,19 @@ int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
 /*****************************************************************************/
 
 static MMBaseModem *
-grab_port (MMPluginBase *base,
-           MMBaseModem *existing,
-           MMPortProbe *probe,
-           GError **error)
+create_modem (MMPlugin *self,
+              const gchar *sysfs_path,
+              const gchar **drivers,
+              guint16 vendor,
+              guint16 product,
+              GList *probes,
+              GError **error)
 {
-    GUdevDevice *port;
-    MMBaseModem *modem = NULL;
-    const gchar *name, *subsys, *devfile, *driver;
-    guint16 vendor = 0, product = 0;
-
-    subsys = mm_port_probe_get_port_subsys (probe);
-    name = mm_port_probe_get_port_name (probe);
-
-    /* The generic plugin cannot do anything with non-AT and non-QCDM ports */
-    if (!mm_port_probe_is_at (probe) &&
-        !mm_port_probe_is_qcdm (probe)) {
-        g_set_error (error,
-                     MM_CORE_ERROR,
-                     MM_CORE_ERROR_UNSUPPORTED,
-                     "Ignoring non-AT/non-QCDM ports");
-        return NULL;
-    }
-
-    driver = mm_port_probe_get_port_driver (probe);
-    port = mm_port_probe_get_port (probe);
-
-    /* Check device file of the port, we expect one */
-    devfile = g_udev_device_get_device_file (port);
-    if (!devfile) {
-        if (!driver || !g_str_equal (driver, "bluetooth")) {
-            g_set_error (error,
-                         MM_CORE_ERROR,
-                         MM_CORE_ERROR_FAILED,
-                         "Could not get port's sysfs file.");
-            return NULL;
-        }
-
-        mm_warn ("%s: (%s/%s) WARNING: missing udev 'device' file",
-                 mm_plugin_get_name (MM_PLUGIN (base)),
-                 subsys,
-                 name);
-    }
-
-    /* Vendor and Product IDs are really optional, we'll just warn if they
-     * cannot get loaded */
-    if (!mm_plugin_base_get_device_ids (base, subsys, name, &vendor, &product))
-        mm_warn ("Could not get modem vendor/product ID");
-
-    /* If this is the first port being grabbed, create a new modem object */
-    if (!existing)
-        modem = MM_BASE_MODEM (mm_broadband_modem_new (mm_port_probe_get_port_physdev (probe),
-                                                       driver,
-                                                       mm_plugin_get_name (MM_PLUGIN (base)),
-                                                       vendor,
-                                                       product));
-
-    if (!mm_base_modem_grab_port (existing ? existing : modem,
-                                  subsys,
-                                  name,
-                                  mm_port_probe_get_port_type (probe),
-                                  MM_AT_PORT_FLAG_NONE,
-                                  error)) {
-        if (modem)
-            g_object_unref (modem);
-        return NULL;
-    }
-
-    return existing ? existing : modem;
+    return MM_BASE_MODEM (mm_broadband_modem_new (sysfs_path,
+                                                  drivers,
+                                                  mm_plugin_get_name (self),
+                                                  vendor,
+                                                  product));
 }
 
 /*****************************************************************************/
@@ -119,10 +64,10 @@ mm_plugin_create (void)
 
     return MM_PLUGIN (
         g_object_new (MM_TYPE_PLUGIN_GENERIC,
-                      MM_PLUGIN_BASE_NAME, MM_PLUGIN_GENERIC_NAME,
-                      MM_PLUGIN_BASE_ALLOWED_SUBSYSTEMS, subsystems,
-                      MM_PLUGIN_BASE_ALLOWED_AT, TRUE,
-                      MM_PLUGIN_BASE_ALLOWED_QCDM, TRUE,
+                      MM_PLUGIN_NAME,               MM_PLUGIN_GENERIC_NAME,
+                      MM_PLUGIN_ALLOWED_SUBSYSTEMS, subsystems,
+                      MM_PLUGIN_ALLOWED_AT,         TRUE,
+                      MM_PLUGIN_ALLOWED_QCDM,       TRUE,
                       NULL));
 }
 
@@ -134,7 +79,7 @@ mm_plugin_generic_init (MMPluginGeneric *self)
 static void
 mm_plugin_generic_class_init (MMPluginGenericClass *klass)
 {
-    MMPluginBaseClass *pb_class = MM_PLUGIN_BASE_CLASS (klass);
+    MMPluginClass *plugin_class = MM_PLUGIN_CLASS (klass);
 
-    pb_class->grab_port = grab_port;
+    plugin_class->create_modem = create_modem;
 }

@@ -120,10 +120,26 @@ gboolean mm_base_modem_response_processor_no_result_continue (MMBaseModem *self,
                                                               const GError *error,
                                                               GVariant **result,
                                                               GError **result_error);
+/* If error, continue sequence, otherwise finish it */
+gboolean mm_base_modem_response_processor_continue_on_error (MMBaseModem *self,
+                                                             gpointer none,
+                                                             const gchar *command,
+                                                             const gchar *response,
+                                                             gboolean last_command,
+                                                             const GError *error,
+                                                             GVariant **result,
+                                                             GError **result_error);
 
 /* Generic AT command handling, using the best AT port available and without
  * explicit cancellations. */
 void mm_base_modem_at_command                (MMBaseModem *self,
+                                              const gchar *command,
+                                              guint timeout,
+                                              gboolean allow_cached,
+                                              GAsyncReadyCallback callback,
+                                              gpointer user_data);
+/* Like mm_base_modem_at_command() except does not prefix with AT */
+void mm_base_modem_at_command_raw            (MMBaseModem *self,
                                               const gchar *command,
                                               guint timeout,
                                               gboolean allow_cached,
@@ -140,6 +156,7 @@ void mm_base_modem_at_command_full                (MMBaseModem *self,
                                                    const gchar *command,
                                                    guint timeout,
                                                    gboolean allow_cached,
+                                                   gboolean is_raw,
                                                    GCancellable *cancellable,
                                                    GAsyncReadyCallback callback,
                                                    gpointer user_data);

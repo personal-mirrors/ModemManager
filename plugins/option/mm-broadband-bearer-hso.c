@@ -212,19 +212,21 @@ get_ip_config_3gpp (MMBroadbandBearer *self,
     gchar *command;
 
     command = g_strdup_printf ("AT_OWANDATA=%d", cid);
-    mm_base_modem_at_command_full (MM_BASE_MODEM (modem),
-                                   primary,
-                                   command,
-                                   3,
-                                   FALSE,
-                                   NULL, /* cancellable */
-                                   (GAsyncReadyCallback)ip_config_ready,
-                                   get_ip_config_3gpp_context_new (MM_BROADBAND_BEARER_HSO (self),
-                                                                   MM_BASE_MODEM (modem),
-                                                                   primary,
-                                                                   cid,
-                                                                   callback,
-                                                                   user_data));
+    mm_base_modem_at_command_full (
+        MM_BASE_MODEM (modem),
+        primary,
+        command,
+        3,
+        FALSE,
+        FALSE, /* raw */
+        NULL, /* cancellable */
+        (GAsyncReadyCallback)ip_config_ready,
+        get_ip_config_3gpp_context_new (MM_BROADBAND_BEARER_HSO (self),
+                                        MM_BASE_MODEM (modem),
+                                        primary,
+                                        cid,
+                                        callback,
+                                        user_data));
     g_free (command);
 }
 
@@ -332,7 +334,7 @@ mm_broadband_bearer_hso_report_connection_status (MMBroadbandBearerHso *self,
         self->priv->connect_pending_id = 0;
     }
 
-    if (self->priv->connect_cancellable_id) {
+    if (ctx && self->priv->connect_cancellable_id) {
         g_cancellable_disconnect (ctx->cancellable,
                                   self->priv->connect_cancellable_id);
         self->priv->connect_cancellable_id = 0;
@@ -401,6 +403,7 @@ connect_reset (Dial3gppContext *ctx)
                                    command,
                                    3,
                                    FALSE,
+                                   FALSE, /* raw */
                                    NULL, /* cancellable */
                                    (GAsyncReadyCallback)connect_reset_ready,
                                    ctx);
@@ -456,9 +459,26 @@ connect_cancelled_cb (GCancellable *cancellable,
 static void
 activate_ready (MMBaseModem *modem,
                 GAsyncResult *res,
-                Dial3gppContext *ctx)
+                MMBroadbandBearerHso *self)
 {
+    Dial3gppContext *ctx;
     GError *error = NULL;
+
+    /* Try to recover the connection context. If none found, it means the
+     * context was already completed and we have nothing else to do. */
+    ctx = self->priv->connect_pending;
+
+    /* Balance refcount with the extra ref we passed to command_full() */
+    g_object_unref (self);
+
+    if (!ctx) {
+        mm_dbg ("Connection context was finished already by an unsolicited message");
+
+        /* Run _finish() to finalize the async call, even if we don't care
+         * the result */
+        mm_base_modem_at_command_full_finish (modem, res, NULL);
+        return;
+    }
 
     /* From now on, if we get cancelled, we'll need to run the connection
      * reset ourselves just in case */
@@ -471,13 +491,13 @@ activate_ready (MMBaseModem *modem,
 
     /* We will now setup a timeout so that we don't wait forever to get the
      * connection on */
-    ctx->self->priv->connect_pending_id = g_timeout_add_seconds (30,
-                                                                 (GSourceFunc)connect_timed_out_cb,
-                                                                 ctx->self);
-    ctx->self->priv->connect_cancellable_id = g_cancellable_connect (ctx->cancellable,
-                                                                     G_CALLBACK (connect_cancelled_cb),
-                                                                     ctx->self,
-                                                                     NULL);
+    self->priv->connect_pending_id = g_timeout_add_seconds (30,
+                                                            (GSourceFunc)connect_timed_out_cb,
+                                                            self);
+    self->priv->connect_cancellable_id = g_cancellable_connect (ctx->cancellable,
+                                                                G_CALLBACK (connect_cancelled_cb),
+                                                                self,
+                                                                NULL);
 }
 
 static void authenticate (Dial3gppContext *ctx);
@@ -503,6 +523,15 @@ authenticate_ready (MMBaseModem *modem,
     /* Store which auth command worked, for next attempts */
     ctx->self->priv->auth_idx = ctx->auth_idx;
 
+    /* The unsolicited response to AT_OWANCALL may come before the OK does.
+     * We will keep the connection context in the bearer private data so
+     * that it is accessible from the unsolicited message handler. Note
+     * also that we do NOT pass the ctx to the GAsyncReadyCallback, as it
+     * may not be valid any more when the callback is called (it may be
+     * already completed in the unsolicited handling) */
+    g_assert (ctx->self->priv->connect_pending == NULL);
+    ctx->self->priv->connect_pending = ctx;
+
     /* Success, activate the PDP context and start the data session */
     command = g_strdup_printf ("AT_OWANCALL=%d,1,1",
                                ctx->cid);
@@ -511,15 +540,11 @@ authenticate_ready (MMBaseModem *modem,
                                    command,
                                    3,
                                    FALSE,
+                                   FALSE, /* raw */
                                    NULL, /* cancellable */
                                    (GAsyncReadyCallback)activate_ready,
-                                   ctx);
+                                   g_object_ref (ctx->self)); /* we pass the bearer object! */
     g_free (command);
-
-    /* We will now keep the context in the bearer's private.
-     * Reports of modem being connected will arrive via unsolicited messages. */
-    g_assert (ctx->self->priv->connect_pending == NULL);
-    ctx->self->priv->connect_pending = ctx;
 }
 
 const gchar *auth_commands[] = {
@@ -567,6 +592,7 @@ authenticate (Dial3gppContext *ctx)
                                    command,
                                    3,
                                    FALSE,
+                                   FALSE, /* raw */
                                    NULL, /* cancellable */
                                    (GAsyncReadyCallback)authenticate_ready,
                                    ctx);
@@ -577,6 +603,7 @@ static void
 dial_3gpp (MMBroadbandBearer *self,
            MMBaseModem *modem,
            MMAtSerialPort *primary,
+           MMPort *data, /* unused by us */
            guint cid,
            GCancellable *cancellable,
            GAsyncReadyCallback callback,
@@ -671,6 +698,7 @@ disconnect_3gpp (MMBroadbandBearer *self,
                                    command,
                                    3,
                                    FALSE,
+                                   FALSE, /* raw */
                                    NULL, /* cancellable */
                                    (GAsyncReadyCallback)disconnect_owancall_ready,
                                    ctx);

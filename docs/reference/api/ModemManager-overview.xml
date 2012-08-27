@@ -99,28 +99,35 @@
               launched as requested by the given plugin.
             </para>
             <para>
-              This filter is specified by the <type>MM_PLUGIN_BASE_ALLOWED_VENDOR_IDS</type>
-              property in the <structname>MMPluginBase</structname> object provided
+              This filter is specified by the <type>MM_PLUGIN_ALLOWED_VENDOR_IDS</type>
+              property in the <structname>MMPlugin</structname> object provided
               by the plugin.
             </para>
           </listitem>
           <listitem>
-            <para><emphasis>Allowed product IDs</emphasis></para>
+            <para><emphasis>Product IDs</emphasis></para>
             <para>
               Plugins can provide a list of udev-reported pairs of vendor and product
-              IDs to be used as pre-probing filters. If the vendor ID and product ID
-              pair reported by the device via udev is found in the list provided by
-              the plugin, port probing will be launched as requested by the given
-              plugin.
+              IDs to be used as pre-probing filters.
             </para>
             <para>
-              This additional filter should be used when the plugin is
-              expected to work only with a given specific product of a given vendor.
+              If the vendor ID and product ID pair reported by the device via udev is
+              found in the list of 'allowed' pairs provided by the plugin, port probing
+              will be launched as requested by the given plugin. This additional filter
+              should be used when the plugin is expected to work only with a given
+              specific product of a given vendor.
             </para>
             <para>
-              This filter is specified by the <type>MM_PLUGIN_BASE_ALLOWED_PRODUCT_IDS</type>
-              property in the <structname>MMPluginBase</structname> object provided
-              by the plugin.
+              If the vendor ID and product ID pair reported by the device via udev is
+              found in the list of 'forbidden' pairs provided by the plugin, port probing
+              will not be launched by this plugin. This additional filter
+              should be used when the plugin supports all devices of a given vendor
+              except for some specific ones.
+            </para>
+            <para>
+              These filters are specified by the <type>MM_PLUGIN_ALLOWED_PRODUCT_IDS</type>
+              and <type>MM_PLUGIN_FORBIDDEN_PRODUCT_IDS</type> properties in the
+              <structname>MMPlugin</structname> object provided by the plugin.
             </para>
           </listitem>
           <listitem>
@@ -130,8 +137,8 @@
               any port detected with a subsystem not listed by the plugin.
             </para>
             <para>
-              This filter is specified by the <type>MM_PLUGIN_BASE_ALLOWED_SUBSYSTEMS</type>
-              property in the <structname>MMPluginBase</structname> object provided
+              This filter is specified by the <type>MM_PLUGIN_ALLOWED_SUBSYSTEMS</type>
+              property in the <structname>MMPlugin</structname> object provided
               by the plugin.
             </para>
           </listitem>
@@ -142,9 +149,13 @@
               any port detected being managed by a driver not listed by the plugin.
             </para>
             <para>
-              This filter is specified by the <type>MM_PLUGIN_BASE_ALLOWED_DRIVERS</type>
-              property in the <structname>MMPluginBase</structname> object provided
-              by the plugin.
+              Plugins can also specify which drivers they do not expect, so that we
+              filter out any port detected being managed by a driver listed by the plugin.
+            </para>
+            <para>
+              These filters are specified by the <type>MM_PLUGIN_ALLOWED_DRIVERS</type>
+              and <type>MM_PLUGIN_FORBIDDEN_DRIVERS</type> properties in the
+              <structname>MMPlugin</structname> object provided by the plugin.
             </para>
           </listitem>
           <listitem>
@@ -154,8 +165,8 @@
               any port detected which doesn't expose any of the given tags.
             </para>
             <para>
-              This filter is specified by the <type>MM_PLUGIN_BASE_ALLOWED_UDEV_TAGS</type>
-              property in the <structname>MMPluginBase</structname> object provided
+              This filter is specified by the <type>MM_PLUGIN_ALLOWED_UDEV_TAGS</type>
+              property in the <structname>MMPlugin</structname> object provided
               by the plugin.
             </para>
           </listitem>
@@ -172,22 +183,16 @@
         </para>
         <itemizedlist>
           <listitem>
-            <para><emphasis>Custom AT initialization</emphasis></para>
+            <para><emphasis>Custom initialization</emphasis></para>
             <para>
-              This property allows plugins to specify custom initialization sequences to
-              run in the modem before any additional probing happens. This helps in the cases
-              where modems require commands to, for example, shutdown unsolicited messages.
+              This property allows plugins to provide an asynchronous method which will get
+              executed as soon as the AT port gets opened. This method may be used for any
+              purpose, like running an early command in the ports as soon as possible, or
+              querying the modem for info about the port layout.
             </para>
             <para>
-              An additional benefit of the custom initialization through AT commands is that
-              it can already provide information on whether the port is AT or not. In other
-              words, a plugin with custom initialization sequence which reports that the
-              port being initialized is AT won't run the generic checks to see if the port is
-              AT or not.
-            </para>
-            <para>
-              This configuration is specified by the <type>MM_PLUGIN_BASE_CUSTOM_INIT</type>
-              property in the <structname>MMPluginBase</structname> object provided
+              This configuration is specified by the <type>MM_PLUGIN_CUSTOM_INIT</type>
+              property in the <structname>MMPlugin</structname> object provided
               by the plugin.
             </para>
           </listitem>
@@ -198,8 +203,8 @@
               AT serial ports.
             </para>
             <para>
-              This configuration is specified by the <type>MM_PLUGIN_BASE_ALLOWED_AT</type>
-              property in the <structname>MMPluginBase</structname> object provided
+              This configuration is specified by the <type>MM_PLUGIN_ALLOWED_AT</type>
+              property in the <structname>MMPlugin</structname> object provided
               by the plugin.
             </para>
           </listitem>
@@ -211,8 +216,20 @@
               in ports of the same device will get cancelled.
             </para>
             <para>
-              This configuration is specified by the <type>MM_PLUGIN_BASE_ALLOWED_SINGLE_AT</type>
-              property in the <structname>MMPluginBase</structname> object provided
+              This configuration is specified by the <type>MM_PLUGIN_ALLOWED_SINGLE_AT</type>
+              property in the <structname>MMPlugin</structname> object provided
+              by the plugin.
+            </para>
+          </listitem>
+          <listitem>
+            <para><emphasis>Custom AT probing</emphasis></para>
+            <para>
+              This property allows plugins to specify custom commands to check whether a port
+              is AT or not. By default, the 'AT' command will be used if no custom one specified.
+            </para>
+            <para>
+              This configuration is specified by the <type>MM_PLUGIN_CUSTOM_AT_PROBE</type>
+              property in the <structname>MMPlugin</structname> object provided
               by the plugin.
             </para>
           </listitem>
@@ -223,8 +240,22 @@
               QCDM serial ports.
             </para>
             <para>
-              This configuration is specified by the <type>MM_PLUGIN_BASE_ALLOWED_QCDM</type>
-              property in the <structname>MMPluginBase</structname> object provided
+              This configuration is specified by the <type>MM_PLUGIN_ALLOWED_QCDM</type>
+              property in the <structname>MMPlugin</structname> object provided
+              by the plugin.
+            </para>
+          </listitem>
+          <listitem>
+            <para><emphasis>Check Icera support</emphasis></para>
+            <para>
+              This boolean property allows plugins to specify that they want to have the Icera
+              support checks included in the probing sequence. They can afterwards get the result
+              of the support check to decide whether they want to create a Icera-based modem
+              object or not.
+            </para>
+            <para>
+              This configuration is specified by the <type>MM_PLUGIN_ICERA_PROBE</type>
+              property in the <structname>MMPlugin</structname> object provided
               by the plugin.
             </para>
           </listitem>
@@ -250,27 +281,49 @@
               it can handle this modem.
             </para>
             <para>
-              This filter is specified by the <type>MM_PLUGIN_BASE_ALLOWED_VENDOR_STRINGS</type>
-              property in the <structname>MMPluginBase</structname> object provided
+              This filter is specified by the <type>MM_PLUGIN_ALLOWED_VENDOR_STRINGS</type>
+              property in the <structname>MMPlugin</structname> object provided
               by the plugin.
             </para>
           </listitem>
           <listitem>
-            <para><emphasis>Allowed product strings</emphasis></para>
+            <para><emphasis>Product strings</emphasis></para>
             <para>
               Plugins can provide a list of pairs of vendor and product
-              strings to be used as post-probing filters. If the vendor and product string
-              pair reported by the device via AT commands is found in the list provided by
-              the plugin, the plugin will report that it can handle this modem.
+              strings to be used as post-probing filters.
             </para>
             <para>
-              This additional filter should be used when the plugin is
-              expected to work only with a given specific product of a given vendor.
+              If the vendor and product string pair reported by the device via AT
+              commands is found in the 'allowed' list provided by the plugin, the
+              plugin will report that it can handle this modem. This additional filter
+              should be used when the plugin is expected to work only with a given
+              specific product of a given vendor.
             </para>
             <para>
-              This filter is specified by the <type>MM_PLUGIN_BASE_ALLOWED_PRODUCT_STRINGS</type>
-              property in the <structname>MMPluginBase</structname> object provided
-              by the plugin.
+              If the vendor and product string pair reported by the device via AT
+              commands is found in the 'forbidden list provided by the plugin, the
+              plugin will report that it cannot handle this modem. This additional filter
+              should be used when the plugin supports all devices of a given vendor, except for some specific ones.
+            </para>
+            <para>
+              These filters are specified by the <type>MM_PLUGIN_ALLOWED_PRODUCT_STRINGS</type>
+              and <type>MM_PLUGIN_FORBIDDEN_PRODUCT_STRINGS</type> properties in the
+              <structname>MMPlugin</structname> object provided by the plugin.
+            </para>
+          </listitem>
+          <listitem>
+            <para><emphasis>Icera support</emphasis></para>
+            <para>
+              Plugins can specify that they only support Icera-based modems, or that they
+              do not support any Icera-based modem. When either of this configurations is
+              enabled, the Icera support checks will be included in the
+              probing sequence, and the result of the check will help to determine whether
+              the plugin supports the modem or not.
+            </para>
+            <para>
+              This filter is specified by the <type>MM_PLUGIN_ALLOWED_ICERA</type> and
+              <type>MM_PLUGIN_FORBIDDEN_ICERA</type> properties in the
+              <structname>MMPlugin</structname> object provided by the plugin.
             </para>
           </listitem>
         </itemizedlist>
@@ -304,15 +357,15 @@ mm_plugin_create (void)
 
     return MM_PLUGIN (
         g_object_new (MM_TYPE_PLUGIN_IRIDIUM,
-                      MM_PLUGIN_BASE_NAME, "Example",
+                      MM_PLUGIN_NAME, "Example",
 
                       /* Next items are pre-probing filters */
-                      MM_PLUGIN_BASE_ALLOWED_SUBSYSTEMS, subsystems,
-                      MM_PLUGIN_BASE_ALLOWED_VENDOR_IDS, vendor_ids,
-                      MM_PLUGIN_BASE_ALLOWED_PRODUCT_IDS, product_ids,
+                      MM_PLUGIN_ALLOWED_SUBSYSTEMS, subsystems,
+                      MM_PLUGIN_ALLOWED_VENDOR_IDS, vendor_ids,
+                      MM_PLUGIN_ALLOWED_PRODUCT_IDS, product_ids,
 
                       /* Next items are probing sequence setup */
-                      MM_PLUGIN_BASE_ALLOWED_AT, TRUE,
+                      MM_PLUGIN_ALLOWED_AT, TRUE,
 
                       /* No post-probing filters */
                       NULL));
@@ -332,17 +385,17 @@ mm_plugin_create (void)
 
     return MM_PLUGIN (
         g_object_new (MM_TYPE_PLUGIN_IRIDIUM,
-                      MM_PLUGIN_BASE_NAME, "Example",
+                      MM_PLUGIN_NAME, "Example",
 
                       /* Next items are pre-probing filters */
-                      MM_PLUGIN_BASE_ALLOWED_SUBSYSTEMS, subsystems,
+                      MM_PLUGIN_ALLOWED_SUBSYSTEMS, subsystems,
 
                       /* Next items are probing sequence setup */
-                      MM_PLUGIN_BASE_ALLOWED_AT, TRUE,
+                      MM_PLUGIN_ALLOWED_AT, TRUE,
 
                       /* Next items are post-probing filters */
-                      MM_PLUGIN_BASE_VENDOR_STRINGS, vendor_strings,
-                      MM_PLUGIN_BASE_PRODUCT_STRINGS, product_strings,
+                      MM_PLUGIN_VENDOR_STRINGS, vendor_strings,
+                      MM_PLUGIN_PRODUCT_STRINGS, product_strings,
                       NULL));
 }
           </programlisting>
@@ -352,10 +405,10 @@ mm_plugin_create (void)
           <title>Probing setup for a plugin with custom initialization requirements</title>
           <programlisting>
 static gboolean
-parse_init (const gchar *response,
-            const GError *error,
-            GValue *result,
-            GError **result_error)
+parse_custom_at (const gchar *response,
+                 const GError *error,
+                 GValue *result,
+                 GError **result_error)
 {
     if (error) {
         *result_error = g_error_copy (error);
@@ -368,8 +421,8 @@ parse_init (const gchar *response,
     return TRUE;
 }
 
-static const MMPortProbeAtCommand custom_init[] = {
-    { "ATE1 E0", parse_init },
+static const MMPortProbeAtCommand custom_at_probe[] = {
+    { "AT+SOMETHING", parse_custom_at },
     { NULL }
 };
 
@@ -380,16 +433,16 @@ mm_plugin_create (void)
     static const guint16 vendor_ids[] = { 0xabcd, 0 };
 
     return MM_PLUGIN (
-        g_object_new (MM_TYPE_PLUGIN_NOKIA,
-                      MM_PLUGIN_BASE_NAME, "Example",
+        g_object_new (MM_TYPE_PLUGIN_EXAMPLE,
+                      MM_PLUGIN_NAME, "Example",
 
                       /* Next items are pre-probing filters */
-                      MM_PLUGIN_BASE_ALLOWED_SUBSYSTEMS, subsystems,
-                      MM_PLUGIN_BASE_ALLOWED_VENDOR_IDS, vendor_ids,
+                      MM_PLUGIN_ALLOWED_SUBSYSTEMS, subsystems,
+                      MM_PLUGIN_ALLOWED_VENDOR_IDS, vendor_ids,
 
                       /* Next items are probing sequence setup */
-                      MM_PLUGIN_BASE_CUSTOM_INIT, custom_init,
-                      MM_PLUGIN_BASE_ALLOWED_AT, TRUE,
+                      MM_PLUGIN_CUSTOM_AT_PROBE, custom_at_probe,
+                      MM_PLUGIN_ALLOWED_AT,      TRUE,
 
                       /* No post-probing filters */
                       NULL));
