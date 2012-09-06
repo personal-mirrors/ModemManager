@@ -139,3 +139,30 @@ example to update the signal quality value or check registration status.
 
   ** Icera plugin: retry authentication step in 3gpp dialling to 3 times with 1s
      delay.
+
+  ** QMI: Gobi 2k devices don't like the SYNC command, which is supposed to
+     release all previously allocated clients. It gets worse, as if clients are
+     not cleanly released by ModemManager (e.g. a segfault), the device reaches
+     a point where it doesn't allow allocating more:
+       couldn't create client for the 'nas' service:
+         QMI protocol error (5): 'client-ids-exhausted'
+     This may force us to have something like a state file in /tmp with the IDs
+     currently allocated, so that ModemManager can re-use them if needed.
+
+  ** QMI: A device may export multiple cdc-wdm interfaces, along with multiple
+     wwan interfaces. If this is the case, we should allow configuring multiple
+     bearers. Additional comments from Bjorn Mork:
+       "The code really should try to match the wwanX and cdc-wdmY devices by
+        USB interface and not by USB device.  If we ignore the unfortunate 3.4
+        and 3.5 kernels, then a matching wwanX and cdc-wdmY set will always
+        share the same parent USB interface on QMI devices. Having the same
+        parent USB device is *not* sufficient."
+
+  ** QMI: in NAS >= 1.8 we don't have the operator name given in the
+     registration status queries, we'll need to get it with "NAS Get PLMN Name".
+
+  ** QMI: For the operator ID provisioned in the SIM, should we be using "Get
+     Home Network"?
+
+  ** QMI: mark the modem as invalid if we lose the QMI and/or WWAN ports. For
+     example, we should handle 'sudo rmmod qmi_wwan && sudo modprobe qmi_wwan'

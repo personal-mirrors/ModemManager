@@ -27,6 +27,10 @@
 #include "mm-plugin-huawei.h"
 #include "mm-broadband-modem-huawei.h"
 
+#if defined WITH_QMI
+#include "mm-broadband-modem-qmi.h"
+#endif
+
 G_DEFINE_TYPE (MMPluginHuawei, mm_plugin_huawei, MM_TYPE_PLUGIN)
 
 int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
@@ -423,6 +427,17 @@ create_modem (MMPlugin *self,
 {
     propagate_port_mode_results (probes);
 
+#if defined WITH_QMI
+    if (mm_port_probe_list_has_qmi_port (probes)) {
+        mm_dbg ("QMI-powered Huawei modem found...");
+        return MM_BASE_MODEM (mm_broadband_modem_qmi_new (sysfs_path,
+                                                          drivers,
+                                                          mm_plugin_get_name (self),
+                                                          vendor,
+                                                          product));
+    }
+#endif
+
     return MM_BASE_MODEM (mm_broadband_modem_huawei_new (sysfs_path,
                                                          drivers,
                                                          mm_plugin_get_name (self),
@@ -460,7 +475,7 @@ grab_port (MMPlugin *self,
 G_MODULE_EXPORT MMPlugin *
 mm_plugin_create (void)
 {
-    static const gchar *subsystems[] = { "tty", "net", NULL };
+    static const gchar *subsystems[] = { "tty", "net", "usb", NULL };
     static const guint16 vendor_ids[] = { 0x12d1, 0 };
     static const MMAsyncMethod custom_init = {
         .async  = G_CALLBACK (huawei_custom_init),

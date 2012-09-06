@@ -15,6 +15,8 @@
  * Copyright (C) 2011 Aleksander Morgado <aleksander@gnu.org>
  */
 
+#include "config.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +36,10 @@
 #include "mm-qcdm-serial-port.h"
 #include "mm-daemon-enums-types.h"
 
+#if defined WITH_QMI
+#include "mm-qmi-port.h"
+#endif
+
 /*
  * Steps and flow of the Probing process:
  * ----> AT Serial Open
@@ -44,6 +50,8 @@
  *      |----> Is Icera?
  * ----> QCDM Serial Open
  *   |----> QCDM?
+ * ----> QMI Device Open
+ *   |----> QMI Version Info check
  */
 
 G_DEFINE_TYPE (MMPortProbe, mm_port_probe, G_TYPE_OBJECT)
@@ -59,16 +67,24 @@ static GParamSpec *properties[PROP_LAST];
 
 typedef struct {
     /* ---- Generic task context ---- */
+
     GSimpleAsyncResult *result;
     GCancellable *cancellable;
-    GCancellable *at_probing_cancellable;
     guint32 flags;
     guint source_id;
+
+    /* ---- Serial probing specific context ---- */
+
     guint buffer_full_id;
     MMSerialPort *serial;
 
     /* ---- AT probing specific context ---- */
+
+    GCancellable *at_probing_cancellable;
+    /* Send delay for AT commands */
     guint64 at_send_delay;
+    /* Flag to leave/remove echo in AT responses */
+    gboolean at_remove_echo;
     /* Number of times we tried to open the AT port */
     guint at_open_tries;
     /* Custom initialization setup */
@@ -82,6 +98,12 @@ typedef struct {
     /* Current AT Result processor */
     void (* at_result_processor) (MMPortProbe *self,
                                   GVariant *result);
+
+#if defined WITH_QMI
+    /* ---- QMI probing specific context ---- */
+    MMQmiPort *qmi_port;
+#endif
+
 } PortProbeRunTask;
 
 struct _MMPortProbePrivate {
@@ -96,6 +118,7 @@ struct _MMPortProbePrivate {
     gchar *vendor;
     gchar *product;
     gboolean is_icera;
+    gboolean is_qmi;
 
     /* Current probing task. Only one can be available at a time */
     PortProbeRunTask *task;
@@ -113,9 +136,10 @@ mm_port_probe_set_result_at (MMPortProbe *self,
                 g_udev_device_get_subsystem (self->priv->port),
                 g_udev_device_get_name (self->priv->port));
 
-        /* Also set as not a QCDM port */
+        /* Also set as not a QCDM/QMI port */
         self->priv->is_qcdm = FALSE;
-        self->priv->flags |= MM_PORT_PROBE_QCDM;
+        self->priv->is_qmi = FALSE;
+        self->priv->flags |= (MM_PORT_PROBE_QCDM | MM_PORT_PROBE_QMI);
     } else {
         mm_dbg ("(%s/%s) port is not AT-capable",
                 g_udev_device_get_subsystem (self->priv->port),
@@ -199,17 +223,47 @@ mm_port_probe_set_result_qcdm (MMPortProbe *self,
                 g_udev_device_get_subsystem (self->priv->port),
                 g_udev_device_get_name (self->priv->port));
 
-        /* Also set as not an AT port */
+        /* Also set as not an AT/QMI port */
         self->priv->is_at = FALSE;
+        self->priv->is_qmi = FALSE;
         self->priv->vendor = NULL;
         self->priv->product = NULL;
         self->priv->is_icera = FALSE;
         self->priv->flags |= (MM_PORT_PROBE_AT |
                               MM_PORT_PROBE_AT_VENDOR |
                               MM_PORT_PROBE_AT_PRODUCT |
-                              MM_PORT_PROBE_AT_ICERA);
+                              MM_PORT_PROBE_AT_ICERA |
+                              MM_PORT_PROBE_QMI);
     } else
         mm_dbg ("(%s/%s) port is not QCDM-capable",
+                g_udev_device_get_subsystem (self->priv->port),
+                g_udev_device_get_name (self->priv->port));
+}
+
+void
+mm_port_probe_set_result_qmi (MMPortProbe *self,
+                              gboolean qmi)
+{
+    self->priv->is_qmi = qmi;
+    self->priv->flags |= MM_PORT_PROBE_QMI;
+
+    if (self->priv->is_qmi) {
+        mm_dbg ("(%s/%s) port is QMI-capable",
+                g_udev_device_get_subsystem (self->priv->port),
+                g_udev_device_get_name (self->priv->port));
+
+        /* Also set as not an AT/QCDM port */
+        self->priv->is_at = FALSE;
+        self->priv->is_qcdm = FALSE;
+        self->priv->vendor = NULL;
+        self->priv->product = NULL;
+        self->priv->flags |= (MM_PORT_PROBE_AT |
+                              MM_PORT_PROBE_AT_VENDOR |
+                              MM_PORT_PROBE_AT_PRODUCT |
+                              MM_PORT_PROBE_AT_ICERA |
+                              MM_PORT_PROBE_QCDM);
+    } else
+        mm_dbg ("(%s/%s) port is not QMI-capable",
                 g_udev_device_get_subsystem (self->priv->port),
                 g_udev_device_get_name (self->priv->port));
 }
@@ -232,6 +286,14 @@ port_probe_run_task_free (PortProbeRunTask *task)
             mm_serial_port_close (task->serial);
         g_object_unref (task->serial);
     }
+
+#if defined WITH_QMI
+    if (task->qmi_port) {
+        if (mm_qmi_port_is_open (task->qmi_port))
+            mm_qmi_port_close (task->qmi_port);
+        g_object_unref (task->qmi_port);
+    }
+#endif
 
     if (task->cancellable)
         g_object_unref (task->cancellable);
@@ -288,6 +350,66 @@ port_probe_run_is_cancelled (MMPortProbe *self)
     return FALSE;
 }
 
+#if defined WITH_QMI
+
+static void
+qmi_port_open_ready (MMQmiPort *qmi_port,
+                     GAsyncResult *res,
+                     MMPortProbe *self)
+{
+    PortProbeRunTask *task = self->priv->task;
+    GError *error = NULL;
+    gboolean is_qmi;
+
+    is_qmi = mm_qmi_port_open_finish (qmi_port, res, &error);
+    if (!is_qmi) {
+        mm_dbg ("(%s/%s) error checking QMI support: '%s'",
+                g_udev_device_get_subsystem (self->priv->port),
+                g_udev_device_get_name (self->priv->port),
+                error ? error->message : "unknown error");
+        g_clear_error (&error);
+    }
+
+    /* Set probing result */
+    mm_port_probe_set_result_qmi (self, is_qmi);
+
+    mm_qmi_port_close (qmi_port);
+
+    /* All done! Finish asynchronously */
+    port_probe_run_task_complete (task, TRUE, NULL);
+}
+
+#endif /* WITH_QMI */
+
+static gboolean
+wdm_probe_qmi (MMPortProbe *self)
+{
+    PortProbeRunTask *task = self->priv->task;
+
+    /* If already cancelled, do nothing else */
+    if (port_probe_run_is_cancelled (self))
+        return FALSE;
+
+#if defined WITH_QMI
+    mm_dbg ("(%s/%s) probing QMI...",
+            g_udev_device_get_subsystem (self->priv->port),
+            g_udev_device_get_name (self->priv->port));
+
+    /* Create a port and try to open it */
+    task->qmi_port = mm_qmi_port_new (g_udev_device_get_name (self->priv->port));
+    mm_qmi_port_open (task->qmi_port,
+                      NULL,
+                      (GAsyncReadyCallback)qmi_port_open_ready,
+                      self);
+#else
+    /* If not compiled with QMI support, just assume we won't have any QMI port */
+    mm_port_probe_set_result_qmi (self, FALSE);
+    port_probe_run_task_complete (task, TRUE, NULL);
+#endif /* WITH_QMI */
+
+    return FALSE;
+}
+
 static void
 serial_probe_qcdm_parse_response (MMQcdmSerialPort *port,
                                   GByteArray *response,
@@ -297,10 +419,8 @@ serial_probe_qcdm_parse_response (MMQcdmSerialPort *port,
     QcdmResult *result;
     gint err = QCDM_SUCCESS;
     gboolean is_qcdm = FALSE;
-
-    /* Just the initial poke; ignore it */
-    if (!self)
-        return;
+    gboolean retry = FALSE;
+    PortProbeRunTask *task = self->priv->task;
 
     /* If already cancelled, do nothing else */
     if (port_probe_run_is_cancelled (self))
@@ -316,12 +436,35 @@ serial_probe_qcdm_parse_response (MMQcdmSerialPort *port,
                      g_udev_device_get_subsystem (self->priv->port),
                      g_udev_device_get_name (self->priv->port),
                      err);
+            retry = TRUE;
         } else {
             /* yay, probably a QCDM port */
             is_qcdm = TRUE;
 
             qcdm_result_unref (result);
         }
+    } else {
+        if (!g_error_matches (error, MM_SERIAL_ERROR, MM_SERIAL_ERROR_RESPONSE_TIMEOUT))
+            mm_dbg ("QCDM probe error: (%d) %s", error->code, error->message);
+        retry = TRUE;
+    }
+
+    if (retry) {
+        GByteArray *cmd2;
+
+        cmd2 = g_object_steal_data (G_OBJECT (self), "cmd2");
+        if (cmd2) {
+            /* second try */
+            mm_qcdm_serial_port_queue_command (MM_QCDM_SERIAL_PORT (task->serial),
+                                               cmd2,
+                                               3,
+                                               NULL,
+                                               (MMQcdmSerialResponseFn)serial_probe_qcdm_parse_response,
+                                               self);
+            return;
+        }
+
+        /* no more retries left */
     }
 
     /* Set probing result */
@@ -339,6 +482,7 @@ serial_probe_qcdm (MMPortProbe *self)
     GByteArray *verinfo = NULL;
     GByteArray *verinfo2;
     gint len;
+    guint8 marker = 0x7E;
 
     task->source_id = 0;
 
@@ -385,9 +529,14 @@ serial_probe_qcdm (MMPortProbe *self)
         return FALSE;
     }
 
-    /* Build up the probe command */
-    verinfo = g_byte_array_sized_new (50);
-    len = qcdm_cmd_version_info_new ((gchar *) verinfo->data, 50);
+    /* Build up the probe command; 0x7E is the frame marker, so put one at the
+     * beginning of the buffer to ensure that the device discards any AT
+     * commands that probing might have sent earlier.  Should help devices
+     * respond more quickly and speed up QCDM probing.
+     */
+    verinfo = g_byte_array_sized_new (10);
+    g_byte_array_append (verinfo, &marker, 1);
+    len = qcdm_cmd_version_info_new ((char *) (verinfo->data + 1), 9);
     if (len <= 0) {
         g_byte_array_free (verinfo, TRUE);
         port_probe_run_task_complete (
@@ -400,21 +549,15 @@ serial_probe_qcdm (MMPortProbe *self)
                          g_udev_device_get_name (self->priv->port)));
         return FALSE;
     }
-    verinfo->len = len;
+    verinfo->len = len + 1;
 
-    /* Queuing the command takes ownership over it; dup it for the second try */
+    /* Queuing the command takes ownership over it; save it for the second try */
     verinfo2 = g_byte_array_sized_new (verinfo->len);
     g_byte_array_append (verinfo2, verinfo->data, verinfo->len);
+    g_object_set_data_full (G_OBJECT (self), "cmd2", verinfo2, (GDestroyNotify) g_byte_array_unref);
 
-    /* Send the command twice; the ports often need to be woken up */
     mm_qcdm_serial_port_queue_command (MM_QCDM_SERIAL_PORT (task->serial),
                                        verinfo,
-                                       3,
-                                       NULL,
-                                       (MMQcdmSerialResponseFn)serial_probe_qcdm_parse_response,
-                                       NULL);
-    mm_qcdm_serial_port_queue_command (MM_QCDM_SERIAL_PORT (task->serial),
-                                       verinfo2,
                                        3,
                                        NULL,
                                        (MMQcdmSerialResponseFn)serial_probe_qcdm_parse_response,
@@ -612,7 +755,7 @@ static const MMPortProbeAtCommand product_probing[] = {
 };
 
 static const MMPortProbeAtCommand icera_probing[] = {
-    { "%IPSYS?", 3, mm_port_probe_response_processor_string },
+    { "%IPSYS?", 3, mm_port_probe_response_processor_no_error },
     { NULL }
 };
 
@@ -805,9 +948,10 @@ serial_open_at (MMPortProbe *self)
         }
 
         g_object_set (task->serial,
-                      MM_SERIAL_PORT_SEND_DELAY, task->at_send_delay,
-                      MM_PORT_CARRIER_DETECT, FALSE,
-                      MM_SERIAL_PORT_SPEW_CONTROL, TRUE,
+                      MM_SERIAL_PORT_SEND_DELAY,     task->at_send_delay,
+                      MM_AT_SERIAL_PORT_REMOVE_ECHO, task->at_remove_echo,
+                      MM_PORT_CARRIER_DETECT,        FALSE,
+                      MM_SERIAL_PORT_SPEW_CONTROL,   TRUE,
                       NULL);
 
         mm_at_serial_port_set_response_parser (MM_AT_SERIAL_PORT (task->serial),
@@ -926,6 +1070,7 @@ void
 mm_port_probe_run (MMPortProbe *self,
                    MMPortProbeFlag flags,
                    guint64 at_send_delay,
+                   gboolean at_remove_echo,
                    const MMPortProbeAtCommand *at_custom_probe,
                    const MMAsyncMethod *at_custom_init,
                    GAsyncReadyCallback callback,
@@ -944,6 +1089,7 @@ mm_port_probe_run (MMPortProbe *self,
 
     task = g_new0 (PortProbeRunTask, 1);
     task->at_send_delay = at_send_delay;
+    task->at_remove_echo = at_remove_echo;
     task->flags = MM_PORT_PROBE_NONE;
     task->at_custom_probe = at_custom_probe;
     task->at_custom_init = at_custom_init ? (MMPortProbeAtCustomInit)at_custom_init->async : NULL;
@@ -957,7 +1103,7 @@ mm_port_probe_run (MMPortProbe *self,
     /* Check if we already have the requested probing results.
      * We will fix here the 'task->flags' so that we only request probing
      * for the missing things. */
-    for (i = MM_PORT_PROBE_AT; i <= MM_PORT_PROBE_QCDM; i = (i << 1)) {
+    for (i = MM_PORT_PROBE_AT; i <= MM_PORT_PROBE_QMI; i = (i << 1)) {
         if ((flags & i) && !(self->priv->flags & i)) {
             task->flags += i;
         }
@@ -993,9 +1139,15 @@ mm_port_probe_run (MMPortProbe *self,
         return;
     }
 
-    /* Otherwise, start by opening as QCDM port */
+    /* If QCDM probing needed, start by opening as QCDM port */
     if (task->flags & MM_PORT_PROBE_QCDM) {
         task->source_id = g_idle_add ((GSourceFunc)serial_probe_qcdm, self);
+        return;
+    }
+
+    /* If QMI probing needed, start by opening as a QMI port */
+    if (task->flags & MM_PORT_PROBE_QMI) {
+        task->source_id = g_idle_add ((GSourceFunc)wdm_probe_qmi, self);
         return;
     }
 
@@ -1006,9 +1158,16 @@ mm_port_probe_run (MMPortProbe *self,
 gboolean
 mm_port_probe_is_at (MMPortProbe *self)
 {
+    const gchar *subsys;
+    const gchar *name;
+
     g_return_val_if_fail (MM_IS_PORT_PROBE (self), FALSE);
 
-    if (g_str_equal (g_udev_device_get_subsystem (self->priv->port), "net"))
+    subsys = g_udev_device_get_subsystem (self->priv->port);
+    name = g_udev_device_get_name (self->priv->port);
+    if (g_str_equal (subsys, "net") ||
+        (g_str_has_prefix (subsys, "usb") &&
+         g_str_has_prefix (name, "cdc-wdm")))
         return FALSE;
 
     return (self->priv->flags & MM_PORT_PROBE_AT ?
@@ -1034,9 +1193,16 @@ mm_port_probe_list_has_at_port (GList *list)
 gboolean
 mm_port_probe_is_qcdm (MMPortProbe *self)
 {
+    const gchar *subsys;
+    const gchar *name;
+
     g_return_val_if_fail (MM_IS_PORT_PROBE (self), FALSE);
 
-    if (g_str_equal (g_udev_device_get_subsystem (self->priv->port), "net"))
+    subsys = g_udev_device_get_subsystem (self->priv->port);
+    name = g_udev_device_get_name (self->priv->port);
+    if (g_str_equal (subsys, "net") ||
+        (g_str_has_prefix (subsys, "usb") &&
+         g_str_has_prefix (name, "cdc-wdm")))
         return FALSE;
 
     return (self->priv->flags & MM_PORT_PROBE_QCDM ?
@@ -1044,13 +1210,57 @@ mm_port_probe_is_qcdm (MMPortProbe *self)
             FALSE);
 }
 
+gboolean
+mm_port_probe_is_qmi (MMPortProbe *self)
+{
+    const gchar *subsys;
+    const gchar *name;
+
+    g_return_val_if_fail (MM_IS_PORT_PROBE (self), FALSE);
+
+    subsys = g_udev_device_get_subsystem (self->priv->port);
+    name = g_udev_device_get_name (self->priv->port);
+    if (!g_str_has_prefix (subsys, "usb") ||
+        !name ||
+        !g_str_has_prefix (name, "cdc-wdm"))
+        return FALSE;
+
+    return self->priv->is_qmi;
+}
+
+gboolean
+mm_port_probe_list_has_qmi_port (GList *list)
+{
+    GList *l;
+
+    for (l = list; l; l = g_list_next (l)) {
+        if (mm_port_probe_is_qmi (MM_PORT_PROBE (l->data)))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 MMPortType
 mm_port_probe_get_port_type (MMPortProbe *self)
 {
+    const gchar *subsys;
+    const gchar *name;
+
     g_return_val_if_fail (MM_IS_PORT_PROBE (self), FALSE);
 
-    if (g_str_equal (g_udev_device_get_subsystem (self->priv->port), "net"))
+    subsys = g_udev_device_get_subsystem (self->priv->port);
+    name = g_udev_device_get_name (self->priv->port);
+
+    if (g_str_equal (subsys, "net"))
         return MM_PORT_TYPE_NET;
+
+#if defined WITH_QMI
+    if (g_str_has_prefix (subsys, "usb") &&
+        g_str_has_prefix (name, "cdc-wdm") &&
+        self->priv->is_qmi)
+        return MM_PORT_TYPE_QMI;
+#endif
 
     if (self->priv->flags & MM_PORT_PROBE_QCDM &&
         self->priv->is_qcdm)
@@ -1098,9 +1308,16 @@ mm_port_probe_get_port (MMPortProbe *self)
 const gchar *
 mm_port_probe_get_vendor (MMPortProbe *self)
 {
-    g_return_val_if_fail (MM_IS_PORT_PROBE (self), NULL);
+    const gchar *subsys;
+    const gchar *name;
 
-    if (g_str_equal (g_udev_device_get_subsystem (self->priv->port), "net"))
+    g_return_val_if_fail (MM_IS_PORT_PROBE (self), FALSE);
+
+    subsys = g_udev_device_get_subsystem (self->priv->port);
+    name = g_udev_device_get_name (self->priv->port);
+    if (g_str_equal (subsys, "net") ||
+        (g_str_has_prefix (subsys, "usb") &&
+         g_str_has_prefix (name, "cdc-wdm")))
         return NULL;
 
     return (self->priv->flags & MM_PORT_PROBE_AT_VENDOR ?
@@ -1111,9 +1328,16 @@ mm_port_probe_get_vendor (MMPortProbe *self)
 const gchar *
 mm_port_probe_get_product (MMPortProbe *self)
 {
-    g_return_val_if_fail (MM_IS_PORT_PROBE (self), NULL);
+    const gchar *subsys;
+    const gchar *name;
 
-    if (g_str_equal (g_udev_device_get_subsystem (self->priv->port), "net"))
+    g_return_val_if_fail (MM_IS_PORT_PROBE (self), FALSE);
+
+    subsys = g_udev_device_get_subsystem (self->priv->port);
+    name = g_udev_device_get_name (self->priv->port);
+    if (g_str_equal (subsys, "net") ||
+        (g_str_has_prefix (subsys, "usb") &&
+         g_str_has_prefix (name, "cdc-wdm")))
         return NULL;
 
     return (self->priv->flags & MM_PORT_PROBE_AT_PRODUCT ?
@@ -1132,6 +1356,19 @@ mm_port_probe_is_icera (MMPortProbe *self)
     return (self->priv->flags & MM_PORT_PROBE_AT_ICERA ?
             self->priv->is_icera :
             FALSE);
+}
+
+gboolean
+mm_port_probe_list_is_icera (GList *probes)
+{
+    GList *l;
+
+    for (l = probes; l; l = g_list_next (l)) {
+        if (mm_port_probe_is_icera (MM_PORT_PROBE (l->data)))
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 const gchar *

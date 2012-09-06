@@ -69,6 +69,7 @@ struct _MMPluginPrivate {
     MMPortProbeAtCommand *custom_at_probe;
     MMAsyncMethod *custom_init;
     guint64 send_delay;
+    gboolean remove_echo;
 };
 
 enum {
@@ -93,6 +94,7 @@ enum {
     PROP_CUSTOM_AT_PROBE,
     PROP_CUSTOM_INIT,
     PROP_SEND_DELAY,
+    PROP_REMOVE_ECHO,
     LAST_PROP
 };
 
@@ -187,6 +189,10 @@ apply_pre_probing_filters (MMPlugin *self,
         subsys = g_udev_device_get_subsystem (port);
         for (i = 0; self->priv->subsystems[i]; i++) {
             if (g_str_equal (subsys, self->priv->subsystems[i]))
+                break;
+            /* New kernels may report as 'usbmisc' the subsystem */
+            else if (g_str_equal (self->priv->subsystems[i], "usb") &&
+                     g_str_equal (subsys, "usbmisc"))
                 break;
         }
 
@@ -471,8 +477,18 @@ port_probe_run_ready (MMPortProbe *probe,
             g_simple_async_result_set_op_res_gpointer (ctx->result,
                                                        GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED),
                                                        NULL);
-        } else {
-            /* For remaining errors, just propagate them */
+        }
+        /* Probing failed but the plugin tells us to retry; so we'll defer the
+         * probing a bit */
+        else if (g_error_matches (error,
+                                  MM_CORE_ERROR,
+                                  MM_CORE_ERROR_RETRY)) {
+            g_simple_async_result_set_op_res_gpointer (ctx->result,
+                                                       GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_DEFER),
+                                                       NULL);
+        }
+        /* For remaining errors, just propagate them */
+        else {
             g_simple_async_result_take_error (ctx->result, error);
         }
     } else {
@@ -589,8 +605,7 @@ mm_plugin_supports_port (MMPlugin *self,
             g_udev_device_get_subsystem (port),
             g_udev_device_get_name (port));
 
-    /* Before launching any probing, check if the port is a net device (which
-     * cannot be probed). */
+    /* Before launching any probing, check if the port is a net device. */
     if (g_str_equal (g_udev_device_get_subsystem (port), "net")) {
         g_simple_async_result_set_op_res_gpointer (
             async_result,
@@ -601,19 +616,25 @@ mm_plugin_supports_port (MMPlugin *self,
     }
 
     /* Build flags depending on what probing needed */
-    probe_run_flags = MM_PORT_PROBE_NONE;
-    if (self->priv->at)
-        probe_run_flags |= MM_PORT_PROBE_AT;
-    else if (self->priv->single_at)
-        probe_run_flags |= MM_PORT_PROBE_AT;
-    if (need_vendor_probing)
-        probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_VENDOR);
-    if (need_product_probing)
-        probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_PRODUCT);
-    if (self->priv->qcdm)
-        probe_run_flags |= MM_PORT_PROBE_QCDM;
-    if (self->priv->icera_probe || self->priv->allowed_icera || self->priv->forbidden_icera)
-        probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_ICERA);
+    if (!g_str_has_prefix (g_udev_device_get_name (port), "cdc-wdm")) {
+        /* Serial ports... */
+        probe_run_flags = MM_PORT_PROBE_NONE;
+        if (self->priv->at)
+            probe_run_flags |= MM_PORT_PROBE_AT;
+        else if (self->priv->single_at)
+            probe_run_flags |= MM_PORT_PROBE_AT;
+        if (need_vendor_probing)
+            probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_VENDOR);
+        if (need_product_probing)
+            probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_PRODUCT);
+        if (self->priv->qcdm)
+            probe_run_flags |= MM_PORT_PROBE_QCDM;
+        if (self->priv->icera_probe || self->priv->allowed_icera || self->priv->forbidden_icera)
+            probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_ICERA);
+    } else {
+        /* cdc-wdm ports... */
+        probe_run_flags = MM_PORT_PROBE_QMI;
+    }
 
     g_assert (probe_run_flags != MM_PORT_PROBE_NONE);
 
@@ -649,6 +670,7 @@ mm_plugin_supports_port (MMPlugin *self,
     mm_port_probe_run (probe,
                        ctx->flags,
                        self->priv->send_delay,
+                       self->priv->remove_echo,
                        self->priv->custom_at_probe,
                        self->priv->custom_init,
                        (GAsyncReadyCallback)port_probe_run_ready,
@@ -728,6 +750,7 @@ mm_plugin_init (MMPlugin *self)
 
     /* Defaults */
     self->priv->send_delay = 100000;
+    self->priv->remove_echo = TRUE;
 }
 
 static void
@@ -819,6 +842,10 @@ set_property (GObject *object,
         /* Construct only */
         self->priv->send_delay = (guint64)g_value_get_uint64 (value);
         break;
+    case PROP_REMOVE_ECHO:
+        /* Construct only */
+        self->priv->remove_echo = g_value_get_boolean (value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -893,6 +920,9 @@ get_property (GObject *object,
         break;
     case PROP_SEND_DELAY:
         g_value_set_uint64 (value, self->priv->send_delay);
+        break;
+    case PROP_REMOVE_ECHO:
+        g_value_set_boolean (value, self->priv->remove_echo);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1095,4 +1125,12 @@ mm_plugin_class_init (MMPluginClass *klass)
                               "in microseconds",
                               0, G_MAXUINT64, 100000,
                               G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+    g_object_class_install_property
+        (object_class, PROP_REMOVE_ECHO,
+         g_param_spec_boolean (MM_PLUGIN_REMOVE_ECHO,
+                               "Remove echo",
+                               "Remove echo out of the AT responses",
+                               TRUE,
+                               G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 }

@@ -32,6 +32,14 @@ libmodem_helpers_la_SOURCES = \
 	mm-sms-part.h \
 	mm-sms-part.c
 
+# Additional QMI support in libmodem-helpers
+if WITH_QMI
+libmodem_helpers_la_SOURCES += \
+	mm-modem-helpers-qmi.c \
+	mm-modem-helpers-qmi.h
+libmodem_helpers_la_CPPFLAGS += $(QMI_CFLAGS)
+endif
+
 # libserial specific enum types
 SERIAL_ENUMS = \
 	$(srcdir)/mm-port.h \
@@ -74,6 +82,14 @@ libserial_la_SOURCES = \
 	mm-gps-serial-port.c \
 	mm-gps-serial-port.h
 
+# Additional QMI support in libmodem-helpers
+if WITH_QMI
+libserial_la_SOURCES += \
+	mm-qmi-port.c \
+	mm-qmi-port.h
+libserial_la_CPPFLAGS += $(QMI_CFLAGS)
+endif
+
 # Daemon specific enum types
 DAEMON_ENUMS = \
 	$(srcdir)/mm-bearer.h \
@@ -113,20 +129,12 @@ ModemManager_CPPFLAGS = \
 	-I$(top_builddir)/libmm-common \
 	-DPLUGINDIR=\"$(pkglibdir)\"
 
-if WITH_POLKIT
-ModemManager_CPPFLAGS += $(POLKIT_CFLAGS)
-endif
-
 ModemManager_LDADD = \
 	$(MM_LIBS) \
 	$(GUDEV_LIBS) \
 	$(builddir)/libmodem-helpers.la \
 	$(builddir)/libserial.la \
 	$(top_builddir)/libqcdm/src/libqcdm.la
-
-if WITH_POLKIT
-ModemManager_LDADD += $(POLKIT_LIBS)
-endif
 
 nodist_ModemManager_SOURCES = \
 	mm-marshal.h \
@@ -202,11 +210,28 @@ mm-bearer.c: mm-daemon-enums-types.h
 mm-sms-list.c: mm-marshal.h
 mm-sim.c: mm-marshal.h
 
+# Additional Polkit support
 if WITH_POLKIT
 ModemManager_SOURCES += \
 	mm-auth-provider-polkit.c \
 	mm-auth-provider-polkit.h
+ModemManager_LDADD += $(POLKIT_LIBS)
+ModemManager_CPPFLAGS += $(POLKIT_CFLAGS)
 endif
+
+# Additional QMI support in ModemManager
+if WITH_QMI
+ModemManager_SOURCES += \
+	mm-sim-qmi.h \
+	mm-sim-qmi.c \
+	mm-bearer-qmi.h \
+	mm-bearer-qmi.c \
+	mm-broadband-modem-qmi.h \
+	mm-broadband-modem-qmi.c
+ModemManager_CPPFLAGS += $(QMI_CFLAGS)
+ModemManager_LDADD += $(QMI_LIBS)
+endif
+
 
 EXTRA_DIST = \
 	$(udevrules_DATA) \

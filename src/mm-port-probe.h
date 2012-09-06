@@ -16,6 +16,8 @@
 #ifndef MM_PORT_PROBE_H
 #define MM_PORT_PROBE_H
 
+#include "config.h"
+
 #include <glib.h>
 #include <glib-object.h>
 #include <gio/gio.h>
@@ -35,12 +37,13 @@
 
 /* Flags to request port probing */
 typedef enum { /*< underscore_name=mm_port_probe_flag >*/
-	MM_PORT_PROBE_NONE       = 0,
-	MM_PORT_PROBE_AT         = 1 << 0,
-	MM_PORT_PROBE_AT_VENDOR  = 1 << 1,
-	MM_PORT_PROBE_AT_PRODUCT = 1 << 2,
-	MM_PORT_PROBE_AT_ICERA   = 1 << 3,
-	MM_PORT_PROBE_QCDM       = 1 << 4,
+    MM_PORT_PROBE_NONE       = 0,
+    MM_PORT_PROBE_AT         = 1 << 0,
+    MM_PORT_PROBE_AT_VENDOR  = 1 << 1,
+    MM_PORT_PROBE_AT_PRODUCT = 1 << 2,
+    MM_PORT_PROBE_AT_ICERA   = 1 << 3,
+    MM_PORT_PROBE_QCDM       = 1 << 4,
+    MM_PORT_PROBE_QMI        = 1 << 5
 } MMPortProbeFlag;
 
 typedef struct _MMPortProbe MMPortProbe;
@@ -95,11 +98,14 @@ void mm_port_probe_set_result_at_icera   (MMPortProbe *self,
                                           gboolean is_icera);
 void mm_port_probe_set_result_qcdm       (MMPortProbe *self,
                                           gboolean qcdm);
+void mm_port_probe_set_result_qmi        (MMPortProbe *self,
+                                          gboolean qmi);
 
 /* Run probing */
 void     mm_port_probe_run        (MMPortProbe *self,
                                    MMPortProbeFlag flags,
                                    guint64 at_send_delay,
+                                   gboolean at_remove_echo,
                                    const MMPortProbeAtCommand *at_custom_probe,
                                    const MMAsyncMethod *at_custom_init,
                                    GAsyncReadyCallback callback,
@@ -115,11 +121,14 @@ gboolean mm_port_probe_run_cancel_at_probing (MMPortProbe *self);
 MMPortType    mm_port_probe_get_port_type    (MMPortProbe *self);
 gboolean      mm_port_probe_is_at            (MMPortProbe *self);
 gboolean      mm_port_probe_is_qcdm          (MMPortProbe *self);
+gboolean      mm_port_probe_is_qmi           (MMPortProbe *self);
 const gchar  *mm_port_probe_get_vendor       (MMPortProbe *self);
 const gchar  *mm_port_probe_get_product      (MMPortProbe *self);
 gboolean      mm_port_probe_is_icera         (MMPortProbe *self);
 
 /* Additional helpers */
-gboolean mm_port_probe_list_has_at_port (GList *list);
+gboolean mm_port_probe_list_has_at_port  (GList *list);
+gboolean mm_port_probe_list_has_qmi_port (GList *list);
+gboolean mm_port_probe_list_is_icera     (GList *list);
 
 #endif /* MM_PORT_PROBE_H */

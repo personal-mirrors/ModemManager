@@ -16,6 +16,7 @@
 #ifndef MM_PORT_H
 #define MM_PORT_H
 
+#include <config.h>
 #include <glib.h>
 #include <glib-object.h>
 
@@ -23,8 +24,9 @@ typedef enum { /*< underscore_name=mm_port_subsys >*/
     MM_PORT_SUBSYS_UNKNOWN = 0x0,
     MM_PORT_SUBSYS_TTY,
     MM_PORT_SUBSYS_NET,
+    MM_PORT_SUBSYS_USB,
 
-    MM_PORT_SUBSYS_LAST = MM_PORT_SUBSYS_NET /*< skip >*/
+    MM_PORT_SUBSYS_LAST = MM_PORT_SUBSYS_USB /*< skip >*/
 } MMPortSubsys;
 
 typedef enum { /*< underscore_name=mm_port_type >*/
@@ -34,8 +36,8 @@ typedef enum { /*< underscore_name=mm_port_type >*/
     MM_PORT_TYPE_AT,
     MM_PORT_TYPE_QCDM,
     MM_PORT_TYPE_GPS,
-
-    MM_PORT_TYPE_LAST = MM_PORT_TYPE_GPS /*< skip >*/
+    MM_PORT_TYPE_QMI,
+    MM_PORT_TYPE_LAST = MM_PORT_TYPE_QMI /*< skip >*/
 } MMPortType;
 
 #define MM_TYPE_PORT            (mm_port_get_type ())
