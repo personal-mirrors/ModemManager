@@ -248,12 +248,16 @@ sms_decode_text (const guint8 *text, int len, SmsEncoding encoding, int bit_offs
     guint32 unpacked_len;
 
     if (encoding == MM_SMS_ENCODING_GSM7) {
+        mm_dbg ("Converting SMS part text from GSM7 to UTF8...");
         unpacked = gsm_unpack ((const guint8 *) text, len, bit_offset, &unpacked_len);
         utf8 = (char *) mm_charset_gsm_unpacked_to_utf8 (unpacked, unpacked_len);
+        mm_dbg ("   Got UTF-8 text: '%s'", utf8);
         g_free (unpacked);
-    } else if (encoding == MM_SMS_ENCODING_UCS2)
+    } else if (encoding == MM_SMS_ENCODING_UCS2) {
+        mm_dbg ("Converting SMS part text from UCS-2BE to UTF8...");
         utf8 = g_convert ((char *) text, len, "UTF8", "UCS-2BE", NULL, NULL, NULL);
-    else {
+        mm_dbg ("   Got UTF-8 text: '%s'", utf8);
+    } else {
         g_warn_if_reached ();
         utf8 = g_strdup ("");
     }
@@ -361,7 +365,7 @@ mm_sms_part_set_data (MMSmsPart *self,
 {
     if (self->data)
         g_byte_array_unref (self->data);
-    self->data = g_byte_array_ref (value);
+    self->data = (value ? g_byte_array_ref (value) : NULL);
 }
 
 void
@@ -395,15 +399,9 @@ mm_sms_part_new_from_pdu (guint index,
                           const gchar *hexpdu,
                           GError **error)
 {
-    MMSmsPart *sms_part;
     gsize pdu_len;
     guint8 *pdu;
-    guint smsc_addr_num_octets, variable_length_items, msg_start_offset,
-            sender_addr_num_digits, sender_addr_num_octets,
-            tp_pid_offset, tp_dcs_offset, user_data_offset, user_data_len,
-            user_data_len_offset, bit_offset;
-    SmsEncoding user_data_encoding;
-    GByteArray *raw;
+    MMSmsPart *part;
 
     /* Convert PDU from hex to binary */
     pdu = (guint8 *) utils_hexstr2bin (hexpdu, &pdu_len);
@@ -415,6 +413,27 @@ mm_sms_part_new_from_pdu (guint index,
         return NULL;
     }
 
+    part = mm_sms_part_new_from_binary_pdu (index, pdu, pdu_len, error);
+    if (!part)
+        g_free (pdu);
+
+    return part;
+}
+
+MMSmsPart *
+mm_sms_part_new_from_binary_pdu (guint index,
+                                 const guint8 *pdu,
+                                 gsize pdu_len,
+                                 GError **error)
+{
+    MMSmsPart *sms_part;
+    guint smsc_addr_num_octets, variable_length_items, msg_start_offset,
+            sender_addr_num_digits, sender_addr_num_octets,
+            tp_pid_offset, tp_dcs_offset, user_data_offset, user_data_len,
+            user_data_len_offset, bit_offset;
+    SmsEncoding user_data_encoding;
+    GByteArray *raw;
+
     /* SMSC, in address format, precedes the TPDU */
     smsc_addr_num_octets = pdu[0];
     variable_length_items = smsc_addr_num_octets;
@@ -425,7 +444,6 @@ mm_sms_part_new_from_pdu (guint index,
                      "PDU too short (1): %zd < %d",
                      pdu_len,
                      variable_length_items + SMS_MIN_PDU_LEN);
-        g_free (pdu);
         return NULL;
     }
 
@@ -446,7 +464,6 @@ mm_sms_part_new_from_pdu (guint index,
                      "PDU too short (2): %zd < %d",
                      pdu_len,
                      variable_length_items + SMS_MIN_PDU_LEN);
-        g_free (pdu);
         return NULL;
     }
 
@@ -470,7 +487,6 @@ mm_sms_part_new_from_pdu (guint index,
                      "PDU too short (3): %zd < %d",
                      pdu_len,
                      variable_length_items + SMS_MIN_PDU_LEN);
-        g_free (pdu);
         return NULL;
     }
 
@@ -481,7 +497,6 @@ mm_sms_part_new_from_pdu (guint index,
                      MM_CORE_ERROR_FAILED,
                      "Unhandled message type: 0x%02x",
                      pdu[msg_start_offset]);
-        g_free (pdu);
         return NULL;
     }
 
@@ -564,6 +579,7 @@ mm_sms_part_new_from_pdu (guint index,
         /* 8-bit encoding is usually binary data, and we have no idea what
          * actual encoding the data is in so we can't convert it.
          */
+        mm_dbg ("Skipping SMS part text: 8-bit or Unknown encoding");
         mm_sms_part_set_text (sms_part, "");
     } else {
         /* Otherwise if it's 7-bit or UCS2 we can decode it */
@@ -582,8 +598,6 @@ mm_sms_part_new_from_pdu (guint index,
     if (pdu[tp_dcs_offset] & SMS_DCS_CLASS_VALID)
         mm_sms_part_set_class (sms_part,
                                pdu[tp_dcs_offset] & SMS_DCS_CLASS_MASK);
-
-    g_free (pdu);
 
     return sms_part;
 }

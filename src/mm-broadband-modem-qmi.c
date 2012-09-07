@@ -35,6 +35,7 @@
 #include "mm-iface-modem-messaging.h"
 #include "mm-sim-qmi.h"
 #include "mm-bearer-qmi.h"
+#include "mm-sms-qmi.h"
 
 static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
@@ -73,6 +74,11 @@ struct _MMBroadbandModemQmiPrivate {
 #if defined WITH_NEWEST_QMI_COMMANDS
     guint system_info_indication_id;
 #endif /* WITH_NEWEST_QMI_COMMANDS */
+
+    /* Messaging helpers */
+    gboolean messaging_unsolicited_events_enabled;
+    gboolean messaging_unsolicited_events_setup;
+    guint messaging_event_report_indication_id;
 };
 
 /*****************************************************************************/
@@ -4523,7 +4529,7 @@ common_enable_disable_unsolicited_events (MMBroadbandModemQmi *self,
     }
 #endif /* WITH_NEWEST_QMI_COMMANDS */
 
-common_enable_disable_unsolicited_events_signal_strength (ctx);
+    common_enable_disable_unsolicited_events_signal_strength (ctx);
 }
 
 /*****************************************************************************/
@@ -4818,6 +4824,746 @@ modem_cdma_setup_unsolicited_events (MMIfaceModemCdma *self,
 }
 
 /*****************************************************************************/
+/* Check support (Messaging interface) */
+
+static gboolean
+messaging_check_support_finish (MMIfaceModemMessaging *self,
+                                GAsyncResult *res,
+                                GError **error)
+{
+    /* no error expected here */
+    return g_simple_async_result_get_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res));
+}
+
+static void
+messaging_check_support (MMIfaceModemMessaging *self,
+                         GAsyncReadyCallback callback,
+                         gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+    gboolean supported;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        messaging_check_support);
+
+    /* If we have support for the WMS client, messaging is supported */
+    supported = !!mm_qmi_port_peek_client (mm_base_modem_peek_port_qmi (MM_BASE_MODEM (self)),
+                                           QMI_SERVICE_WMS,
+                                           MM_QMI_PORT_FLAG_DEFAULT);
+
+    mm_dbg ("Messaging capabilities %s by this modem",
+            supported ? "supported" : "not supported");
+
+    g_simple_async_result_set_op_res_gboolean (result, supported);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
+}
+
+/*****************************************************************************/
+/* Load supported storages (Messaging interface) */
+
+static gboolean
+messaging_load_supported_storages_finish (MMIfaceModemMessaging *self,
+                                          GAsyncResult *res,
+                                          GArray **mem1,
+                                          GArray **mem2,
+                                          GArray **mem3,
+                                          GError **error)
+{
+    MMSmsStorage supported [2] = { MM_SMS_STORAGE_SM, MM_SMS_STORAGE_ME };
+
+    *mem1 = g_array_append_vals (g_array_sized_new (FALSE, FALSE, sizeof (MMSmsStorage), 2),
+                                 supported, 2);
+    *mem2 = g_array_ref (*mem1);
+    *mem3 = g_array_ref (*mem1);
+
+    return TRUE;
+}
+
+static void
+messaging_load_supported_storages (MMIfaceModemMessaging *self,
+                                   GAsyncReadyCallback callback,
+                                   gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        messaging_load_supported_storages);
+    g_simple_async_result_set_op_res_gboolean (result, TRUE);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
+}
+
+/*****************************************************************************/
+/* Set preferred storages (Messaging interface) */
+
+static gboolean
+messaging_set_preferred_storages_finish (MMIfaceModemMessaging *self,
+                                         GAsyncResult *res,
+                                         GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+wms_set_routes_ready (QmiClientWms *client,
+                      GAsyncResult *res,
+                      GSimpleAsyncResult *simple)
+{
+    QmiMessageWmsSetRoutesOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_wms_set_routes_finish (client, res, &error);
+    if (!output) {
+        g_prefix_error (&error, "QMI operation failed: ");
+        g_simple_async_result_take_error (simple, error);
+    } else if (!qmi_message_wms_set_routes_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't set routes: ");
+        g_simple_async_result_take_error (simple, error);
+    } else {
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
+    }
+
+    if (output)
+        qmi_message_wms_set_routes_output_unref (output);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+messaging_set_preferred_storages (MMIfaceModemMessaging *self,
+                                  MMSmsStorage mem1,
+                                  MMSmsStorage mem2,
+                                  MMSmsStorage mem3,
+                                  GAsyncReadyCallback callback,
+                                  gpointer user_data)
+{
+    /* In QMI, we don't need to specify neither a default 'mem1' storage (the
+     * one used for listing, reading, deleting) nor a default 'mem2' storage
+     * (the one used for writing/sending), as the QMI operations allow to
+     * pass the specific storage directly in the command, as opposed to the
+     * AT-way which is specifying the storage first and then performing an
+     * operation on the default storage.
+     *
+     * Whenever a list/read/delete/write/send operation is received, we'll just
+     * read the corresponding property to know in which storage to perform the
+     * action.
+     *
+     * But for 'mem3', we do need to specify custom 'routes' to identify to
+     * which storage the incoming messages should be transferred, so we'll use
+     * that one.
+     */
+
+    GSimpleAsyncResult *result;
+    QmiClient *client = NULL;
+    QmiMessageWmsSetRoutesInput *input;
+    GArray *routes_array;
+    QmiMessageWmsSetRoutesInputRouteListElement route;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_WMS, &client,
+                            callback, user_data))
+        return;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        messaging_set_preferred_storages);
+
+    /* Build routes array and add it as input
+     * Just worry about Class 0 and Class 1 messages for now */
+    input = qmi_message_wms_set_routes_input_new ();
+    routes_array = g_array_sized_new (FALSE, FALSE, sizeof (route), 2);
+    route.message_type = QMI_WMS_MESSAGE_TYPE_POINT_TO_POINT;
+    route.message_class = QMI_WMS_MESSAGE_CLASS_0;
+    route.storage = mm_sms_storage_to_qmi_storage_type (mem3);
+    route.receipt_action = QMI_WMS_RECEIPT_ACTION_STORE_AND_NOTIFY;
+    g_array_append_val (routes_array, route);
+    route.message_class = QMI_WMS_MESSAGE_CLASS_1;
+    g_array_append_val (routes_array, route);
+    qmi_message_wms_set_routes_input_set_route_list (input, routes_array, NULL);
+
+    mm_dbg ("setting default messaging routes...");
+    qmi_client_wms_set_routes (QMI_CLIENT_WMS (client),
+                               input,
+                               5,
+                               NULL,
+                               (GAsyncReadyCallback)wms_set_routes_ready,
+                               result);
+
+    qmi_message_wms_set_routes_input_unref (input);
+    g_array_unref (routes_array);
+}
+
+/*****************************************************************************/
+/* Load initial SMS parts */
+
+typedef struct {
+    MMBroadbandModemQmi *self;
+    GSimpleAsyncResult *result;
+    QmiClientWms *client;
+    MMSmsStorage storage;
+    GArray *message_array;
+    guint i;
+} LoadInitialSmsPartsContext;
+
+static void
+load_initial_sms_parts_context_complete_and_free (LoadInitialSmsPartsContext *ctx)
+{
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
+
+    if (ctx->message_array)
+        g_array_unref (ctx->message_array);
+
+    g_object_unref (ctx->client);
+    g_object_unref (ctx->self);
+    g_slice_free (LoadInitialSmsPartsContext, ctx);
+}
+
+static gboolean
+load_initial_sms_parts_finish (MMIfaceModemMessaging *self,
+                               GAsyncResult *res,
+                               GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void read_next_sms_part (LoadInitialSmsPartsContext *ctx);
+
+static void
+add_new_read_sms_part (MMIfaceModemMessaging *self,
+                       QmiWmsStorageType storage,
+                       guint32 index,
+                       QmiWmsMessageTagType tag,
+                       QmiWmsMessageFormat format,
+                       GArray *data)
+{
+    switch (format) {
+    case QMI_WMS_MESSAGE_FORMAT_CDMA:
+        mm_dbg ("Skipping CDMA messages for now...");
+        break;
+    case QMI_WMS_MESSAGE_FORMAT_MWI:
+        mm_dbg ("Don't know how to process 'message waiting indicator' messages");
+        break;
+    case QMI_WMS_MESSAGE_FORMAT_GSM_WCDMA_POINT_TO_POINT:
+    case QMI_WMS_MESSAGE_FORMAT_GSM_WCDMA_BROADCAST: {
+        MMSmsPart *part;
+        GError *error = NULL;
+
+        part = mm_sms_part_new_from_binary_pdu (index,
+                                                (guint8 *)data->data,
+                                                data->len,
+                                                &error);
+        if (part) {
+            mm_dbg ("Correctly parsed PDU (%d)",
+                    index);
+            mm_iface_modem_messaging_take_part (self,
+                                                part,
+                                                mm_sms_state_from_qmi_message_tag (tag),
+                                                mm_sms_storage_from_qmi_storage_type (storage));
+        } else {
+            /* Don't treat the error as critical */
+            mm_dbg ("Error parsing PDU (%d): %s",
+                    index,
+                    error->message);
+            g_error_free (error);
+        }
+
+        break;
+    }
+    default:
+        mm_dbg ("Unhandled message format '%u'", format);
+        break;
+    }
+}
+
+static void
+wms_raw_read_ready (QmiClientWms *client,
+                    GAsyncResult *res,
+                    LoadInitialSmsPartsContext *ctx)
+{
+    QmiMessageWmsRawReadOutput *output = NULL;
+    GError *error = NULL;
+
+    /* Ignore errors, just keep on with the next messages */
+
+    output = qmi_client_wms_raw_read_finish (client, res, &error);
+    if (!output) {
+        mm_dbg ("QMI operation failed: %s", error->message);
+        g_error_free (error);
+    } else if (!qmi_message_wms_raw_read_output_get_result (output, &error)) {
+        mm_dbg ("Couldn't read raw message: %s", error->message);
+        g_error_free (error);
+    } else {
+        QmiWmsMessageTagType tag;
+        QmiWmsMessageFormat format;
+        GArray *data;
+        QmiMessageWmsListMessagesOutputMessageListElement *message;
+
+        message = &g_array_index (ctx->message_array,
+                                  QmiMessageWmsListMessagesOutputMessageListElement,
+                                  ctx->i);
+
+        qmi_message_wms_raw_read_output_get_raw_message_data (
+            output,
+            &tag,
+            &format,
+            &data,
+            NULL);
+        add_new_read_sms_part (MM_IFACE_MODEM_MESSAGING (ctx->self),
+                               mm_sms_storage_to_qmi_storage_type (ctx->storage),
+                               message->memory_index,
+                               tag,
+                               format,
+                               data);
+    }
+
+    if (output)
+        qmi_message_wms_raw_read_output_unref (output);
+
+    /* Keep on reading parts */
+    ctx->i++;
+    read_next_sms_part (ctx);
+}
+
+static void
+read_next_sms_part (LoadInitialSmsPartsContext *ctx)
+{
+    QmiMessageWmsListMessagesOutputMessageListElement *message;
+    QmiMessageWmsRawReadInput *input;
+
+    if (ctx->i >= ctx->message_array->len ||
+        !ctx->message_array) {
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+        load_initial_sms_parts_context_complete_and_free (ctx);
+        return;
+    }
+
+    message = &g_array_index (ctx->message_array,
+                              QmiMessageWmsListMessagesOutputMessageListElement,
+                              ctx->i);
+
+    input = qmi_message_wms_raw_read_input_new ();
+    qmi_message_wms_raw_read_input_set_message_memory_storage_id (
+        input,
+        mm_sms_storage_to_qmi_storage_type (ctx->storage),
+        message->memory_index,
+        NULL);
+    qmi_client_wms_raw_read (QMI_CLIENT_WMS (ctx->client),
+                             input,
+                             3,
+                             NULL,
+                             (GAsyncReadyCallback)wms_raw_read_ready,
+                             ctx);
+    qmi_message_wms_raw_read_input_unref (input);
+}
+
+static void
+wms_list_messages_ready (QmiClientWms *client,
+                         GAsyncResult *res,
+                         LoadInitialSmsPartsContext *ctx)
+{
+    QmiMessageWmsListMessagesOutput *output = NULL;
+    GError *error = NULL;
+    GArray *message_array;
+
+    output = qmi_client_wms_list_messages_finish (client, res, &error);
+    if (!output) {
+        g_prefix_error (&error, "QMI operation failed: ");
+        g_simple_async_result_take_error (ctx->result, error);
+        load_initial_sms_parts_context_complete_and_free (ctx);
+        return;
+    }
+
+    if (!qmi_message_wms_list_messages_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't list messages: ");
+        g_simple_async_result_take_error (ctx->result, error);
+        load_initial_sms_parts_context_complete_and_free (ctx);
+        qmi_message_wms_list_messages_output_unref (output);
+        return;
+    }
+
+    qmi_message_wms_list_messages_output_get_message_list (
+        output,
+        &message_array,
+        NULL);
+
+    /* Keep a reference to the array ourselves */
+    ctx->message_array = g_array_ref (message_array);
+
+    qmi_message_wms_list_messages_output_unref (output);
+
+    /* Start reading parts */
+    ctx->i = 0;
+    read_next_sms_part (ctx);
+}
+
+static void
+load_initial_sms_parts (MMIfaceModemMessaging *self,
+                        MMSmsStorage storage,
+                        GAsyncReadyCallback callback,
+                        gpointer user_data)
+{
+    LoadInitialSmsPartsContext *ctx;
+    QmiClient *client = NULL;
+    QmiMessageWmsListMessagesInput *input;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_WMS, &client,
+                            callback, user_data))
+        return;
+
+    ctx = g_slice_new0 (LoadInitialSmsPartsContext);
+    ctx->self = g_object_ref (self);
+    ctx->client = g_object_ref (client);
+    ctx->storage = storage;
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             load_initial_sms_parts);
+
+    mm_dbg ("loading messages from storage '%s'...",
+            mm_sms_storage_get_string (storage));
+
+    /* Request to list messages in a given storage */
+    input = qmi_message_wms_list_messages_input_new ();
+    qmi_message_wms_list_messages_input_set_storage_type (
+        input,
+        mm_sms_storage_to_qmi_storage_type (storage),
+        NULL);
+    qmi_client_wms_list_messages (QMI_CLIENT_WMS (ctx->client),
+                                  input,
+                                  5,
+                                  NULL,
+                                  (GAsyncReadyCallback)wms_list_messages_ready,
+                                  ctx);
+    qmi_message_wms_list_messages_input_unref (input);
+}
+
+/*****************************************************************************/
+/* Setup/Cleanup unsolicited event handlers (Messaging interface) */
+
+typedef struct {
+    MMIfaceModemMessaging *self;
+    QmiClientWms *client;
+    QmiWmsStorageType storage;
+    guint32 memory_index;
+} IndicationRawReadContext;
+
+static void
+indication_raw_read_context_free (IndicationRawReadContext *ctx)
+{
+    g_object_unref (ctx->client);
+    g_object_unref (ctx->self);
+    g_slice_free (IndicationRawReadContext, ctx);
+}
+
+static void
+wms_indication_raw_read_ready (QmiClientWms *client,
+                               GAsyncResult *res,
+                               IndicationRawReadContext *ctx)
+{
+    QmiMessageWmsRawReadOutput *output = NULL;
+    GError *error = NULL;
+
+    /* Ignore errors */
+
+    output = qmi_client_wms_raw_read_finish (client, res, &error);
+    if (!output) {
+        mm_dbg ("QMI operation failed: %s", error->message);
+        g_error_free (error);
+    } else if (!qmi_message_wms_raw_read_output_get_result (output, &error)) {
+        mm_dbg ("Couldn't read raw message: %s", error->message);
+        g_error_free (error);
+    } else {
+        QmiWmsMessageTagType tag;
+        QmiWmsMessageFormat format;
+        GArray *data;
+
+        qmi_message_wms_raw_read_output_get_raw_message_data (
+            output,
+            &tag,
+            &format,
+            &data,
+            NULL);
+        add_new_read_sms_part (MM_IFACE_MODEM_MESSAGING (ctx->self),
+                               ctx->storage,
+                               ctx->memory_index,
+                               tag,
+                               format,
+                               data);
+    }
+
+    if (output)
+        qmi_message_wms_raw_read_output_unref (output);
+
+    indication_raw_read_context_free (ctx);
+}
+
+static void
+messaging_event_report_indication_cb (QmiClientNas *client,
+                                      QmiIndicationWmsEventReportOutput *output,
+                                      MMBroadbandModemQmi *self)
+{
+    QmiWmsStorageType storage;
+    guint32 memory_index;
+
+    /* Currently ignoring transfer-route MT messages */
+
+    if (qmi_indication_wms_event_report_output_get_mt_message (
+            output,
+            &storage,
+            &memory_index,
+            NULL)) {
+        IndicationRawReadContext *ctx;
+        QmiMessageWmsRawReadInput *input;
+
+        ctx = g_slice_new (IndicationRawReadContext);
+        ctx->self = g_object_ref (self);
+        ctx->client = g_object_ref (client);
+        ctx->storage = storage;
+        ctx->memory_index = memory_index;
+
+        input = qmi_message_wms_raw_read_input_new ();
+        qmi_message_wms_raw_read_input_set_message_memory_storage_id (
+            input,
+            storage,
+            memory_index,
+            NULL);
+        qmi_client_wms_raw_read (QMI_CLIENT_WMS (client),
+                                 input,
+                                 3,
+                                 NULL,
+                                 (GAsyncReadyCallback)wms_indication_raw_read_ready,
+                                 ctx);
+        qmi_message_wms_raw_read_input_unref (input);
+    }
+}
+
+static gboolean
+messaging_setup_cleanup_unsolicited_events_finish (MMIfaceModemMessaging *self,
+                                                   GAsyncResult *res,
+                                                   GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+common_setup_cleanup_messaging_unsolicited_events (MMBroadbandModemQmi *self,
+                                                   gboolean enable,
+                                                   GAsyncReadyCallback callback,
+                                                   gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+    QmiClient *client = NULL;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_WMS, &client,
+                            callback, user_data))
+        return;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        common_setup_cleanup_messaging_unsolicited_events);
+
+    if (enable == self->priv->messaging_unsolicited_events_setup) {
+        mm_dbg ("Messaging unsolicited events already %s; skipping",
+                enable ? "setup" : "cleanup");
+        g_simple_async_result_set_op_res_gboolean (result, TRUE);
+        g_simple_async_result_complete_in_idle (result);
+        g_object_unref (result);
+        return;
+    }
+
+    /* Store new state */
+    self->priv->messaging_unsolicited_events_setup = enable;
+
+    /* Connect/Disconnect "Event Report" indications */
+    if (enable) {
+        g_assert (self->priv->messaging_event_report_indication_id == 0);
+        self->priv->messaging_event_report_indication_id =
+            g_signal_connect (client,
+                              "event-report",
+                              G_CALLBACK (messaging_event_report_indication_cb),
+                              self);
+    } else {
+        g_assert (self->priv->messaging_event_report_indication_id != 0);
+        g_signal_handler_disconnect (client, self->priv->messaging_event_report_indication_id);
+        self->priv->messaging_event_report_indication_id = 0;
+    }
+
+    g_simple_async_result_set_op_res_gboolean (result, TRUE);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
+}
+
+static void
+messaging_cleanup_unsolicited_events (MMIfaceModemMessaging *self,
+                                      GAsyncReadyCallback callback,
+                                      gpointer user_data)
+{
+    common_setup_cleanup_messaging_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
+                                                       FALSE,
+                                                       callback,
+                                                       user_data);
+}
+
+static void
+messaging_setup_unsolicited_events (MMIfaceModemMessaging *self,
+                                    GAsyncReadyCallback callback,
+                                    gpointer user_data)
+{
+    common_setup_cleanup_messaging_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
+                                                       TRUE,
+                                                       callback,
+                                                       user_data);
+}
+
+/*****************************************************************************/
+/* Enable/Disable unsolicited events (Messaging interface) */
+
+typedef struct {
+    MMBroadbandModemQmi *self;
+    GSimpleAsyncResult *result;
+    QmiClientWms *client;
+    gboolean enable;
+} EnableMessagingUnsolicitedEventsContext;
+
+static void
+enable_messaging_unsolicited_events_context_complete_and_free (EnableMessagingUnsolicitedEventsContext *ctx)
+{
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
+    g_object_unref (ctx->client);
+    g_object_unref (ctx->self);
+    g_free (ctx);
+}
+
+static gboolean
+messaging_enable_disable_unsolicited_events_finish (MMIfaceModemMessaging *self,
+                                                    GAsyncResult *res,
+                                                    GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+ser_messaging_indicator_ready (QmiClientWms *client,
+                               GAsyncResult *res,
+                               EnableMessagingUnsolicitedEventsContext *ctx)
+{
+    QmiMessageWmsSetEventReportOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_wms_set_event_report_finish (client, res, &error);
+    if (!output) {
+        mm_dbg ("QMI operation failed: '%s'", error->message);
+        g_error_free (error);
+    } else if (!qmi_message_wms_set_event_report_output_get_result (output, &error)) {
+        mm_dbg ("Couldn't set event report: '%s'", error->message);
+        g_error_free (error);
+    }
+
+    if (output)
+        qmi_message_wms_set_event_report_output_unref (output);
+
+    /* Just ignore errors for now */
+    ctx->self->priv->messaging_unsolicited_events_enabled = ctx->enable;
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    enable_messaging_unsolicited_events_context_complete_and_free (ctx);
+}
+
+static void
+common_enable_disable_messaging_unsolicited_events (MMBroadbandModemQmi *self,
+                                                    gboolean enable,
+                                                    GAsyncReadyCallback callback,
+                                                    gpointer user_data)
+{
+    EnableMessagingUnsolicitedEventsContext *ctx;
+    GSimpleAsyncResult *result;
+    QmiClient *client = NULL;
+    QmiMessageWmsSetEventReportInput *input;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_WMS, &client,
+                            callback, user_data))
+        return;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        common_enable_disable_messaging_unsolicited_events);
+
+    if (enable == self->priv->messaging_unsolicited_events_enabled) {
+        mm_dbg ("Messaging unsolicited events already %s; skipping",
+                enable ? "enabled" : "disabled");
+        g_simple_async_result_set_op_res_gboolean (result, TRUE);
+        g_simple_async_result_complete_in_idle (result);
+        g_object_unref (result);
+        return;
+    }
+
+    ctx = g_new0 (EnableMessagingUnsolicitedEventsContext, 1);
+    ctx->self = g_object_ref (self);
+    ctx->client = g_object_ref (client);
+    ctx->enable = enable;
+    ctx->result = result;
+
+    input = qmi_message_wms_set_event_report_input_new ();
+
+    qmi_message_wms_set_event_report_input_set_new_mt_message_indicator (
+        input,
+        ctx->enable,
+        NULL);
+    qmi_client_wms_set_event_report (
+        ctx->client,
+        input,
+        5,
+        NULL,
+        (GAsyncReadyCallback)ser_messaging_indicator_ready,
+        ctx);
+    qmi_message_wms_set_event_report_input_unref (input);
+}
+
+static void
+messaging_disable_unsolicited_events (MMIfaceModemMessaging *self,
+                                      GAsyncReadyCallback callback,
+                                      gpointer user_data)
+{
+    common_enable_disable_messaging_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
+                                                        FALSE,
+                                                        callback,
+                                                        user_data);
+}
+
+static void
+messaging_enable_unsolicited_events (MMIfaceModemMessaging *self,
+                                     GAsyncReadyCallback callback,
+                                     gpointer user_data)
+{
+    common_enable_disable_messaging_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
+                                                        TRUE,
+                                                        callback,
+                                                        user_data);
+}
+
+/*****************************************************************************/
+/* Create SMS (Messaging interface) */
+
+static MMSms *
+messaging_create_sms (MMIfaceModemMessaging *self)
+{
+    return mm_sms_qmi_new (MM_BASE_MODEM (self));
+}
+
+/*****************************************************************************/
 /* First initialization step */
 
 typedef struct {
@@ -4960,7 +5706,8 @@ initialization_started (MMBroadbandModem *self,
     /* Setup services to open */
     ctx->services[0] = QMI_SERVICE_DMS;
     ctx->services[1] = QMI_SERVICE_NAS;
-    ctx->services[2] = QMI_SERVICE_UNKNOWN;
+    ctx->services[2] = QMI_SERVICE_WMS;
+    ctx->services[3] = QMI_SERVICE_UNKNOWN;
 
     /* Now open our QMI port */
     mm_qmi_port_open (ctx->qmi,
@@ -5158,9 +5905,25 @@ iface_modem_cdma_init (MMIfaceModemCdma *iface)
 static void
 iface_modem_messaging_init (MMIfaceModemMessaging *iface)
 {
-    /* Assume we don't have messaging support */
-    iface->check_support = NULL;
-    iface->check_support_finish = NULL;
+    iface->check_support = messaging_check_support;
+    iface->check_support_finish = messaging_check_support_finish;
+    iface->load_supported_storages = messaging_load_supported_storages;
+    iface->load_supported_storages_finish = messaging_load_supported_storages_finish;
+    iface->setup_sms_format = NULL;
+    iface->setup_sms_format_finish = NULL;
+    iface->set_preferred_storages = messaging_set_preferred_storages;
+    iface->set_preferred_storages_finish = messaging_set_preferred_storages_finish;
+    iface->load_initial_sms_parts = load_initial_sms_parts;
+    iface->load_initial_sms_parts_finish = load_initial_sms_parts_finish;
+    iface->setup_unsolicited_events = messaging_setup_unsolicited_events;
+    iface->setup_unsolicited_events_finish = messaging_setup_cleanup_unsolicited_events_finish;
+    iface->cleanup_unsolicited_events = messaging_cleanup_unsolicited_events;
+    iface->cleanup_unsolicited_events_finish = messaging_setup_cleanup_unsolicited_events_finish;
+    iface->enable_unsolicited_events = messaging_enable_unsolicited_events;
+    iface->enable_unsolicited_events_finish = messaging_enable_disable_unsolicited_events_finish;
+    iface->disable_unsolicited_events = messaging_disable_unsolicited_events;
+    iface->disable_unsolicited_events_finish = messaging_enable_disable_unsolicited_events_finish;
+    iface->create_sms = messaging_create_sms;
 }
 
 static void

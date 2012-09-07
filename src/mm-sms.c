@@ -104,9 +104,11 @@ handle_store_ready (MMSms *self,
         g_object_get (self->priv->modem,
                       MM_IFACE_MODEM_MESSAGING_SMS_MEM2_STORAGE, &storage,
                       NULL);
-        g_object_set (self,
-                      "storage", storage,
-                      NULL);
+        mm_gdbus_sms_set_storage (MM_GDBUS_SMS (ctx->self), storage);
+
+        /* Transition from Unknown->Stored for SMS which were created by the user */
+        if (mm_gdbus_sms_get_state (MM_GDBUS_SMS (ctx->self)) == MM_SMS_STATE_UNKNOWN)
+            mm_gdbus_sms_set_state (MM_GDBUS_SMS (ctx->self), MM_SMS_STATE_STORED);
 
         mm_gdbus_sms_complete_store (MM_GDBUS_SMS (ctx->self), ctx->invocation);
     }
@@ -211,8 +213,14 @@ handle_send_ready (MMSms *self,
 
     if (!MM_SMS_GET_CLASS (self)->send_finish (self, res, &error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-    else
+    else {
+        /* Transition from Unknown->Sent or Stored->Sent */
+        if (mm_gdbus_sms_get_state (MM_GDBUS_SMS (ctx->self)) == MM_SMS_STATE_UNKNOWN ||
+            mm_gdbus_sms_get_state (MM_GDBUS_SMS (ctx->self)) == MM_SMS_STATE_STORED)
+            mm_gdbus_sms_set_state (MM_GDBUS_SMS (ctx->self), MM_SMS_STATE_SENT);
+
         mm_gdbus_sms_complete_send (MM_GDBUS_SMS (ctx->self), ctx->invocation);
+    }
 
     handle_send_context_free (ctx);
 }
@@ -350,12 +358,7 @@ mm_sms_get_path (MMSms *self)
 MMSmsStorage
 mm_sms_get_storage (MMSms *self)
 {
-    MMSmsStorage storage = MM_SMS_STORAGE_UNKNOWN;
-
-    g_object_get (self,
-                  "storage", &storage,
-                  NULL);
-    return storage;
+    return mm_gdbus_sms_get_storage (MM_GDBUS_SMS (self));
 }
 
 gboolean
@@ -400,6 +403,12 @@ mm_sms_has_part_index (MMSms *self,
     return !!g_list_find_custom (self->priv->parts,
                                  GUINT_TO_POINTER (index),
                                  (GCompareFunc)cmp_sms_part_index);
+}
+
+GList *
+mm_sms_get_parts (MMSms *self)
+{
+    return self->priv->parts;
 }
 
 /*****************************************************************************/
@@ -854,15 +863,9 @@ delete_next_part (SmsDeletePartsContext *ctx)
                                              MM_CORE_ERROR_FAILED,
                                              "Couldn't delete %u parts from this SMS",
                                              ctx->n_failed);
-        else {
-            /* We do change the state of this SMS back to UNKNOWN, as it is no
-             * longer stored in the device */
-            g_object_set (ctx->self,
-                          "state", MM_SMS_STATE_UNKNOWN,
-                          NULL);
-
+        else
             g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        }
+
         sms_delete_parts_context_complete_and_free (ctx);
         return;
     }
@@ -905,8 +908,17 @@ mm_sms_delete_finish (MMSms *self,
                       GAsyncResult *res,
                       GError **error)
 {
-    if (MM_SMS_GET_CLASS (self)->delete_finish)
-        return MM_SMS_GET_CLASS (self)->delete_finish (self, res, error);
+    if (MM_SMS_GET_CLASS (self)->delete_finish) {
+        gboolean deleted;
+
+        deleted = MM_SMS_GET_CLASS (self)->delete_finish (self, res, error);
+        if (deleted)
+            /* We do change the state of this SMS back to UNKNOWN, as it is no
+             * longer stored in the device */
+            mm_gdbus_sms_set_state (MM_GDBUS_SMS (self), MM_SMS_STATE_UNKNOWN);
+
+        return deleted;
+    }
 
     return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
@@ -976,14 +988,17 @@ assemble_sms (MMSms *self,
             return FALSE;
         }
 
+        /* When the user creates the SMS, it will have either 'text' or 'data',
+         * not both */
+
         parttext = mm_sms_part_get_text (sorted_parts[idx]);
         partdata = mm_sms_part_get_data (sorted_parts[idx]);
 
-        if (!parttext || !partdata) {
+        if (!parttext && !partdata) {
             g_set_error (error,
                          MM_CORE_ERROR,
                          MM_CORE_ERROR_FAILED,
-                         "Cannot assemble SMS, part at index (%u) has no text or data",
+                         "Cannot assemble SMS, part at index (%u) has neither text nor data",
                          idx);
             g_string_free (fulltext, TRUE);
             g_byte_array_free (fulldata, TRUE);
@@ -991,8 +1006,10 @@ assemble_sms (MMSms *self,
             return FALSE;
         }
 
-        g_string_append (fulltext, parttext);
-        g_byte_array_append (fulldata, partdata->data, partdata->len);
+        if (parttext)
+            g_string_append (fulltext, parttext);
+        if (partdata)
+            g_byte_array_append (fulldata, partdata->data, partdata->len);
     }
 
     /* If we got all parts, we also have the first one always */
@@ -1000,7 +1017,7 @@ assemble_sms (MMSms *self,
 
     /* If we got everything, assemble the text! */
     g_object_set (self,
-                  "text",      fulltext,
+                  "text",      fulltext->str,
                   "data",      g_variant_new_from_data (G_VARIANT_TYPE ("ay"),
                                                         fulldata->data,
                                                         fulldata->len * sizeof (guint8),
@@ -1091,18 +1108,10 @@ mm_sms_multipart_take_part (MMSms *self,
                      inner_error->message);
             g_error_free (inner_error);
         } else {
-            /* Completed AND assembled */
-            MMSmsState state = MM_SMS_STATE_UNKNOWN;
-
-            /* Change state RECEIVING->RECEIVED, and signal completeness */
-            g_object_get (self,
-                          "state", &state,
-                          NULL);
-            if (state == MM_SMS_STATE_RECEIVING) {
-                g_object_set (self,
-                              "state", MM_SMS_STATE_RECEIVED,
-                              NULL);
-            }
+            /* Completed AND assembled
+             * Change state RECEIVING->RECEIVED, and signal completeness */
+            if (mm_gdbus_sms_get_state (MM_GDBUS_SMS (self)) == MM_SMS_STATE_RECEIVING)
+                mm_gdbus_sms_set_state (MM_GDBUS_SMS (self), MM_SMS_STATE_RECEIVED);
         }
     }
 
@@ -1126,9 +1135,12 @@ mm_sms_singlepart_new (MMBaseModem *modem,
 {
     MMSms *self;
 
-    self = mm_sms_new (modem);
+    g_assert (MM_IS_IFACE_MODEM_MESSAGING (modem));
+
+    /* Create an SMS object as defined by the interface */
+    self = mm_iface_modem_messaging_create_sms (MM_IFACE_MODEM_MESSAGING (modem));
     g_object_set (self,
-                  "state", state,
+                  "state",   state,
                   "storage", storage,
                   NULL);
 
@@ -1155,18 +1167,21 @@ mm_sms_multipart_new (MMBaseModem *modem,
 {
     MMSms *self;
 
+    g_assert (MM_IS_IFACE_MODEM_MESSAGING (modem));
+
     /* If this is the first part of a RECEIVED SMS, we overwrite the state
      * as RECEIVING, to indicate that it is not completed yet. */
     if (state == MM_SMS_STATE_RECEIVED)
         state = MM_SMS_STATE_RECEIVING;
 
-    self = mm_sms_new (modem);
+    /* Create an SMS object as defined by the interface */
+    self = mm_iface_modem_messaging_create_sms (MM_IFACE_MODEM_MESSAGING (modem));
     g_object_set (self,
                   MM_SMS_IS_MULTIPART,        TRUE,
                   MM_SMS_MAX_PARTS,           max_parts,
                   MM_SMS_MULTIPART_REFERENCE, reference,
-                  "state", state,
-                  "storage", storage,
+                  "state",                    state,
+                  "storage",                  storage,
                   NULL);
 
     if (!mm_sms_multipart_take_part (self, first_part, error))
@@ -1195,6 +1210,7 @@ mm_sms_new_from_properties (MMBaseModem *modem,
 
     part = mm_sms_part_new (SMS_PART_INVALID_INDEX);
     mm_sms_part_set_text (part, mm_sms_properties_get_text (properties));
+    mm_sms_part_take_data (part, mm_sms_properties_get_data_bytearray (properties));
     mm_sms_part_set_number (part, mm_sms_properties_get_number (properties));
     mm_sms_part_set_smsc (part, mm_sms_properties_get_smsc (properties));
     mm_sms_part_set_validity (part, mm_sms_properties_get_validity (properties));

@@ -775,3 +775,49 @@ mm_modem_cdma_registration_state_from_qmi_registration_state (QmiNasRegistration
         return MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
     }
 }
+
+/*****************************************************************************/
+
+QmiWmsStorageType
+mm_sms_storage_to_qmi_storage_type (MMSmsStorage storage)
+{
+    switch (storage) {
+    case MM_SMS_STORAGE_SM:
+        return QMI_WMS_STORAGE_TYPE_UIM;
+    case MM_SMS_STORAGE_ME:
+        return QMI_WMS_STORAGE_TYPE_NV;
+    default:
+        return QMI_WMS_STORAGE_TYPE_NONE;
+    }
+}
+
+MMSmsStorage
+mm_sms_storage_from_qmi_storage_type (QmiWmsStorageType qmi_storage)
+{
+    switch (qmi_storage) {
+    case QMI_WMS_STORAGE_TYPE_UIM:
+        return MM_SMS_STORAGE_SM;
+    case QMI_WMS_STORAGE_TYPE_NV:
+        return MM_SMS_STORAGE_ME;
+    default:
+        return MM_SMS_STORAGE_UNKNOWN;
+    }
+}
+
+/*****************************************************************************/
+
+MMSmsState
+mm_sms_state_from_qmi_message_tag (QmiWmsMessageTagType tag)
+{
+    switch (tag) {
+    case QMI_WMS_MESSAGE_TAG_TYPE_MT_READ:
+    case QMI_WMS_MESSAGE_TAG_TYPE_MT_NOT_READ:
+        return MM_SMS_STATE_RECEIVED;
+    case QMI_WMS_MESSAGE_TAG_TYPE_MO_SENT:
+        return MM_SMS_STATE_SENT;
+    case QMI_WMS_MESSAGE_TAG_TYPE_MO_NOT_SENT:
+        return MM_SMS_STATE_STORED;
+    default:
+        return MM_SMS_STATE_UNKNOWN;
+    }
+}
