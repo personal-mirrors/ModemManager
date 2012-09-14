@@ -39,6 +39,11 @@ typedef MmGdbusModemMessaging      MMModemMessaging;
 const gchar *mm_modem_messaging_get_path (MMModemMessaging *self);
 gchar       *mm_modem_messaging_dup_path (MMModemMessaging *self);
 
+void         mm_modem_messaging_get_supported_storages (MMModemMessaging *self,
+                                                        MMSmsStorage **storages,
+                                                        guint *n_storages);
+MMSmsStorage mm_modem_messaging_get_default_storage    (MMModemMessaging *self);
+
 void   mm_modem_messaging_create        (MMModemMessaging *self,
                                          MMSmsProperties *properties,
                                          GCancellable *cancellable,

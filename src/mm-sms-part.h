@@ -18,13 +18,22 @@
 #define MM_SMS_PART_H
 
 #include <glib.h>
+#include <ModemManager-enums.h>
+
+typedef enum {
+    MM_SMS_ENCODING_UNKNOWN = 0x0,
+    MM_SMS_ENCODING_GSM7,
+    MM_SMS_ENCODING_8BIT,
+    MM_SMS_ENCODING_UCS2
+} MMSmsEncoding;
 
 typedef struct _MMSmsPart MMSmsPart;
 
 #define SMS_MAX_PDU_LEN 344
 #define SMS_PART_INVALID_INDEX G_MAXUINT
 
-MMSmsPart *mm_sms_part_new  (guint index);
+MMSmsPart *mm_sms_part_new  (guint index,
+                             MMSmsPduType type);
 MMSmsPart *mm_sms_part_new_from_pdu  (guint index,
                                       const gchar *hexpdu,
                                       GError **error);
@@ -42,6 +51,10 @@ guint8    *mm_sms_part_get_submit_pdu (MMSmsPart *part,
 guint             mm_sms_part_get_index              (MMSmsPart *part);
 void              mm_sms_part_set_index              (MMSmsPart *part,
                                                       guint index);
+
+MMSmsPduType      mm_sms_part_get_pdu_type           (MMSmsPart *part);
+void              mm_sms_part_set_pdu_type           (MMSmsPart *part,
+                                                      MMSmsPduType type);
 
 const gchar      *mm_sms_part_get_smsc               (MMSmsPart *part);
 void              mm_sms_part_set_smsc               (MMSmsPart *part,
@@ -61,6 +74,12 @@ void              mm_sms_part_set_timestamp          (MMSmsPart *part,
 void              mm_sms_part_take_timestamp         (MMSmsPart *part,
                                                       gchar *timestamp);
 
+const gchar      *mm_sms_part_get_discharge_timestamp  (MMSmsPart *part);
+void              mm_sms_part_set_discharge_timestamp  (MMSmsPart *part,
+                                                        const gchar *timestamp);
+void              mm_sms_part_take_discharge_timestamp (MMSmsPart *part,
+                                                        gchar *timestamp);
+
 const gchar      *mm_sms_part_get_text               (MMSmsPart *part);
 void              mm_sms_part_set_text               (MMSmsPart *part,
                                                       const gchar *text);
@@ -73,9 +92,9 @@ void              mm_sms_part_set_data               (MMSmsPart *part,
 void              mm_sms_part_take_data              (MMSmsPart *part,
                                                       GByteArray *data);
 
-guint             mm_sms_part_get_data_coding_scheme (MMSmsPart *part);
-void              mm_sms_part_set_data_coding_scheme (MMSmsPart *part,
-                                                      guint data_coding_scheme);
+MMSmsEncoding     mm_sms_part_get_encoding           (MMSmsPart *part);
+void              mm_sms_part_set_encoding           (MMSmsPart *part,
+                                                      MMSmsEncoding encoding);
 
 guint             mm_sms_part_get_class              (MMSmsPart *part);
 void              mm_sms_part_set_class              (MMSmsPart *part,
@@ -84,6 +103,18 @@ void              mm_sms_part_set_class              (MMSmsPart *part,
 guint             mm_sms_part_get_validity           (MMSmsPart *part);
 void              mm_sms_part_set_validity           (MMSmsPart *part,
                                                       guint validity);
+
+guint             mm_sms_part_get_delivery_state (MMSmsPart *part);
+void              mm_sms_part_set_delivery_state (MMSmsPart *part,
+                                                  guint delivery_state);
+
+guint             mm_sms_part_get_message_reference  (MMSmsPart *part);
+void              mm_sms_part_set_message_reference  (MMSmsPart *part,
+                                                      guint message_reference);
+
+gboolean          mm_sms_part_get_delivery_report_request (MMSmsPart *part);
+void              mm_sms_part_set_delivery_report_request (MMSmsPart *part,
+                                                           gboolean delivery_report_request);
 
 guint             mm_sms_part_get_concat_reference   (MMSmsPart *part);
 void              mm_sms_part_set_concat_reference   (MMSmsPart *part,
@@ -103,5 +134,11 @@ guint mm_sms_part_encode_address (const gchar *address,
                                   guint8 *buf,
                                   gsize buflen,
                                   gboolean is_smsc);
+
+gchar **mm_sms_part_util_split_text (const gchar *text,
+                                     MMSmsEncoding *encoding);
+
+GByteArray **mm_sms_part_util_split_data (const guint8 *data,
+                                          gsize data_len);
 
 #endif /* MM_SMS_PART_H */

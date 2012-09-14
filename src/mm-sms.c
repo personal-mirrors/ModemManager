@@ -25,12 +25,12 @@
 #include <ModemManager.h>
 #include <libmm-common.h>
 
+#include "mm-broadband-modem.h"
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-messaging.h"
 #include "mm-sms.h"
 #include "mm-base-modem-at.h"
 #include "mm-base-modem.h"
-#include "mm-utils.h"
 #include "mm-log.h"
 #include "mm-modem-helpers.h"
 
@@ -71,12 +71,153 @@ struct _MMSmsPrivate {
 };
 
 /*****************************************************************************/
+
+static gboolean
+generate_submit_pdus (MMSms *self,
+                      GError **error)
+{
+    guint i;
+    guint n_parts;
+
+    const gchar *text;
+    GVariant *data_variant;
+    const guint8 *data;
+    gsize data_len = 0;
+
+    MMSmsEncoding encoding;
+    gchar **split_text = NULL;
+    GByteArray **split_data = NULL;
+
+    g_assert (self->priv->parts == NULL);
+
+    text = mm_gdbus_sms_get_text (MM_GDBUS_SMS (self));
+    data_variant = mm_gdbus_sms_get_data (MM_GDBUS_SMS (self));
+    data = (data_variant ?
+            g_variant_get_fixed_array (data_variant,
+                                       &data_len,
+                                       sizeof (guchar)) :
+            NULL);
+
+    g_assert (text != NULL || data != NULL);
+    g_assert (!(text != NULL && data != NULL));
+
+    if (text) {
+        split_text = mm_sms_part_util_split_text (text, &encoding);
+        if (!split_text) {
+            g_set_error (error,
+                         MM_CORE_ERROR,
+                         MM_CORE_ERROR_INVALID_ARGS,
+                         "Cannot generate PDUs: Error processing input text");
+            return FALSE;
+        }
+        n_parts = g_strv_length (split_text);
+    } else if (data) {
+        encoding = MM_SMS_ENCODING_8BIT;
+        split_data = mm_sms_part_util_split_data (data, data_len);
+        g_assert (split_data != NULL);
+        /* noop within the for */
+        for (n_parts = 0; split_data[n_parts]; n_parts++);
+    } else
+        g_assert_not_reached ();
+
+    g_assert (split_text != NULL || split_data != NULL);
+    g_assert (!(split_text != NULL && split_data != NULL));
+
+    if (n_parts > 255) {
+        if (split_text)
+            g_strfreev (split_text);
+        else if (split_data) {
+            guint i = 0;
+
+            while (split_data[i])
+                g_byte_array_unref (split_data[i++]);
+            g_free (split_data);
+        }
+
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_TOO_MANY,
+                     "Cannot generate PDUs: Text or Data too long");
+        return FALSE;
+    }
+
+    /* Loop text/data chunks */
+    i = 0;
+    while (1) {
+        MMSmsPart *part;
+        gchar *part_text = NULL;
+        GByteArray *part_data = NULL;
+
+        if (split_text) {
+            if (!split_text[i])
+                break;
+            part_text = split_text[i];
+            mm_dbg ("  Processing chunk '%u' of text with '%u' bytes",
+                    i, (guint) strlen (part_text));
+        } else if (split_data) {
+            if (!split_data[i])
+                break;
+            part_data = split_data[i];
+            mm_dbg ("  Processing chunk '%u' of data with '%u' bytes",
+                    i, part_data->len);
+
+        } else
+            g_assert_not_reached ();
+
+        /* Create new part */
+        part = mm_sms_part_new (SMS_PART_INVALID_INDEX, MM_SMS_PDU_TYPE_SUBMIT);
+        mm_sms_part_take_text (part, part_text);
+        mm_sms_part_take_data (part, part_data);
+        mm_sms_part_set_encoding (part, encoding);
+        mm_sms_part_set_number (part, mm_gdbus_sms_get_number (MM_GDBUS_SMS (self)));
+        mm_sms_part_set_smsc (part, mm_gdbus_sms_get_smsc (MM_GDBUS_SMS (self)));
+        mm_sms_part_set_validity (part, mm_gdbus_sms_get_validity (MM_GDBUS_SMS (self)));
+        mm_sms_part_set_class (part, mm_gdbus_sms_get_class (MM_GDBUS_SMS (self)));
+        mm_sms_part_set_delivery_report_request (part, mm_gdbus_sms_get_delivery_report_request (MM_GDBUS_SMS (self)));
+
+        if (n_parts > 1) {
+            mm_sms_part_set_concat_reference (part, 0); /* We don't set a concat reference here */
+            mm_sms_part_set_concat_sequence (part, i + 1);
+            mm_sms_part_set_concat_max (part, n_parts);
+
+            mm_dbg ("Created SMS part '%u' for multipart SMS ('%u' parts expected)",
+                    i + 1, n_parts);
+        } else {
+            mm_dbg ("Created SMS part for singlepart SMS");
+        }
+
+        /* Add to the list of parts */
+        self->priv->parts = g_list_append (self->priv->parts, part);
+
+        i++;
+    }
+
+    /* Free array (not contents, which were taken for the part) */
+    if (split_text)
+        g_free (split_text);
+    if (split_data)
+        g_free (split_data);
+
+    /* Set additional multipart specific properties */
+    if (n_parts > 1) {
+        self->priv->is_multipart = TRUE;
+        self->priv->max_parts = n_parts;
+    }
+
+    /* No more parts are expected */
+    self->priv->is_assembled = TRUE;
+
+    return TRUE;
+}
+
+/*****************************************************************************/
 /* Store SMS (DBus call handling) */
 
 typedef struct {
     MMSms *self;
     MMBaseModem *modem;
     GDBusMethodInvocation *invocation;
+    MMSmsStorage storage;
 } HandleStoreContext;
 
 static void
@@ -98,13 +239,7 @@ handle_store_ready (MMSms *self,
     if (!MM_SMS_GET_CLASS (self)->store_finish (self, res, &error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
     else {
-        MMSmsStorage storage = MM_SMS_STORAGE_UNKNOWN;
-
-        /* We'll set now the proper storage, taken from the default mem2 one */
-        g_object_get (self->priv->modem,
-                      MM_IFACE_MODEM_MESSAGING_SMS_MEM2_STORAGE, &storage,
-                      NULL);
-        mm_gdbus_sms_set_storage (MM_GDBUS_SMS (ctx->self), storage);
+        mm_gdbus_sms_set_storage (MM_GDBUS_SMS (ctx->self), ctx->storage);
 
         /* Transition from Unknown->Stored for SMS which were created by the user */
         if (mm_gdbus_sms_get_state (MM_GDBUS_SMS (ctx->self)) == MM_SMS_STATE_UNKNOWN)
@@ -117,13 +252,34 @@ handle_store_ready (MMSms *self,
 }
 
 static gboolean
-sms_is_stored (MMSms *self)
+prepare_sms_to_be_stored (MMSms *self,
+                          GError **error)
 {
     GList *l;
+    guint8 reference;
 
+    g_assert (self->priv->parts == NULL);
+
+    /* Look for a valid multipart reference to use. When storing, we need to
+     * check whether we have already stored multipart SMS with the same
+     * reference and destination number */
+    reference = (mm_iface_modem_messaging_get_local_multipart_reference (
+                     MM_IFACE_MODEM_MESSAGING (self->priv->modem),
+                     mm_gdbus_sms_get_number (MM_GDBUS_SMS (self)),
+                     error));
+    if (!reference ||
+        !generate_submit_pdus (self, error)) {
+        g_prefix_error (error, "Cannot prepare SMS to be stored: ");
+        return FALSE;
+    }
+
+    /* If the message is a multipart message, we need to set a proper
+     * multipart reference. When sending a message which wasn't stored
+     * yet, we can just get a random multipart reference. */
+    self->priv->multipart_reference = reference;
     for (l = self->priv->parts; l; l = g_list_next (l)) {
-        if (mm_sms_part_get_index ((MMSmsPart *)l->data) == SMS_PART_INVALID_INDEX)
-            return FALSE;
+        mm_sms_part_set_concat_reference ((MMSmsPart *)l->data,
+                                          self->priv->multipart_reference);
     }
 
     return TRUE;
@@ -143,8 +299,35 @@ handle_store_auth_ready (MMBaseModem *modem,
     }
 
     /* First of all, check if we already have the SMS stored. */
-    if (sms_is_stored (ctx->self)) {
-        mm_gdbus_sms_complete_store (MM_GDBUS_SMS (ctx->self), ctx->invocation);
+    if (mm_sms_get_storage (ctx->self) != MM_SMS_STORAGE_UNKNOWN) {
+        /* Check if SMS stored in some other storage */
+        if (mm_sms_get_storage (ctx->self) == ctx->storage)
+            /* Good, same storage */
+            mm_gdbus_sms_complete_store (MM_GDBUS_SMS (ctx->self), ctx->invocation);
+        else
+            g_dbus_method_invocation_return_error (
+                ctx->invocation,
+                MM_CORE_ERROR,
+                MM_CORE_ERROR_FAILED,
+                "SMS is already stored in storage '%s', cannot store it in storage '%s'",
+                mm_sms_storage_get_string (mm_sms_get_storage (ctx->self)),
+                mm_sms_storage_get_string (ctx->storage));
+        handle_store_context_free (ctx);
+        return;
+    }
+
+    /* Check if the requested storage is allowed for storing */
+    if (!mm_iface_modem_messaging_is_storage_supported_for_storing (MM_IFACE_MODEM_MESSAGING (ctx->modem),
+                                                                    ctx->storage,
+                                                                    &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_store_context_free (ctx);
+        return;
+    }
+
+    /* Prepare the SMS to be stored, creating the PDU list if required */
+    if (!prepare_sms_to_be_stored (ctx->self, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
         handle_store_context_free (ctx);
         return;
     }
@@ -161,13 +344,15 @@ handle_store_auth_ready (MMBaseModem *modem,
     }
 
     MM_SMS_GET_CLASS (ctx->self)->store (ctx->self,
+                                         ctx->storage,
                                          (GAsyncReadyCallback)handle_store_ready,
                                          ctx);
 }
 
 static gboolean
 handle_store (MMSms *self,
-              GDBusMethodInvocation *invocation)
+              GDBusMethodInvocation *invocation,
+              guint32 storage)
 {
     HandleStoreContext *ctx;
 
@@ -177,6 +362,15 @@ handle_store (MMSms *self,
     g_object_get (self,
                   MM_SMS_MODEM, &ctx->modem,
                   NULL);
+    ctx->storage = (MMSmsStorage)storage;
+
+    if (ctx->storage == MM_SMS_STORAGE_UNKNOWN) {
+        /* We'll set now the proper storage, taken from the default mem2 one */
+        g_object_get (self->priv->modem,
+                      MM_IFACE_MODEM_MESSAGING_SMS_DEFAULT_STORAGE, &ctx->storage,
+                      NULL);
+        g_assert (ctx->storage != MM_SMS_STORAGE_UNKNOWN);
+    }
 
     mm_base_modem_authorize (ctx->modem,
                              invocation,
@@ -216,13 +410,46 @@ handle_send_ready (MMSms *self,
     else {
         /* Transition from Unknown->Sent or Stored->Sent */
         if (mm_gdbus_sms_get_state (MM_GDBUS_SMS (ctx->self)) == MM_SMS_STATE_UNKNOWN ||
-            mm_gdbus_sms_get_state (MM_GDBUS_SMS (ctx->self)) == MM_SMS_STATE_STORED)
-            mm_gdbus_sms_set_state (MM_GDBUS_SMS (ctx->self), MM_SMS_STATE_SENT);
+            mm_gdbus_sms_get_state (MM_GDBUS_SMS (ctx->self)) == MM_SMS_STATE_STORED) {
+            GList *l;
 
+            /* Update state */
+            mm_gdbus_sms_set_state (MM_GDBUS_SMS (ctx->self), MM_SMS_STATE_SENT);
+            /* Grab last message reference */
+            l = g_list_last (mm_sms_get_parts (ctx->self));
+            mm_gdbus_sms_set_message_reference (MM_GDBUS_SMS (ctx->self),
+                                                mm_sms_part_get_message_reference ((MMSmsPart *)l->data));
+        }
         mm_gdbus_sms_complete_send (MM_GDBUS_SMS (ctx->self), ctx->invocation);
     }
 
     handle_send_context_free (ctx);
+}
+
+static gboolean
+prepare_sms_to_be_sent (MMSms *self,
+                        GError **error)
+{
+    GList *l;
+
+    if (self->priv->parts)
+        return TRUE;
+
+    if (!generate_submit_pdus (self, error)) {
+        g_prefix_error (error, "Cannot prepare SMS to be sent: ");
+        return FALSE;
+    }
+
+    /* If the message is a multipart message, we need to set a proper
+     * multipart reference. When sending a message which wasn't stored
+     * yet, we can just get a random multipart reference. */
+    self->priv->multipart_reference = g_random_int_range (1,255);
+    for (l = self->priv->parts; l; l = g_list_next (l)) {
+        mm_sms_part_set_concat_reference ((MMSmsPart *)l->data,
+                                          self->priv->multipart_reference);
+    }
+
+    return TRUE;
 }
 
 static void
@@ -247,6 +474,23 @@ handle_send_auth_ready (MMBaseModem *modem,
                                                MM_CORE_ERROR,
                                                MM_CORE_ERROR_FAILED,
                                                "This SMS was received, cannot send it");
+        handle_send_context_free (ctx);
+        return;
+    }
+
+    /* Don't allow sending the same SMS multiple times, we would lose the message reference */
+    if (state == MM_SMS_STATE_SENT) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_FAILED,
+                                               "This SMS was already sent, cannot send it again");
+        handle_send_context_free (ctx);
+        return;
+    }
+
+    /* Prepare the SMS to be sent, creating the PDU list if required */
+    if (!prepare_sms_to_be_sent (ctx->self, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
         handle_send_context_free (ctx);
         return;
     }
@@ -444,7 +688,7 @@ sms_get_store_or_send_command (MMSmsPart *part,
             return FALSE;
 
         /* Convert PDU to hex */
-        hex = utils_bin2hexstr (pdu, pdulen);
+        hex = mm_utils_bin2hexstr (pdu, pdulen);
         g_free (pdu);
 
         if (!hex) {
@@ -472,15 +716,22 @@ sms_get_store_or_send_command (MMSmsPart *part,
 typedef struct {
     MMSms *self;
     MMBaseModem *modem;
-    char *msg_data;
     GSimpleAsyncResult *result;
+    MMSmsStorage storage;
+    gboolean need_unlock;
+    gboolean use_pdu_mode;
+    GList *current;
+    gchar *msg_data;
 } SmsStoreContext;
 
 static void
 sms_store_context_complete_and_free (SmsStoreContext *ctx)
 {
-    g_simple_async_result_complete_in_idle (ctx->result);
+    g_simple_async_result_complete (ctx->result);
     g_object_unref (ctx->result);
+    /* Unlock mem2 storage if we had the lock */
+    if (ctx->need_unlock)
+        mm_broadband_modem_unlock_sms_storages (MM_BROADBAND_MODEM (ctx->modem), FALSE, TRUE);
     g_object_unref (ctx->modem);
     g_object_unref (ctx->self);
     g_free (ctx->msg_data);
@@ -494,6 +745,8 @@ sms_store_finish (MMSms *self,
 {
     return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
+
+static void sms_store_next_part (SmsStoreContext *ctx);
 
 static void
 store_msg_data_ready (MMBaseModem *modem,
@@ -526,10 +779,10 @@ store_msg_data_ready (MMBaseModem *modem,
     }
 
     /* Set the index in the part we hold */
-    mm_sms_part_set_index ((MMSmsPart *)ctx->self->priv->parts->data, (guint)idx);
+    mm_sms_part_set_index ((MMSmsPart *)ctx->current->data, (guint)idx);
 
-    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-    sms_store_context_complete_and_free (ctx);
+    ctx->current = g_list_next (ctx->current);
+    sms_store_next_part (ctx);
 }
 
 static void
@@ -552,49 +805,30 @@ store_ready (MMBaseModem *modem,
                                   ctx->msg_data,
                                   10,
                                   FALSE,
-                                  (GAsyncReadyCallback) store_msg_data_ready,
+                                  (GAsyncReadyCallback)store_msg_data_ready,
                                   ctx);
 }
 
 static void
-sms_store (MMSms *self,
-           GAsyncReadyCallback callback,
-           gpointer user_data)
+sms_store_next_part (SmsStoreContext *ctx)
 {
-    GError *error = NULL;
-    gboolean use_pdu_mode;
-    SmsStoreContext *ctx;
     gchar *cmd;
+    GError *error = NULL;
 
-    /* We currently support storing *only* single part SMS */
-    if (g_list_length (self->priv->parts) != 1) {
-        g_simple_async_report_error_in_idle (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             MM_CORE_ERROR,
-                                             MM_CORE_ERROR_UNSUPPORTED,
-                                             "Cannot store SMS with %u parts",
-                                             g_list_length (self->priv->parts));
+    if (!ctx->current) {
+        /* Done we are */
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+        sms_store_context_complete_and_free (ctx);
         return;
     }
 
-    /* Setup the context */
-    ctx = g_new0 (SmsStoreContext, 1);
-    ctx->result = g_simple_async_result_new (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             sms_store);
-    ctx->self = g_object_ref (self);
-    ctx->modem = g_object_ref (self->priv->modem);
+    if (ctx->msg_data) {
+        g_free (ctx->msg_data);
+        ctx->msg_data = NULL;
+    }
 
-    /* Different ways to do it if on PDU or text mode */
-    use_pdu_mode = FALSE;
-    g_object_get (self->priv->modem,
-                  MM_IFACE_MODEM_MESSAGING_SMS_PDU_MODE, &use_pdu_mode,
-                  NULL);
-
-    if (!sms_get_store_or_send_command ((MMSmsPart *)ctx->self->priv->parts->data,
-                                        use_pdu_mode,
+    if (!sms_get_store_or_send_command ((MMSmsPart *)ctx->current->data,
+                                        ctx->use_pdu_mode,
                                         FALSE,
                                         &cmd,
                                         &ctx->msg_data,
@@ -611,9 +845,64 @@ sms_store (MMSms *self,
                               cmd,
                               10,
                               FALSE,
-                              (GAsyncReadyCallback) store_ready,
+                              (GAsyncReadyCallback)store_ready,
                               ctx);
     g_free (cmd);
+}
+
+static void
+store_lock_sms_storages_ready (MMBroadbandModem *modem,
+                               GAsyncResult *res,
+                               SmsStoreContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_broadband_modem_lock_sms_storages_finish (modem, res, &error)) {
+        g_simple_async_result_take_error (ctx->result, error);
+        sms_store_context_complete_and_free (ctx);
+        return;
+    }
+
+    /* We are now locked. Whatever result we have here, we need to make sure
+     * we unlock the storages before finishing. */
+    ctx->need_unlock = TRUE;
+
+    /* Go on to store the parts */
+    ctx->current = ctx->self->priv->parts;
+    sms_store_next_part (ctx);
+}
+
+static void
+sms_store (MMSms *self,
+           MMSmsStorage storage,
+           GAsyncReadyCallback callback,
+           gpointer user_data)
+{
+    SmsStoreContext *ctx;
+
+    /* Setup the context */
+    ctx = g_new0 (SmsStoreContext, 1);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             sms_store);
+    ctx->self = g_object_ref (self);
+    ctx->modem = g_object_ref (self->priv->modem);
+    ctx->storage = storage;
+
+    /* Different ways to do it if on PDU or text mode */
+    g_object_get (self->priv->modem,
+                  MM_IFACE_MODEM_MESSAGING_SMS_PDU_MODE, &ctx->use_pdu_mode,
+                  NULL);
+
+    /* First, lock storage to use */
+    g_assert (MM_IS_BROADBAND_MODEM (self->priv->modem));
+    mm_broadband_modem_lock_sms_storages (
+        MM_BROADBAND_MODEM (self->priv->modem),
+        MM_SMS_STORAGE_UNKNOWN, /* none required for mem1 */
+        ctx->storage,
+        (GAsyncReadyCallback)store_lock_sms_storages_ready,
+        ctx);
 }
 
 /*****************************************************************************/
@@ -622,8 +911,12 @@ sms_store (MMSms *self,
 typedef struct {
     MMSms *self;
     MMBaseModem *modem;
-    char *msg_data;
     GSimpleAsyncResult *result;
+    gboolean need_unlock;
+    gboolean from_storage;
+    gboolean use_pdu_mode;
+    GList *current;
+    gchar *msg_data;
 } SmsSendContext;
 
 static void
@@ -631,8 +924,12 @@ sms_send_context_complete_and_free (SmsSendContext *ctx)
 {
     g_simple_async_result_complete_in_idle (ctx->result);
     g_object_unref (ctx->result);
+    /* Unlock mem2 storage if we had the lock */
+    if (ctx->need_unlock)
+        mm_broadband_modem_unlock_sms_storages (MM_BROADBAND_MODEM (ctx->modem), FALSE, TRUE);
     g_object_unref (ctx->modem);
     g_object_unref (ctx->self);
+    g_free (ctx->msg_data);
     g_free (ctx);
 }
 
@@ -644,22 +941,61 @@ sms_send_finish (MMSms *self,
     return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
 
+static void sms_send_next_part (SmsSendContext *ctx);
+
+static gint
+read_message_reference_from_reply (const gchar *response,
+                                   GError **error)
+{
+    gint rv = 0;
+    gint idx = -1;
+
+    if (strstr (response, "+CMGS"))
+        rv = sscanf (strstr (response, "+CMGS"), "+CMGS: %d", &idx);
+    else if (strstr (response, "+CMSS"))
+        rv = sscanf (strstr (response, "+CMSS"), "+CMSS: %d", &idx);
+
+    if (rv != 1 || idx < 0) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Couldn't read message reference: "
+                     "%d fields parsed from response '%s'",
+                     rv, response);
+        return -1;
+    }
+
+    return idx;
+}
+
 static void
 send_generic_msg_data_ready (MMBaseModem *modem,
                              GAsyncResult *res,
                              SmsSendContext *ctx)
 {
     GError *error = NULL;
+    const gchar *response;
+    gint message_reference;
 
-    mm_base_modem_at_command_finish (MM_BASE_MODEM (modem), res, &error);
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (modem), res, &error);
     if (error) {
         g_simple_async_result_take_error (ctx->result, error);
         sms_send_context_complete_and_free (ctx);
         return;
     }
 
-    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-    sms_send_context_complete_and_free (ctx);
+    message_reference = read_message_reference_from_reply (response, &error);
+    if (error) {
+        g_simple_async_result_take_error (ctx->result, error);
+        sms_send_context_complete_and_free (ctx);
+        return;
+    }
+
+    mm_sms_part_set_message_reference ((MMSmsPart *)ctx->current->data,
+                                       (guint)message_reference);
+
+    ctx->current = g_list_next (ctx->current);
+    sms_send_next_part (ctx);
 }
 
 static void
@@ -686,19 +1022,81 @@ send_generic_ready (MMBaseModem *modem,
 }
 
 static void
-sms_send_generic (SmsSendContext *ctx)
+send_from_storage_ready (MMBaseModem *modem,
+                         GAsyncResult *res,
+                         SmsSendContext *ctx)
 {
-    gchar *cmd;
     GError *error = NULL;
-    gboolean use_pdu_mode = FALSE;
+    const gchar *response;
+    gint message_reference;
 
-    /* Different ways to do it if on PDU or text mode */
-    g_object_get (ctx->self->priv->modem,
-                  MM_IFACE_MODEM_MESSAGING_SMS_PDU_MODE, &use_pdu_mode,
-                  NULL);
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (modem), res, &error);
+    if (error) {
+        if (g_error_matches (error, MM_SERIAL_ERROR, MM_SERIAL_ERROR_RESPONSE_TIMEOUT)) {
+            g_simple_async_result_take_error (ctx->result, error);
+            sms_send_context_complete_and_free (ctx);
+            return;
+        }
 
-    if (!sms_get_store_or_send_command ((MMSmsPart *)ctx->self->priv->parts->data,
-                                        use_pdu_mode,
+        mm_dbg ("Couldn't send SMS from storage: '%s'; trying generic send...",
+                error->message);
+        g_error_free (error);
+
+        ctx->from_storage = FALSE;
+        sms_send_next_part (ctx);
+        return;
+    }
+
+    message_reference = read_message_reference_from_reply (response, &error);
+    if (error) {
+        g_simple_async_result_take_error (ctx->result, error);
+        sms_send_context_complete_and_free (ctx);
+        return;
+    }
+
+    mm_sms_part_set_message_reference ((MMSmsPart *)ctx->current->data,
+                                       (guint)message_reference);
+
+    ctx->current = g_list_next (ctx->current);
+    sms_send_next_part (ctx);
+}
+
+static void
+sms_send_next_part (SmsSendContext *ctx)
+{
+    GError *error = NULL;
+    gchar *cmd;
+
+    if (!ctx->current) {
+        /* Done we are */
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+        sms_send_context_complete_and_free (ctx);
+        return;
+    }
+
+    /* Send from storage */
+    if (ctx->from_storage) {
+        cmd = g_strdup_printf ("+CMSS=%d",
+                               mm_sms_part_get_index ((MMSmsPart *)ctx->current->data));
+        mm_base_modem_at_command (ctx->modem,
+                                  cmd,
+                                  30,
+                                  FALSE,
+                                  (GAsyncReadyCallback)send_from_storage_ready,
+                                  ctx);
+        g_free (cmd);
+        return;
+    }
+
+    /* Generic send */
+
+    if (ctx->msg_data) {
+        g_free (ctx->msg_data);
+        ctx->msg_data = NULL;
+    }
+
+    if (!sms_get_store_or_send_command ((MMSmsPart *)ctx->current->data,
+                                        ctx->use_pdu_mode,
                                         TRUE,
                                         &cmd,
                                         &ctx->msg_data,
@@ -710,10 +1108,9 @@ sms_send_generic (SmsSendContext *ctx)
 
     g_assert (cmd != NULL);
     g_assert (ctx->msg_data != NULL);
-
     mm_base_modem_at_command (ctx->modem,
                               cmd,
-                              10,
+                              30,
                               FALSE,
                               (GAsyncReadyCallback)send_generic_ready,
                               ctx);
@@ -721,40 +1118,25 @@ sms_send_generic (SmsSendContext *ctx)
 }
 
 static void
-send_from_storage_ready (MMBaseModem *modem,
-                         GAsyncResult *res,
-                         SmsSendContext *ctx)
+send_lock_sms_storages_ready (MMBroadbandModem *modem,
+                              GAsyncResult *res,
+                              SmsSendContext *ctx)
 {
     GError *error = NULL;
 
-    mm_base_modem_at_command_finish (MM_BASE_MODEM (modem), res, &error);
-    if (error) {
-        mm_dbg ("Couldn't send SMS from storage: '%s'; trying generic send...",
-                error->message);
-        g_error_free (error);
-
-        sms_send_generic (ctx);
+    if (!mm_broadband_modem_lock_sms_storages_finish (modem, res, &error)) {
+        g_simple_async_result_take_error (ctx->result, error);
+        sms_send_context_complete_and_free (ctx);
         return;
     }
 
-    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-    sms_send_context_complete_and_free (ctx);
-}
+    /* We are now locked. Whatever result we have here, we need to make sure
+     * we unlock the storages before finishing. */
+    ctx->need_unlock = TRUE;
 
-static void
-sms_send_from_storage (SmsSendContext *ctx)
-{
-    gchar *cmd;
-
-    cmd = g_strdup_printf ("+CMSS=%d",
-                           mm_sms_part_get_index ((MMSmsPart *)ctx->self->priv->parts->data));
-    mm_base_modem_at_command (ctx->modem,
-                              cmd,
-                              10,
-                              FALSE,
-                              (GAsyncReadyCallback)send_from_storage_ready,
-                              ctx);
-    g_free (cmd);
+    /* Go on to send the parts */
+    ctx->current = ctx->self->priv->parts;
+    sms_send_next_part (ctx);
 }
 
 static void
@@ -763,18 +1145,6 @@ sms_send (MMSms *self,
           gpointer user_data)
 {
     SmsSendContext *ctx;
-
-    /* We currently support storing *only* single part SMS */
-    if (g_list_length (self->priv->parts) != 1) {
-        g_simple_async_report_error_in_idle (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             MM_CORE_ERROR,
-                                             MM_CORE_ERROR_UNSUPPORTED,
-                                             "Cannot send SMS with %u parts",
-                                             g_list_length (self->priv->parts));
-        return;
-    }
 
     /* Setup the context */
     ctx = g_new0 (SmsSendContext, 1);
@@ -785,11 +1155,26 @@ sms_send (MMSms *self,
     ctx->self = g_object_ref (self);
     ctx->modem = g_object_ref (self->priv->modem);
 
-    /* If the part is STORED, try to send from storage */
-    if (mm_sms_part_get_index ((MMSmsPart *)self->priv->parts->data) != SMS_PART_INVALID_INDEX)
-        sms_send_from_storage (ctx);
-    else
-        sms_send_generic (ctx);
+    /* If the SMS is STORED, try to send from storage */
+    ctx->from_storage = (mm_sms_get_storage (self) != MM_SMS_STORAGE_UNKNOWN);
+    if (ctx->from_storage) {
+        /* When sending from storage, first lock storage to use */
+        g_assert (MM_IS_BROADBAND_MODEM (self->priv->modem));
+        mm_broadband_modem_lock_sms_storages (
+            MM_BROADBAND_MODEM (self->priv->modem),
+            MM_SMS_STORAGE_UNKNOWN, /* none required for mem1 */
+            mm_sms_get_storage (self),
+            (GAsyncReadyCallback)send_lock_sms_storages_ready,
+            ctx);
+        return;
+    }
+
+    /* Different ways to do it if on PDU or text mode */
+    g_object_get (self->priv->modem,
+                  MM_IFACE_MODEM_MESSAGING_SMS_PDU_MODE, &ctx->use_pdu_mode,
+                  NULL);
+    ctx->current = self->priv->parts;
+    sms_send_next_part (ctx);
 }
 
 /*****************************************************************************/
@@ -798,6 +1183,7 @@ typedef struct {
     MMSms *self;
     MMBaseModem *modem;
     GSimpleAsyncResult *result;
+    gboolean need_unlock;
     GList *current;
     guint n_failed;
 } SmsDeletePartsContext;
@@ -807,6 +1193,9 @@ sms_delete_parts_context_complete_and_free (SmsDeletePartsContext *ctx)
 {
     g_simple_async_result_complete_in_idle (ctx->result);
     g_object_unref (ctx->result);
+    /* Unlock mem1 storage if we had the lock */
+    if (ctx->need_unlock)
+        mm_broadband_modem_unlock_sms_storages (MM_BROADBAND_MODEM (ctx->modem), TRUE, FALSE);
     g_object_unref (ctx->modem);
     g_object_unref (ctx->self);
     g_free (ctx);
@@ -882,6 +1271,28 @@ delete_next_part (SmsDeletePartsContext *ctx)
 }
 
 static void
+delete_lock_sms_storages_ready (MMBroadbandModem *modem,
+                                GAsyncResult *res,
+                                SmsDeletePartsContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_broadband_modem_lock_sms_storages_finish (modem, res, &error)) {
+        g_simple_async_result_take_error (ctx->result, error);
+        sms_delete_parts_context_complete_and_free (ctx);
+        return;
+    }
+
+    /* We are now locked. Whatever result we have here, we need to make sure
+     * we unlock the storages before finishing. */
+    ctx->need_unlock = TRUE;
+
+    /* Go on deleting parts */
+    ctx->current = ctx->self->priv->parts;
+    delete_next_part (ctx);
+}
+
+static void
 sms_delete (MMSms *self,
             GAsyncReadyCallback callback,
             gpointer user_data)
@@ -896,9 +1307,20 @@ sms_delete (MMSms *self,
     ctx->self = g_object_ref (self);
     ctx->modem = g_object_ref (self->priv->modem);
 
-    /* Go on deleting parts */
-    ctx->current = ctx->self->priv->parts;
-    delete_next_part (ctx);
+    if (mm_sms_get_storage (self) == MM_SMS_STORAGE_UNKNOWN) {
+        mm_dbg ("Not removing parts from non-stored SMS");
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+        sms_delete_parts_context_complete_and_free (ctx);
+        return;
+    }
+
+    /* Select specific storage to delete from */
+    mm_broadband_modem_lock_sms_storages (
+        MM_BROADBAND_MODEM (self->priv->modem),
+        mm_sms_get_storage (self),
+        MM_SMS_STORAGE_UNKNOWN, /* none required for mem2 */
+        (GAsyncReadyCallback)delete_lock_sms_storages_ready,
+        ctx);
 }
 
 /*****************************************************************************/
@@ -1014,11 +1436,12 @@ assemble_sms (MMSms *self,
         }
 
         /* When the user creates the SMS, it will have either 'text' or 'data',
-         * not both */
+         * not both. Also status report PDUs may not have neither text nor data. */
         parttext = mm_sms_part_get_text (sorted_parts[idx]);
         partdata = mm_sms_part_get_data (sorted_parts[idx]);
 
-        if (!parttext && !partdata) {
+        if (!parttext && !partdata &&
+            mm_sms_part_get_pdu_type (sorted_parts[idx]) != MM_SMS_PDU_TYPE_STATUS_REPORT) {
             g_set_error (error,
                          MM_CORE_ERROR,
                          MM_CORE_ERROR_FAILED,
@@ -1041,6 +1464,7 @@ assemble_sms (MMSms *self,
 
     /* If we got everything, assemble the text! */
     g_object_set (self,
+                  "pdu-type",  mm_sms_part_get_pdu_type (sorted_parts[0]),
                   "text",      fulltext->str,
                   "data",      g_variant_new_from_data (G_VARIANT_TYPE ("ay"),
                                                         fulldata->data,
@@ -1051,8 +1475,13 @@ assemble_sms (MMSms *self,
                   "smsc",      mm_sms_part_get_smsc (sorted_parts[0]),
                   "class",     mm_sms_part_get_class (sorted_parts[0]),
                   "number",    mm_sms_part_get_number (sorted_parts[0]),
-                  "timestamp", mm_sms_part_get_timestamp (sorted_parts[0]),
                   "validity",  mm_sms_part_get_validity (sorted_parts[0]),
+                  "timestamp",               mm_sms_part_get_timestamp (sorted_parts[0]),
+                  "discharge-timestamp",     mm_sms_part_get_discharge_timestamp (sorted_parts[0]),
+                  "delivery-state",          mm_sms_part_get_delivery_state (sorted_parts[0]),
+                  /* delivery report request and message reference taken always from the last part */
+                  "message-reference",       mm_sms_part_get_message_reference (sorted_parts[self->priv->max_parts - 1]),
+                  "delivery-report-request", mm_sms_part_get_delivery_report_request (sorted_parts[self->priv->max_parts - 1]),
                   NULL);
 
     g_string_free (fulltext, TRUE);
@@ -1171,9 +1600,12 @@ mm_sms_singlepart_new (MMBaseModem *modem,
     /* Keep the single part in the list */
     self->priv->parts = g_list_prepend (self->priv->parts, part);
 
-    if (!assemble_sms (self, error))
+    if (!assemble_sms (self, error)) {
+        /* Note: we need to remove the part from the list, as we really didn't
+         * take it, and therefore the caller is responsible for freeing it. */
+        self->priv->parts = g_list_remove (self->priv->parts, part);
         g_clear_object (&self);
-    else
+    } else
         /* Only export once properly created */
         mm_sms_export (self);
 
@@ -1211,6 +1643,14 @@ mm_sms_multipart_new (MMBaseModem *modem,
     if (!mm_sms_multipart_take_part (self, first_part, error))
         g_clear_object (&self);
 
+    /* We do export uncomplete multipart messages, in order to be able to
+     *  request removal of all parts of those multipart SMS that will never
+     *  get completed.
+     * Only the STATE of the SMS object will be valid in the exported DBus
+     *  interface.*/
+    if (self)
+        mm_sms_export (self);
+
     return self;
 }
 
@@ -1219,32 +1659,61 @@ mm_sms_new_from_properties (MMBaseModem *modem,
                             MMSmsProperties *properties,
                             GError **error)
 {
-    MMSmsPart *part;
+    MMSms *self;
+    const gchar *text;
+    GByteArray *data;
 
-    /* Don't create SMS from properties if either text or number is missing */
-    if (!mm_sms_properties_get_text (properties) ||
-        !mm_sms_properties_get_number (properties)) {
+    g_assert (MM_IS_IFACE_MODEM_MESSAGING (modem));
+
+    text = mm_sms_properties_get_text (properties);
+    data = mm_sms_properties_peek_data_bytearray (properties);
+
+    /* Don't create SMS from properties if either (text|data) or number is missing */
+    if (!mm_sms_properties_get_number (properties) ||
+        (!text && !data)) {
         g_set_error (error,
                      MM_CORE_ERROR,
                      MM_CORE_ERROR_INVALID_ARGS,
                      "Cannot create SMS: mandatory parameter '%s' is missing",
-                     (mm_sms_properties_get_text (properties) == NULL ?
-                      "text" : "number"));
+                     (!mm_sms_properties_get_number (properties)?
+                      "number" : "text' or 'data"));
+        return NULL;
     }
 
-    part = mm_sms_part_new (SMS_PART_INVALID_INDEX);
-    mm_sms_part_set_text (part, mm_sms_properties_get_text (properties));
-    mm_sms_part_take_data (part, mm_sms_properties_get_data_bytearray (properties));
-    mm_sms_part_set_number (part, mm_sms_properties_get_number (properties));
-    mm_sms_part_set_smsc (part, mm_sms_properties_get_smsc (properties));
-    mm_sms_part_set_validity (part, mm_sms_properties_get_validity (properties));
-    mm_sms_part_set_class (part, mm_sms_properties_get_class (properties));
+    /* Don't create SMS from properties if both text and data are given */
+    if (text && data) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_INVALID_ARGS,
+                     "Cannot create SMS: both 'text' and 'data' given");
+        return NULL;
+    }
 
-    return mm_sms_singlepart_new (modem,
-                                  MM_SMS_STATE_UNKNOWN,
-                                  MM_SMS_STORAGE_UNKNOWN, /* not stored anywhere yet */
-                                  part,
-                                  error);
+    /* Create an SMS object as defined by the interface */
+    self = mm_iface_modem_messaging_create_sms (MM_IFACE_MODEM_MESSAGING (modem));
+    g_object_set (self,
+                  "state",    MM_SMS_STATE_UNKNOWN,
+                  "storage",  MM_SMS_STORAGE_UNKNOWN,
+                  "number",   mm_sms_properties_get_number (properties),
+                  "pdu-type", MM_SMS_PDU_TYPE_SUBMIT,
+                  "text",     text,
+                  "data",     (data ?
+                               g_variant_new_from_data (G_VARIANT_TYPE ("ay"),
+                                                        data->data,
+                                                        data->len * sizeof (guint8),
+                                                        TRUE,
+                                                        (GDestroyNotify) g_byte_array_unref,
+                                                        g_byte_array_ref (data)) :
+                               NULL),
+                  "smsc",     mm_sms_properties_get_smsc (properties),
+                  "class",    mm_sms_properties_get_class (properties),
+                  "delivery-report-request", mm_sms_properties_get_delivery_report_request (properties),
+                  NULL);
+
+    /* Only export once properly created */
+    mm_sms_export (self);
+
+    return self;
 }
 
 /*****************************************************************************/

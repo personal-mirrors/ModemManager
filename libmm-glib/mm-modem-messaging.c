@@ -63,6 +63,46 @@ mm_modem_messaging_dup_path (MMModemMessaging *self)
     RETURN_NON_EMPTY_STRING (value);
 }
 
+/**
+ * mm_modem_messaging_get_supported_storages:
+ * @self: A #MMModem.
+ * @storages: (out): Return location for the array of #MMSmsStorage values.
+ * @n_storages: (out): Return location for the number of values in @storages.
+ *
+ * Gets the list of SMS storages supported by the #MMModem.
+ */
+void
+mm_modem_messaging_get_supported_storages (MMModemMessaging *self,
+                                           MMSmsStorage **storages,
+                                           guint *n_storages)
+{
+    GArray *array;
+
+    g_return_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self));
+    g_return_if_fail (storages != NULL);
+    g_return_if_fail (n_storages != NULL);
+
+    array = mm_common_sms_storages_variant_to_garray (mm_gdbus_modem_messaging_get_supported_storages (self));
+    *n_storages = array->len;
+    *storages = (MMSmsStorage *)g_array_free (array, FALSE);
+}
+
+/**
+ * mm_modem_messaging_get_default_storage:
+ * @self: A #MMModem.
+ *
+ * Gets the default SMS storage used when storing or receiving SMS messages.
+ *
+ * Returns: the default #MMSmsStorage.
+ */
+MMSmsStorage
+mm_modem_messaging_get_default_storage (MMModemMessaging *self)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self), MM_SMS_STORAGE_UNKNOWN);
+
+    return (MMSmsStorage)mm_gdbus_modem_messaging_get_default_storage (self);
+}
+
 typedef struct {
     MMModemMessaging *self;
     GSimpleAsyncResult *result;

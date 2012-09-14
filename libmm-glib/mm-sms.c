@@ -20,6 +20,8 @@
  * Copyright (C) 2012 Google, Inc.
  */
 
+#include "string.h"
+
 #include "mm-helpers.h"
 #include "mm-sms.h"
 #include "mm-modem.h"
@@ -97,6 +99,71 @@ mm_sms_dup_text (MMSms *self)
 
     RETURN_NON_EMPTY_STRING (
         mm_gdbus_sms_dup_text (self));
+}
+
+/**
+ * mm_sms_get_data:
+ * @self: A #MMSms.
+ * @data_len: (out) Size of the output data, if any given.
+ *
+ * TODO
+ *
+ * Returns: (transfer none): The data, or %NULL if it couldn't be retrieved. The returned value should be freed with g_free().
+ */
+const guint8 *
+mm_sms_get_data (MMSms *self,
+                 gsize *data_len)
+{
+    GVariant *data;
+
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), NULL);
+
+    data = mm_gdbus_sms_get_data (MM_GDBUS_SMS (self));
+    return (data ?
+            g_variant_get_fixed_array (
+                mm_gdbus_sms_get_data (MM_GDBUS_SMS (self)),
+                data_len,
+                sizeof (guchar)):
+            NULL);
+}
+
+/**
+ * mm_sms_dup_data:
+ * @self: A #MMSms.
+ * @data_len: (out) Size of the output data, if any given.
+ *
+ * TODO
+ *
+ * Returns: (transfer full): The data, or %NULL if it couldn't be retrieved. The returned value should be freed with g_free().
+ */
+guint8 *
+mm_sms_dup_data (MMSms *self,
+                 gsize *data_len)
+{
+    guint8 *out;
+    GVariant *data_variant;
+    const guint8 *orig_data;
+    gsize orig_data_len = 0;
+
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), NULL);
+
+    /* Get a ref to ensure the variant is valid as long as we use it */
+    data_variant = mm_gdbus_sms_dup_data (MM_GDBUS_SMS (self));
+    if (!data_variant)
+        return NULL;
+
+    orig_data = (g_variant_get_fixed_array (
+                     mm_gdbus_sms_get_data (MM_GDBUS_SMS (self)),
+                     &orig_data_len,
+                     sizeof (guchar)));
+
+    out = g_new (guint8, orig_data_len);
+    memcpy (out, orig_data, orig_data_len);
+    g_variant_unref (data_variant);
+
+    if (data_len)
+        *data_len = orig_data_len;
+    return out;
 }
 
 /**
@@ -208,6 +275,42 @@ mm_sms_dup_timestamp (MMSms *self)
 }
 
 /**
+ * mm_sms_get_discharge_timestamp:
+ * @self: A #MMSms.
+ *
+ * TODO
+ *
+ * <warning>It is only safe to use this function on the thread where @self was constructed. Use mm_sms_dup_timestamp() if on another thread.</warning>
+ *
+ * Returns: (transfer none): The name of the timestamp, or %NULL if it couldn't be retrieved.
+ */
+const gchar *
+mm_sms_get_discharge_timestamp (MMSms *self)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), NULL);
+
+    RETURN_NON_EMPTY_CONSTANT_STRING (
+        mm_gdbus_sms_get_discharge_timestamp (self));
+}
+
+/**
+ * mm_sms_dup_discharge_timestamp:
+ * @self: A #MMSms.
+ *
+ * TODO
+ *
+ * Returns: (transfer full): The name of the timestamp, or %NULL if it couldn't be retrieved. The returned value should be freed with g_free().
+ */
+gchar *
+mm_sms_dup_discharge_timestamp (MMSms *self)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), NULL);
+
+    RETURN_NON_EMPTY_STRING (
+        mm_gdbus_sms_dup_discharge_timestamp (self));
+}
+
+/**
  * mm_sms_get_validity:
  * @self: A #MMSms.
  *
@@ -218,7 +321,7 @@ mm_sms_dup_timestamp (MMSms *self)
 guint
 mm_sms_get_validity (MMSms *self)
 {
-    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), FALSE);
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), 0);
 
     return mm_gdbus_sms_get_validity (self);
 }
@@ -234,9 +337,49 @@ mm_sms_get_validity (MMSms *self)
 guint
 mm_sms_get_class (MMSms *self)
 {
-    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), FALSE);
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), 0);
 
     return mm_gdbus_sms_get_class (self);
+}
+
+/**
+ * mm_sms_get_message_reference:
+ * @self: A #MMSms.
+ *
+ * TODO
+ *
+ * Returns: TODO
+ */
+guint
+mm_sms_get_message_reference (MMSms *self)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), 0);
+
+    return mm_gdbus_sms_get_message_reference (self);
+}
+
+gboolean
+mm_sms_get_delivery_report_request (MMSms *self)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), FALSE);
+
+    return mm_gdbus_sms_get_delivery_report_request (self);
+}
+
+/**
+ * mm_sms_get_delivery_state:
+ * @self: A #MMSms.
+ *
+ * TODO
+ *
+ * Returns: TODO
+ */
+guint
+mm_sms_get_delivery_state (MMSms *self)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), MM_SMS_DELIVERY_STATE_UNKNOWN);
+
+    return mm_gdbus_sms_get_delivery_state (self);
 }
 
 /**
@@ -250,7 +393,7 @@ mm_sms_get_class (MMSms *self)
 MMSmsState
 mm_sms_get_state (MMSms *self)
 {
-    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), FALSE);
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), MM_SMS_STATE_UNKNOWN);
 
     return mm_gdbus_sms_get_state (self);
 }
@@ -266,9 +409,25 @@ mm_sms_get_state (MMSms *self)
 MMSmsStorage
 mm_sms_get_storage (MMSms *self)
 {
-    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), FALSE);
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), MM_SMS_STORAGE_UNKNOWN);
 
     return mm_gdbus_sms_get_storage (self);
+}
+
+/**
+ * mm_sms_get_pdu_type:
+ * @self: A #MMSms.
+ *
+ * TODO
+ *
+ * Returns: TODO
+ */
+MMSmsPduType
+mm_sms_get_pdu_type (MMSms *self)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_SMS (self), MM_SMS_PDU_TYPE_UNKNOWN);
+
+    return (MMSmsPduType)mm_gdbus_sms_get_pdu_type (self);
 }
 
 /**
@@ -347,6 +506,7 @@ mm_sms_send_sync (MMSms *self,
 /**
  * mm_sms_store:
  * @self: A #MMSms.
+ * @storage: A #MMSmsStorage specifying where to store the SMS, or #MM_SMS_STORAGE_UNKNOWN to use the default.
  * @cancellable: (allow-none): A #GCancellable or %NULL.
  * @callback: A #GAsyncReadyCallback to call when the request is satisfied or %NULL.
  * @user_data: User data to pass to @callback.
@@ -360,6 +520,7 @@ mm_sms_send_sync (MMSms *self,
  */
 void
 mm_sms_store (MMSms *self,
+              MMSmsStorage storage,
               GCancellable *cancellable,
               GAsyncReadyCallback callback,
               gpointer user_data)
@@ -367,6 +528,7 @@ mm_sms_store (MMSms *self,
     g_return_if_fail (MM_GDBUS_IS_SMS (self));
 
     mm_gdbus_sms_call_store (self,
+                             storage,
                              cancellable,
                              callback,
                              user_data);
@@ -395,6 +557,7 @@ mm_sms_store_finish (MMSms *self,
 /**
  * mm_sms_store_sync:
  * @self: A #MMSms.
+ * @storage: A #MMSmsStorage specifying where to store the SMS, or #MM_SMS_STORAGE_UNKNOWN to use the default.
  * @cancellable: (allow-none): A #GCancellable or %NULL.
  * @error: Return location for error or %NULL.
  *
@@ -407,12 +570,14 @@ mm_sms_store_finish (MMSms *self,
  */
 gboolean
 mm_sms_store_sync (MMSms *self,
+                   MMSmsStorage storage,
                    GCancellable *cancellable,
                    GError **error)
 {
     g_return_val_if_fail (MM_GDBUS_IS_SMS (self), FALSE);
 
     return mm_gdbus_sms_call_store_sync (self,
+                                         storage,
                                          cancellable,
                                          error);
 }

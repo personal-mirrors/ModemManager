@@ -27,7 +27,6 @@
 #include "mm-marshal.h"
 #include "mm-sms-list.h"
 #include "mm-sms.h"
-#include "mm-utils.h"
 #include "mm-log.h"
 
 G_DEFINE_TYPE (MMSmsList, mm_sms_list, G_TYPE_OBJECT);
@@ -52,6 +51,35 @@ struct _MMSmsListPrivate {
     /* List of sms objects */
     GList *list;
 };
+
+/*****************************************************************************/
+
+gboolean
+mm_sms_list_has_local_multipart_reference (MMSmsList *self,
+                                           const gchar *number,
+                                           guint8 reference)
+{
+    GList *l;
+
+    /* No one should look for multipart reference 0, which isn't valid */
+    g_assert (reference != 0);
+
+    for (l = self->priv->list; l; l = g_list_next (l)) {
+        MMSms *sms = MM_SMS (l->data);
+
+        if (mm_sms_is_multipart (sms) &&
+            mm_gdbus_sms_get_pdu_type (MM_GDBUS_SMS (sms)) == MM_SMS_PDU_TYPE_SUBMIT &&
+            mm_sms_get_storage (sms) != MM_SMS_STORAGE_UNKNOWN &&
+            mm_sms_get_multipart_reference (sms) == reference &&
+            g_str_equal (mm_gdbus_sms_get_number (MM_GDBUS_SMS (sms)), number)) {
+            /* Yes, the SMS list has an SMS with the same destination number
+             * and multipart reference */
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
 
 /*****************************************************************************/
 
@@ -278,13 +306,6 @@ take_multipart (MMSmsList *self,
     if (!sms)
         return FALSE;
 
-    /* We do export uncomplete multipart messages, in order to be able to
-     *  request removal of all parts of those multipart SMS that will never
-     *  get completed.
-     * Only the STATE of the SMS object will be valid in the exported DBus
-     *  interface.*/
-    mm_sms_export (sms);
-
     self->priv->list = g_list_prepend (self->priv->list, sms);
     g_signal_emit (self, signals[SIGNAL_ADDED], 0,
                    mm_sms_get_path (sms),
@@ -292,6 +313,25 @@ take_multipart (MMSmsList *self,
                     state == MM_SMS_STATE_RECEIVING));
 
     return TRUE;
+}
+
+gboolean
+mm_sms_list_has_part (MMSmsList *self,
+                      MMSmsStorage storage,
+                      guint index)
+{
+    PartIndexAndStorage ctx;
+
+    if (storage == MM_SMS_STORAGE_UNKNOWN ||
+        index == SMS_PART_INVALID_INDEX)
+        return FALSE;
+
+    ctx.part_index = index;
+    ctx.storage = storage;
+
+    return !!g_list_find_custom (self->priv->list,
+                                 &ctx,
+                                 (GCompareFunc)cmp_sms_by_part_index_and_storage);
 }
 
 gboolean
@@ -307,9 +347,9 @@ mm_sms_list_take_part (MMSmsList *self,
     ctx.storage = storage;
 
     /* Ensure we don't have already taken a part with the same index */
-    if (g_list_find_custom (self->priv->list,
-                            &ctx,
-                            (GCompareFunc)cmp_sms_by_part_index_and_storage)) {
+    if (mm_sms_list_has_part (self,
+                              storage,
+                              mm_sms_part_get_index (part))) {
         g_set_error (error,
                      MM_CORE_ERROR,
                      MM_CORE_ERROR_FAILED,
@@ -320,18 +360,27 @@ mm_sms_list_take_part (MMSmsList *self,
 
     /* Did we just get a part of a multi-part SMS? */
     if (mm_sms_part_should_concat (part)) {
-        mm_dbg ("SMS part at '%s/%u' is from a multipart SMS (reference: '%u', sequence: '%u')",
-                mm_sms_storage_get_string (storage),
-                mm_sms_part_get_index (part),
-                mm_sms_part_get_concat_reference (part),
-                mm_sms_part_get_concat_sequence (part));
+        if (mm_sms_part_get_index (part) != SMS_PART_INVALID_INDEX)
+            mm_dbg ("SMS part at '%s/%u' is from a multipart SMS (reference: '%u', sequence: '%u')",
+                    mm_sms_storage_get_string (storage),
+                    mm_sms_part_get_index (part),
+                    mm_sms_part_get_concat_reference (part),
+                    mm_sms_part_get_concat_sequence (part));
+        else
+            mm_dbg ("SMS part (not stored) is from a multipart SMS (reference: '%u', sequence: '%u')",
+                    mm_sms_part_get_concat_reference (part),
+                    mm_sms_part_get_concat_sequence (part));
+
         return take_multipart (self, part, state, storage, error);
     }
 
     /* Otherwise, we build a whole new single-part MMSms just from this part */
-    mm_dbg ("SMS part at '%s/%u' is from a singlepart SMS",
-            mm_sms_storage_get_string (storage),
-            mm_sms_part_get_index (part));
+    if (mm_sms_part_get_index (part) != SMS_PART_INVALID_INDEX)
+        mm_dbg ("SMS part at '%s/%u' is from a singlepart SMS",
+                mm_sms_storage_get_string (storage),
+                mm_sms_part_get_index (part));
+    else
+        mm_dbg ("SMS part (not stored) is from a singlepart SMS");
     return take_singlepart (self, part, state, storage, error);
 }
 

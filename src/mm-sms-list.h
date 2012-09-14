@@ -61,6 +61,10 @@ MMSmsList *mm_sms_list_new (MMBaseModem *modem);
 GStrv mm_sms_list_get_paths (MMSmsList *self);
 guint mm_sms_list_get_count (MMSmsList *self);
 
+gboolean mm_sms_list_has_part (MMSmsList *self,
+                               MMSmsStorage storage,
+                               guint index);
+
 gboolean mm_sms_list_take_part (MMSmsList *self,
                                 MMSmsPart *part,
                                 MMSmsState state,
@@ -77,5 +81,9 @@ void     mm_sms_list_delete_sms        (MMSmsList *self,
 gboolean mm_sms_list_delete_sms_finish (MMSmsList *self,
                                         GAsyncResult *res,
                                         GError **error);
+
+gboolean mm_sms_list_has_local_multipart_reference (MMSmsList *self,
+                                                    const gchar *number,
+                                                    guint8 reference);
 
 #endif /* MM_SMS_LIST_H */

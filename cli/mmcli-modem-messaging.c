@@ -43,20 +43,30 @@ typedef struct {
 static Context *ctx;
 
 /* Options */
+static gboolean status_flag;
 static gboolean list_flag;
 static gchar *create_str;
+static gchar *create_with_data_str;
 static gchar *delete_str;
 
 static GOptionEntry entries[] = {
-    { "list-sms", 0, 0, G_OPTION_ARG_NONE, &list_flag,
+    { "messaging-status", 0, 0, G_OPTION_ARG_NONE, &status_flag,
+      "Show status of messaging support.",
+      NULL
+    },
+    { "messaging-list-sms", 0, 0, G_OPTION_ARG_NONE, &list_flag,
       "List SMS messages available in a given modem",
       NULL
     },
-    { "create-sms", 0, 0, G_OPTION_ARG_STRING, &create_str,
+    { "messaging-create-sms", 0, 0, G_OPTION_ARG_STRING, &create_str,
       "Create a new SMS in a given modem",
       "[\"key=value,...\"]"
     },
-    { "delete-sms", 0, 0, G_OPTION_ARG_STRING, &delete_str,
+    { "messaging-create-sms-with-data", 0, 0, G_OPTION_ARG_STRING, &create_with_data_str,
+      "Pass the given file as data contents when creating a new SMS",
+      "[File path]"
+    },
+    { "messaging-delete-sms", 0, 0, G_OPTION_ARG_STRING, &delete_str,
       "Delete a SMS from a given modem",
       "[PATH]"
     },
@@ -87,7 +97,8 @@ mmcli_modem_messaging_options_enabled (void)
     if (checked)
         return !!n_actions;
 
-    n_actions = (list_flag +
+    n_actions = (status_flag +
+                 list_flag +
                  !!create_str +
                  !!delete_str);
 
@@ -95,6 +106,15 @@ mmcli_modem_messaging_options_enabled (void)
         g_printerr ("error: too many Messaging actions requested\n");
         exit (EXIT_FAILURE);
     }
+
+    if (create_with_data_str && !create_str) {
+        g_printerr ("error: `--messaging-create-with-data' must be given along "
+                    "with `--messaging-create-sms'\n");
+        exit (EXIT_FAILURE);
+    }
+
+    if (status_flag)
+        mmcli_force_sync_operation ();
 
     checked = TRUE;
     return !!n_actions;
@@ -137,6 +157,75 @@ void
 mmcli_modem_messaging_shutdown (void)
 {
     context_free (ctx);
+}
+
+static MMSmsProperties *
+build_sms_properties_from_input (const gchar *properties_string,
+                                 const gchar *data_file)
+{
+    GError *error = NULL;
+    MMSmsProperties *properties;
+
+    properties = mm_sms_properties_new_from_string (properties_string, &error);
+    if (!properties) {
+        g_printerr ("error: cannot parse properties string: '%s'\n", error->message);
+        exit (EXIT_FAILURE);
+    }
+
+    if (data_file) {
+        gchar *path;
+        GFile *file;
+        gchar *contents;
+        gsize contents_size;
+
+        g_debug ("Reading data from file '%s'", data_file);
+
+        file = g_file_new_for_commandline_arg (data_file);
+        path = g_file_get_path (file);
+        if (!g_file_get_contents (path,
+                                  &contents,
+                                  &contents_size,
+                                  &error)) {
+            g_printerr ("error: cannot read from file '%s': '%s'\n",
+                        data_file, error->message);
+            exit (EXIT_FAILURE);
+        }
+        g_free (path);
+        g_object_unref (file);
+
+        mm_sms_properties_set_data (properties, (guint8 *)contents, contents_size);
+    }
+
+    return properties;
+}
+
+static void
+print_messaging_status (void)
+{
+    MMSmsStorage *supported = NULL;
+    guint supported_len = 0;
+    gchar *supported_str = NULL;
+
+    mm_modem_messaging_get_supported_storages (ctx->modem_messaging,
+                                               &supported,
+                                               &supported_len);
+    if (supported)
+        supported_str = mm_common_build_sms_storages_string (supported, supported_len);
+
+#undef VALIDATE_UNKNOWN
+#define VALIDATE_UNKNOWN(str) (str ? str : "unknown")
+
+    g_print ("\n"
+             "%s\n"
+             "  ----------------------------\n"
+             "  Messaging | supported storages: '%s'\n"
+             "            |    default storage: '%s'\n",
+             mm_modem_messaging_get_path (ctx->modem_messaging),
+             VALIDATE_UNKNOWN (supported_str),
+             VALIDATE_UNKNOWN (mm_sms_storage_get_string (
+                                   mm_modem_messaging_get_default_storage (
+                                       ctx->modem_messaging))));
+    g_free (supported_str);
 }
 
 static void
@@ -258,6 +347,9 @@ get_modem_ready (GObject      *source,
 
     ensure_modem_messaging ();
 
+    if (status_flag)
+        g_assert_not_reached ();
+
     /* Request to list SMS? */
     if (list_flag) {
         g_debug ("Asynchronously listing SMS in modem...");
@@ -270,15 +362,10 @@ get_modem_ready (GObject      *source,
 
     /* Request to create a new SMS? */
     if (create_str) {
-        GError *error = NULL;
         MMSmsProperties *properties;
 
-        properties = mm_sms_properties_new_from_string (create_str, &error);
-        if (!properties) {
-            g_printerr ("Error parsing properties string: '%s'\n", error->message);
-            exit (EXIT_FAILURE);
-        }
-
+        properties = build_sms_properties_from_input (create_str,
+                                                      create_with_data_str);
         g_debug ("Asynchronously creating new SMS in modem...");
         mm_modem_messaging_create (ctx->modem_messaging,
                                    properties,
@@ -337,6 +424,13 @@ mmcli_modem_messaging_run_synchronous (GDBusConnection *connection)
 
     ensure_modem_messaging ();
 
+    /* Request to get location status? */
+    if (status_flag) {
+        g_debug ("Printing messaging status...");
+        print_messaging_status ();
+        return;
+    }
+
     /* Request to list the SMS? */
     if (list_flag) {
         GList *result;
@@ -353,12 +447,8 @@ mmcli_modem_messaging_run_synchronous (GDBusConnection *connection)
         GError *error = NULL;
         MMSmsProperties *properties;
 
-        properties = mm_sms_properties_new_from_string (create_str, &error);
-        if (!properties) {
-            g_printerr ("Error parsing properties string: '%s'\n", error->message);
-            exit (EXIT_FAILURE);
-        }
-
+        properties = build_sms_properties_from_input (create_str,
+                                                      create_with_data_str);
         g_debug ("Synchronously creating new SMS in modem...");
         sms = mm_modem_messaging_create_sync (ctx->modem_messaging,
                                               properties,

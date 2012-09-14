@@ -30,8 +30,15 @@
         Store:
 
         Store the message in the device if not already done.
+
+        This method requires a <link linkend="MMSmsStorage">MMSmsStorage</link>
+        value, describing the storage where this message is to be kept; or
+        <link linkend="MM-SMS-STORAGE-UNKNOWN:CAPS"><constant>MM_SMS_STORAGE_UNKNOWN</constant></link>
+        if the default storage should be used.
     -->
-    <method name="Store" />
+    <method name="Store">
+      <arg name="storage" type="u" direction="in" />
+    </method>
 
     <!--
         State:
@@ -42,21 +49,31 @@
     <property name="State" type="u" access="read" />
 
     <!--
+        PduType:
+
+        A <link linkend="MMSmsPduType">MMSmsPduType</link> value,
+        describing the type of PDUs used in the SMS message.
+    -->
+    <property name="PduType" type="u" access="read" />
+
+    <!--
         Number:
 
         Number to which the message is addressed.
     -->
-    <property name="Number" type="s" access="readwrite" />
+    <property name="Number" type="s" access="read" />
 
     <!--
         Text:
 
-        Message text.
+        Message text, in UTF-8.
 
         When sending, if the text is larger than the limit of the technology or
         modem, the message will be broken into multiple parts or messages.
+
+        Note that Text and Data are never given at the same time.
     -->
-    <property name="Text" type="s" access="readwrite" />
+    <property name="Text" type="s" access="read" />
 
     <!--
         Data:
@@ -65,8 +82,10 @@
 
         When sending, if the data is larger than the limit of the technology or
         modem, the message will be broken into multiple parts or messages.
+
+        Note that Text and Data are never given at the same time.
     -->
-    <property name="Data" type="ay" access="readwrite" />
+    <property name="Data" type="ay" access="read" />
 
     <!--
         SMSC:
@@ -75,7 +94,7 @@
 
         Always empty for 3GPP2/CDMA.
     -->
-    <property name="SMSC" type="s" access="readwrite" />
+    <property name="SMSC" type="s" access="read" />
 
     <!--
         Validity:
@@ -84,7 +103,7 @@
 
         Always 0 for 3GPP2/CDMA.
     -->
-    <property name="Validity" type="u" access="readwrite" />
+    <property name="Validity" type="u" access="read" />
 
     <!--
         Class:
@@ -93,16 +112,61 @@
 
         Always 0 for 3GPP2/CDMA.
     -->
-    <property name="Class" type="u" access="readwrite" />
+    <property name="Class" type="u" access="read" />
+
+    <!--
+        DeliveryReportRequest:
+
+        #TRUE if delivery report request is required, #FALSE otherwise.
+    -->
+    <property name="DeliveryReportRequest" type="b" access="read" />
+
+    <!--
+        MessageReference:
+
+        Message Reference of the last PDU sent/received within this SMS.
+
+        If the PDU type is
+        <link linkend="MM-SMS-PDU-TYPE-STATUS-REPORT:CAPS"><constant>MM_SMS_PDU_TYPE_STATUS_REPORT</constant></link>,
+        this field identifies the Message Reference of the PDU associated to the status report.
+    -->
+    <property name="MessageReference" type="u" access="read" />
 
     <!--
         Timestamp:
 
-        Time message was received or was sent, in
+        Time when the first PDU of the SMS message arrived the SMSC, in
         <ulink url="http://en.wikipedia.org/wiki/ISO_8601">ISO8601</ulink>
         format.
+        This field is only applicable if the PDU type is
+        <link linkend="MM-SMS-PDU-TYPE-DELIVER:CAPS"><constant>MM_SMS_PDU_TYPE_DELIVER</constant></link>.
+        or
+        <link linkend="MM-SMS-PDU-TYPE-STATUS-REPORT:CAPS"><constant>MM_SMS_PDU_TYPE_STATUS_REPORT</constant></link>.
     -->
     <property name="Timestamp" type="s" access="read" />
+
+    <!--
+        DischargeTimestamp:
+
+        Time when the first PDU of the SMS message left the SMSC, in
+        <ulink url="http://en.wikipedia.org/wiki/ISO_8601">ISO8601</ulink>
+        format.
+
+        This field is only applicable if the PDU type is
+        <link linkend="MM-SMS-PDU-TYPE-STATUS-REPORT:CAPS"><constant>MM_SMS_PDU_TYPE_STATUS_REPORT</constant></link>.
+    -->
+    <property name="DischargeTimestamp" type="s" access="read" />
+
+    <!--
+        DeliveryState:
+
+        A <link linkend="MMSmsDeliveryState">MMSmsDeliveryState</link> value,
+        describing the state of the delivery reported in the Status Report message.
+
+        This field is only applicable if the PDU type is
+        <link linkend="MM-SMS-PDU-TYPE-STATUS-REPORT:CAPS"><constant>MM_SMS_PDU_TYPE_STATUS_REPORT</constant></link>.
+    -->
+    <property name="DeliveryState" type="u" access="read" />
 
     <!--
         Storage:

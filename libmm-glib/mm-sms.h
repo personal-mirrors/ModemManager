@@ -61,6 +61,7 @@ gboolean mm_sms_send_sync   (MMSms *self,
                              GError **error);
 
 void     mm_sms_store        (MMSms *self,
+                              MMSmsStorage storage,
                               GCancellable *cancellable,
                               GAsyncReadyCallback callback,
                               gpointer user_data);
@@ -68,21 +69,32 @@ gboolean mm_sms_store_finish (MMSms *self,
                               GAsyncResult *res,
                               GError **error);
 gboolean mm_sms_store_sync   (MMSms *self,
+                              MMSmsStorage storage,
                               GCancellable *cancellable,
                               GError **error);
 
-const gchar *mm_sms_get_text      (MMSms *self);
-gchar       *mm_sms_dup_text      (MMSms *self);
-const gchar *mm_sms_get_number    (MMSms *self);
-gchar       *mm_sms_dup_number    (MMSms *self);
-const gchar *mm_sms_get_smsc      (MMSms *self);
-gchar       *mm_sms_dup_smsc      (MMSms *self);
-const gchar *mm_sms_get_timestamp (MMSms *self);
-gchar       *mm_sms_dup_timestamp (MMSms *self);
-guint        mm_sms_get_validity  (MMSms *self);
-guint        mm_sms_get_class     (MMSms *self);
-MMSmsState   mm_sms_get_state     (MMSms *self);
-MMSmsStorage mm_sms_get_storage   (MMSms *self);
+const gchar  *mm_sms_get_text                    (MMSms *self);
+gchar        *mm_sms_dup_text                    (MMSms *self);
+const guint8 *mm_sms_get_data                    (MMSms *self,
+                                                  gsize *data_len);
+guint8       *mm_sms_dup_data                    (MMSms *self,
+                                                  gsize *data_len);
+const gchar  *mm_sms_get_number                  (MMSms *self);
+gchar        *mm_sms_dup_number                  (MMSms *self);
+const gchar  *mm_sms_get_smsc                    (MMSms *self);
+gchar        *mm_sms_dup_smsc                    (MMSms *self);
+const gchar  *mm_sms_get_timestamp               (MMSms *self);
+gchar        *mm_sms_dup_timestamp               (MMSms *self);
+const gchar  *mm_sms_get_discharge_timestamp     (MMSms *self);
+gchar        *mm_sms_dup_discharge_timestamp     (MMSms *self);
+guint         mm_sms_get_validity                (MMSms *self);
+guint         mm_sms_get_class                   (MMSms *self);
+guint         mm_sms_get_message_reference       (MMSms *self);
+gboolean      mm_sms_get_delivery_report_request (MMSms *self);
+guint         mm_sms_get_delivery_state          (MMSms *self);
+MMSmsState    mm_sms_get_state                   (MMSms *self);
+MMSmsStorage  mm_sms_get_storage                 (MMSms *self);
+MMSmsPduType  mm_sms_get_pdu_type                (MMSms *self);
 
 G_END_DECLS
 

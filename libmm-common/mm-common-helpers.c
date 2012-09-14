@@ -10,6 +10,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details:
  *
+ * Copyright (C) 2010 - 2012 Red Hat, Inc.
  * Copyright (C) 2011 - 2012 Google, Inc.
  */
 
@@ -70,6 +71,67 @@ mm_common_build_sms_storages_string (const MMSmsStorage *storages,
     }
 
     return g_string_free (str, FALSE);
+}
+
+GArray *
+mm_common_sms_storages_variant_to_garray (GVariant *variant)
+{
+    GArray *array = NULL;
+
+    if (variant) {
+        GVariantIter iter;
+        guint n;
+
+        g_variant_iter_init (&iter, variant);
+        n = g_variant_iter_n_children (&iter);
+
+        if (n > 0) {
+            guint32 storage;
+
+            array = g_array_sized_new (FALSE, FALSE, sizeof (MMSmsStorage), n);
+            while (g_variant_iter_loop (&iter, "u", &storage))
+                g_array_append_val (array, storage);
+        }
+    }
+
+    return array;
+}
+
+MMSmsStorage *
+mm_common_sms_storages_variant_to_array (GVariant *variant,
+                                         guint *n_storages)
+{
+    GArray *array;
+
+    array = mm_common_sms_storages_variant_to_garray (variant);
+    if (n_storages)
+        *n_storages = array->len;
+    return (MMSmsStorage *) g_array_free (array, FALSE);
+}
+
+GVariant *
+mm_common_sms_storages_array_to_variant (const MMSmsStorage *storages,
+                                         guint n_storages)
+{
+    GVariantBuilder builder;
+    guint i;
+
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("au"));
+
+    for (i = 0; i < n_storages; i++)
+        g_variant_builder_add_value (&builder,
+                                     g_variant_new_uint32 ((guint32)storages[i]));
+    return g_variant_builder_end (&builder);
+}
+
+GVariant *
+mm_common_sms_storages_garray_to_variant (GArray *array)
+{
+    if (array)
+        return mm_common_sms_storages_array_to_variant ((const MMSmsStorage *)array->data,
+                                                        array->len);
+
+    return mm_common_sms_storages_array_to_variant (NULL, 0);
 }
 
 MMModemMode
@@ -320,7 +382,6 @@ mm_common_get_rm_protocol_from_string (const gchar *str,
 
     enum_class = G_ENUM_CLASS (g_type_class_ref (MM_TYPE_MODEM_CDMA_RM_PROTOCOL));
 
-
     for (i = 0; enum_class->values[i].value_nick; i++) {
         if (!g_ascii_strcasecmp (str, enum_class->values[i].value_nick))
             return enum_class->values[i].value;
@@ -354,6 +415,28 @@ mm_common_get_ip_type_from_string (const gchar *str,
                  "Couldn't match '%s' with a valid MMBearerIpFamily value",
                  str);
     return MM_BEARER_IP_FAMILY_UNKNOWN;
+}
+
+MMSmsStorage
+mm_common_get_sms_storage_from_string (const gchar *str,
+                                       GError **error)
+{
+	GEnumClass *enum_class;
+    guint i;
+
+    enum_class = G_ENUM_CLASS (g_type_class_ref (MM_TYPE_SMS_STORAGE));
+
+    for (i = 0; enum_class->values[i].value_nick; i++) {
+        if (!g_ascii_strcasecmp (str, enum_class->values[i].value_nick))
+            return enum_class->values[i].value;
+    }
+
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_INVALID_ARGS,
+                 "Couldn't match '%s' with a valid MMSmsStorage value",
+                 str);
+    return MM_SMS_STORAGE_UNKNOWN;
 }
 
 GVariant *
@@ -678,4 +761,141 @@ mm_get_string_unquoted_from_match_info (GMatchInfo *match_info,
     }
 
     return str;
+}
+
+/*****************************************************************************/
+
+const gchar *
+mm_sms_delivery_state_get_string_extended (guint delivery_state)
+{
+    if (delivery_state > 0x02 && delivery_state < 0x20) {
+        if (delivery_state < 0x10)
+            return "completed-reason-reserved";
+        else
+            return "completed-sc-specific-reason";
+    }
+
+    if (delivery_state > 0x25 && delivery_state < 0x40) {
+        if (delivery_state < 0x30)
+            return "temporary-error-reason-reserved";
+        else
+            return "temporary-error-sc-specific-reason";
+    }
+
+    if (delivery_state > 0x49 && delivery_state < 0x60) {
+        if (delivery_state < 0x50)
+            return "error-reason-reserved";
+        else
+            return "error-sc-specific-reason";
+    }
+
+    if (delivery_state > 0x65 && delivery_state < 0x80) {
+        if (delivery_state < 0x70)
+            return "temporary-fatal-error-reason-reserved";
+        else
+            return "temporary-fatal-error-sc-specific-reason";
+    }
+
+    if (delivery_state >= 0x80 && delivery_state < 0x100)
+        return "unknown-reason-reserved";
+
+    if (delivery_state >= 0x100)
+        return "unknown";
+
+    /* Otherwise, use the MMSmsDeliveryState enum as we can match the known
+     * value */
+    return mm_sms_delivery_state_get_string ((MMSmsDeliveryState)delivery_state);
+}
+
+/*****************************************************************************/
+
+/* From hostap, Copyright (c) 2002-2005, Jouni Malinen <jkmaline@cc.hut.fi> */
+
+static gint
+hex2num (gchar c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+gint
+mm_utils_hex2byte (const gchar *hex)
+{
+	gint a, b;
+
+	a = hex2num (*hex++);
+	if (a < 0)
+		return -1;
+	b = hex2num (*hex++);
+	if (b < 0)
+		return -1;
+	return (a << 4) | b;
+}
+
+gchar *
+mm_utils_hexstr2bin (const gchar *hex, gsize *out_len)
+{
+	const gchar *ipos = hex;
+	gchar *buf = NULL;
+	gsize i;
+	gint a;
+	gchar *opos;
+    gsize len;
+
+    len = strlen (hex);
+
+	/* Length must be a multiple of 2 */
+    g_return_val_if_fail ((len % 2) == 0, NULL);
+
+	opos = buf = g_malloc0 ((len / 2) + 1);
+	for (i = 0; i < len; i += 2) {
+		a = mm_utils_hex2byte (ipos);
+		if (a < 0) {
+			g_free (buf);
+			return NULL;
+		}
+		*opos++ = a;
+		ipos += 2;
+	}
+    *out_len = len / 2;
+	return buf;
+}
+
+/* End from hostap */
+
+gchar *
+mm_utils_bin2hexstr (const guint8 *bin, gsize len)
+{
+    GString *ret;
+    gsize i;
+
+    g_return_val_if_fail (bin != NULL, NULL);
+
+    ret = g_string_sized_new (len * 2 + 1);
+    for (i = 0; i < len; i++)
+        g_string_append_printf (ret, "%.2X", bin[i]);
+    return g_string_free (ret, FALSE);
+}
+
+gboolean
+mm_utils_check_for_single_value (guint32 value)
+{
+    gboolean found = FALSE;
+    guint32 i;
+
+    for (i = 1; i <= 32; i++) {
+        if (value & 0x1) {
+            if (found)
+                return FALSE;  /* More than one bit set */
+            found = TRUE;
+        }
+        value >>= 1;
+    }
+
+    return TRUE;
 }
