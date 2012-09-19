@@ -33,6 +33,7 @@
 #include "mm-iface-modem-3gpp-ussd.h"
 #include "mm-iface-modem-cdma.h"
 #include "mm-iface-modem-messaging.h"
+#include "mm-iface-modem-location.h"
 #include "mm-sim-qmi.h"
 #include "mm-bearer-qmi.h"
 #include "mm-sms-qmi.h"
@@ -42,13 +43,17 @@ static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
 static void iface_modem_3gpp_ussd_init (MMIfaceModem3gppUssd *iface);
 static void iface_modem_cdma_init (MMIfaceModemCdma *iface);
 static void iface_modem_messaging_init (MMIfaceModemMessaging *iface);
+static void iface_modem_location_init (MMIfaceModemLocation *iface);
+
+static MMIfaceModemLocation *iface_modem_location_parent;
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemQmi, mm_broadband_modem_qmi, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP_USSD, iface_modem_3gpp_ussd_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_CDMA, iface_modem_cdma_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init));
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_LOCATION, iface_modem_location_init))
 
 struct _MMBroadbandModemQmiPrivate {
     /* Cached device IDs, retrieved by the modem interface when loading device
@@ -79,9 +84,33 @@ struct _MMBroadbandModemQmiPrivate {
     gboolean messaging_unsolicited_events_enabled;
     gboolean messaging_unsolicited_events_setup;
     guint messaging_event_report_indication_id;
+
+    /* Location helpers */
+    MMModemLocationSource enabled_sources;
+    guint location_event_report_indication_id;
 };
 
 /*****************************************************************************/
+
+static QmiClient *
+peek_qmi_client (MMBroadbandModemQmi *self,
+                 QmiService service,
+                 GError **error)
+{
+    QmiClient *client;
+
+    client = mm_qmi_port_peek_client (mm_base_modem_peek_port_qmi (MM_BASE_MODEM (self)),
+                                      service,
+                                      MM_QMI_PORT_FLAG_DEFAULT);
+    if (!client)
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Couldn't peek client for service '%s'",
+                     qmi_service_get_string (service));
+
+    return client;
+}
 
 static gboolean
 ensure_qmi_client (MMBroadbandModemQmi *self,
@@ -90,19 +119,16 @@ ensure_qmi_client (MMBroadbandModemQmi *self,
                    GAsyncReadyCallback callback,
                    gpointer user_data)
 {
+    GError *error = NULL;
     QmiClient *client;
 
-    client = mm_qmi_port_peek_client (mm_base_modem_peek_port_qmi (MM_BASE_MODEM (self)),
-                                      service,
-                                      MM_QMI_PORT_FLAG_DEFAULT);
+    client = peek_qmi_client (self, service, &error);
     if (!client) {
-        g_simple_async_report_error_in_idle (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             MM_CORE_ERROR,
-                                             MM_CORE_ERROR_FAILED,
-                                             "Couldn't peek client for service '%s'",
-                                             qmi_service_get_string (service));
+        g_simple_async_report_take_gerror_in_idle (
+            G_OBJECT (self),
+            callback,
+            user_data,
+            error);
         return FALSE;
     }
 
@@ -1788,6 +1814,7 @@ common_power_up_down (MMIfaceModem *self,
                                        NULL,
                                        (GAsyncReadyCallback)dms_set_operating_mode_ready,
                                        result);
+    qmi_message_dms_set_operating_mode_input_unref (input);
 }
 
 static void
@@ -5566,6 +5593,458 @@ messaging_create_sms (MMIfaceModemMessaging *self)
 }
 
 /*****************************************************************************/
+/* Location capabilities loading (Location interface) */
+
+static MMModemLocationSource
+location_load_capabilities_finish (MMIfaceModemLocation *self,
+                                   GAsyncResult *res,
+                                   GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return MM_MODEM_LOCATION_SOURCE_NONE;
+
+    return (MMModemLocationSource) GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
+                                                         G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static void
+parent_load_capabilities_ready (MMIfaceModemLocation *self,
+                                GAsyncResult *res,
+                                GSimpleAsyncResult *simple)
+{
+    MMModemLocationSource sources;
+    GError *error = NULL;
+
+    sources = iface_modem_location_parent->load_capabilities_finish (self, res, &error);
+    if (error) {
+        g_simple_async_result_take_error (simple, error);
+        g_simple_async_result_complete (simple);
+        g_object_unref (simple);
+        return;
+    }
+
+    /* Now our own check.
+     * If we have support for the PDS client, GPS location is supported */
+    if (mm_qmi_port_peek_client (mm_base_modem_peek_port_qmi (MM_BASE_MODEM (self)),
+                                 QMI_SERVICE_PDS,
+                                 MM_QMI_PORT_FLAG_DEFAULT))
+        sources |= (MM_MODEM_LOCATION_SOURCE_GPS_NMEA | MM_MODEM_LOCATION_SOURCE_GPS_RAW);
+
+    /* So we're done, complete */
+    g_simple_async_result_set_op_res_gpointer (simple,
+                                               GUINT_TO_POINTER (sources),
+                                               NULL);
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+location_load_capabilities (MMIfaceModemLocation *self,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        location_load_capabilities);
+
+    /* Chain up parent's setup */
+    iface_modem_location_parent->load_capabilities (
+        self,
+        (GAsyncReadyCallback)parent_load_capabilities_ready,
+        result);
+}
+
+/*****************************************************************************/
+/* Disable location gathering (Location interface) */
+
+typedef struct {
+    MMBroadbandModemQmi *self;
+    QmiClientPds *client;
+    GSimpleAsyncResult *result;
+} DisableLocationGatheringContext;
+
+static void
+disable_location_gathering_context_complete_and_free (DisableLocationGatheringContext *ctx)
+{
+    g_simple_async_result_complete_in_idle (ctx->result);
+    g_object_unref (ctx->result);
+    if (ctx->client)
+        g_object_unref (ctx->client);
+    g_object_unref (ctx->self);
+    g_slice_free (DisableLocationGatheringContext, ctx);
+}
+
+static gboolean
+disable_location_gathering_finish (MMIfaceModemLocation *self,
+                                   GAsyncResult *res,
+                                   GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+gps_service_state_stop_ready (QmiClientPds *client,
+                              GAsyncResult *res,
+                              DisableLocationGatheringContext *ctx)
+{
+    QmiMessagePdsSetGpsServiceStateOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_pds_set_gps_service_state_finish (client, res, &error);
+    if (!output) {
+        g_prefix_error (&error, "QMI operation failed: ");
+        g_simple_async_result_take_error (ctx->result, error);
+        disable_location_gathering_context_complete_and_free (ctx);
+        return;
+    }
+
+    if (!qmi_message_pds_set_gps_service_state_output_get_result (output, &error)) {
+        if (!g_error_matches (error,
+                              QMI_PROTOCOL_ERROR,
+                              QMI_PROTOCOL_ERROR_NO_EFFECT)) {
+            g_prefix_error (&error, "Couldn't set GPS service state: ");
+            g_simple_async_result_take_error (ctx->result, error);
+            disable_location_gathering_context_complete_and_free (ctx);
+            qmi_message_pds_set_gps_service_state_output_unref (output);
+            return;
+        }
+
+        g_error_free (error);
+    }
+
+    qmi_message_pds_set_gps_service_state_output_unref (output);
+
+    mm_dbg ("Removing location event report indication handling");
+    g_assert (ctx->self->priv->location_event_report_indication_id != 0);
+    g_signal_handler_disconnect (client, ctx->self->priv->location_event_report_indication_id);
+    ctx->self->priv->location_event_report_indication_id = 0;
+
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    disable_location_gathering_context_complete_and_free (ctx);
+}
+
+static void
+disable_location_gathering (MMIfaceModemLocation *self,
+                            MMModemLocationSource source,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
+{
+    DisableLocationGatheringContext *ctx;
+    QmiClient *client = NULL;
+    gboolean stop_gps = FALSE;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_PDS, &client,
+                            callback, user_data))
+        return;
+
+    ctx = g_slice_new0 (DisableLocationGatheringContext);
+    ctx->self = g_object_ref (self);
+    ctx->client = g_object_ref (client);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             disable_location_gathering);
+
+    /* Only stop GPS engine if no GPS-related sources enabled */
+    if (source & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                  MM_MODEM_LOCATION_SOURCE_GPS_RAW)) {
+        ctx->self->priv->enabled_sources &= ~source;
+
+        if (!(ctx->self->priv->enabled_sources & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                                                  MM_MODEM_LOCATION_SOURCE_GPS_RAW)))
+            stop_gps = TRUE;
+    }
+
+    if (stop_gps) {
+        QmiMessagePdsSetGpsServiceStateInput *input;
+
+        input = qmi_message_pds_set_gps_service_state_input_new ();
+        qmi_message_pds_set_gps_service_state_input_set_state (input, FALSE, NULL);
+        qmi_client_pds_set_gps_service_state (
+            ctx->client,
+            input,
+            10,
+            NULL, /* cancellable */
+            (GAsyncReadyCallback)gps_service_state_stop_ready,
+            ctx);
+        qmi_message_pds_set_gps_service_state_input_unref (input);
+        return;
+    }
+
+    /* For any other location (e.g. 3GPP), or if still some GPS needed, just return */
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    disable_location_gathering_context_complete_and_free (ctx);
+}
+
+/*****************************************************************************/
+/* Enable location gathering (Location interface) */
+
+static void
+location_event_report_indication_cb (QmiClientPds *client,
+                                     QmiIndicationPdsEventReportOutput *output,
+                                     MMBroadbandModemQmi *self)
+{
+    QmiPdsPositionSessionStatus session_status;
+    const gchar *nmea;
+
+    if (qmi_indication_pds_event_report_output_get_position_session_status (
+            output,
+            &session_status,
+            NULL)) {
+        mm_dbg ("[GPS] session status changed: '%s'",
+                qmi_pds_position_session_status_get_string (session_status));
+    }
+
+    if (qmi_indication_pds_event_report_output_get_nmea_position (
+            output,
+            &nmea,
+            NULL)) {
+        mm_dbg ("[NMEA] %s", nmea);
+        mm_iface_modem_location_gps_update (MM_IFACE_MODEM_LOCATION (self), nmea);
+    }
+}
+
+typedef struct {
+    MMBroadbandModemQmi *self;
+    QmiClientPds *client;
+    GSimpleAsyncResult *result;
+    MMModemLocationSource source;
+} EnableLocationGatheringContext;
+
+static void
+enable_location_gathering_context_complete_and_free (EnableLocationGatheringContext *ctx)
+{
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
+    if (ctx->client)
+        g_object_unref (ctx->client);
+    g_object_unref (ctx->self);
+    g_slice_free (EnableLocationGatheringContext, ctx);
+}
+
+static gboolean
+enable_location_gathering_finish (MMIfaceModemLocation *self,
+                                  GAsyncResult *res,
+                                  GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+ser_location_ready (QmiClientPds *client,
+                    GAsyncResult *res,
+                    EnableLocationGatheringContext *ctx)
+{
+    QmiMessagePdsSetEventReportOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_pds_set_event_report_finish (client, res, &error);
+    if (!output) {
+        g_prefix_error (&error, "QMI operation failed: ");
+        g_simple_async_result_take_error (ctx->result, error);
+        enable_location_gathering_context_complete_and_free (ctx);
+        return;
+    }
+
+    if (!qmi_message_pds_set_event_report_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't set event report: ");
+        g_simple_async_result_take_error (ctx->result, error);
+        enable_location_gathering_context_complete_and_free (ctx);
+        qmi_message_pds_set_event_report_output_unref (output);
+        return;
+    }
+
+    qmi_message_pds_set_event_report_output_unref (output);
+
+    mm_dbg ("Adding location event report indication handling");
+    g_assert (ctx->self->priv->location_event_report_indication_id == 0);
+    ctx->self->priv->location_event_report_indication_id =
+        g_signal_connect (client,
+                          "event-report",
+                          G_CALLBACK (location_event_report_indication_cb),
+                          ctx->self);
+
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    enable_location_gathering_context_complete_and_free (ctx);
+}
+
+static void
+auto_tracking_state_start_ready (QmiClientPds *client,
+                                 GAsyncResult *res,
+                                 EnableLocationGatheringContext *ctx)
+{
+    QmiMessagePdsSetEventReportInput *input;
+    QmiMessagePdsSetAutoTrackingStateOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_pds_set_auto_tracking_state_finish (client, res, &error);
+    if (!output) {
+        g_prefix_error (&error, "QMI operation failed: ");
+        g_simple_async_result_take_error (ctx->result, error);
+        enable_location_gathering_context_complete_and_free (ctx);
+        return;
+    }
+
+    if (!qmi_message_pds_set_auto_tracking_state_output_get_result (output, &error)) {
+        if (!g_error_matches (error,
+                              QMI_PROTOCOL_ERROR,
+                              QMI_PROTOCOL_ERROR_NO_EFFECT)) {
+            g_prefix_error (&error, "Couldn't set auto-tracking state: ");
+            g_simple_async_result_take_error (ctx->result, error);
+            enable_location_gathering_context_complete_and_free (ctx);
+            qmi_message_pds_set_auto_tracking_state_output_unref (output);
+            return;
+        }
+        g_error_free (error);
+    }
+
+    qmi_message_pds_set_auto_tracking_state_output_unref (output);
+
+    /* Only gather standard NMEA traces */
+    input = qmi_message_pds_set_event_report_input_new ();
+    qmi_message_pds_set_event_report_input_set_nmea_position_reporting (input, TRUE, NULL);
+    qmi_client_pds_set_event_report (
+        ctx->client,
+        input,
+        5,
+        NULL,
+        (GAsyncReadyCallback)ser_location_ready,
+        ctx);
+    qmi_message_pds_set_event_report_input_unref (input);
+}
+
+static void
+gps_service_state_start_ready (QmiClientPds *client,
+                               GAsyncResult *res,
+                               EnableLocationGatheringContext *ctx)
+{
+    QmiMessagePdsSetAutoTrackingStateInput *input;
+    QmiMessagePdsSetGpsServiceStateOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_pds_set_gps_service_state_finish (client, res, &error);
+    if (!output) {
+        g_prefix_error (&error, "QMI operation failed: ");
+        g_simple_async_result_take_error (ctx->result, error);
+        enable_location_gathering_context_complete_and_free (ctx);
+        return;
+    }
+
+    if (!qmi_message_pds_set_gps_service_state_output_get_result (output, &error)) {
+        if (!g_error_matches (error,
+                              QMI_PROTOCOL_ERROR,
+                              QMI_PROTOCOL_ERROR_NO_EFFECT)) {
+            g_prefix_error (&error, "Couldn't set GPS service state: ");
+            g_simple_async_result_take_error (ctx->result, error);
+            enable_location_gathering_context_complete_and_free (ctx);
+            qmi_message_pds_set_gps_service_state_output_unref (output);
+            return;
+        }
+        g_error_free (error);
+    }
+
+    qmi_message_pds_set_gps_service_state_output_unref (output);
+
+    /* Enable auto-tracking for a continuous fix */
+    input = qmi_message_pds_set_auto_tracking_state_input_new ();
+    qmi_message_pds_set_auto_tracking_state_input_set_state (input, TRUE, NULL);
+    qmi_client_pds_set_auto_tracking_state (
+        ctx->client,
+        input,
+        10,
+        NULL, /* cancellable */
+        (GAsyncReadyCallback)auto_tracking_state_start_ready,
+        ctx);
+    qmi_message_pds_set_auto_tracking_state_input_unref (input);
+}
+
+static void
+parent_enable_location_gathering_ready (MMIfaceModemLocation *self,
+                                        GAsyncResult *res,
+                                        EnableLocationGatheringContext *ctx)
+{
+    gboolean start_gps = FALSE;
+    GError *error = NULL;
+
+    if (!iface_modem_location_parent->enable_location_gathering_finish (self, res, &error)) {
+        g_simple_async_result_take_error (ctx->result, error);
+        enable_location_gathering_context_complete_and_free (ctx);
+        return;
+    }
+
+    /* Now our own enabling */
+
+    /* NMEA and RAW are both enabled in the same way */
+    if (ctx->source & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                       MM_MODEM_LOCATION_SOURCE_GPS_RAW)) {
+        /* Only start GPS engine if not done already */
+        if (!(ctx->self->priv->enabled_sources & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                                                  MM_MODEM_LOCATION_SOURCE_GPS_RAW)))
+            start_gps = TRUE;
+        ctx->self->priv->enabled_sources |= ctx->source;
+    }
+
+    if (start_gps) {
+        QmiMessagePdsSetGpsServiceStateInput *input;
+        QmiClient *client;
+
+        client = peek_qmi_client (ctx->self, QMI_SERVICE_PDS, &error);
+        if (!client) {
+            g_simple_async_result_take_error (ctx->result, error);
+            enable_location_gathering_context_complete_and_free (ctx);
+            return;
+        }
+
+        /* Keep a ref around */
+        ctx->client = g_object_ref (client);
+
+        input = qmi_message_pds_set_gps_service_state_input_new ();
+        qmi_message_pds_set_gps_service_state_input_set_state (input, TRUE, NULL);
+        qmi_client_pds_set_gps_service_state (
+            ctx->client,
+            input,
+            10,
+            NULL, /* cancellable */
+            (GAsyncReadyCallback)gps_service_state_start_ready,
+            ctx);
+        qmi_message_pds_set_gps_service_state_input_unref (input);
+        return;
+    }
+
+    /* For any other location (e.g. 3GPP), or if GPS already running just return */
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    enable_location_gathering_context_complete_and_free (ctx);
+}
+
+static void
+enable_location_gathering (MMIfaceModemLocation *self,
+                           MMModemLocationSource source,
+                           GAsyncReadyCallback callback,
+                           gpointer user_data)
+{
+    EnableLocationGatheringContext *ctx;
+
+    ctx = g_slice_new0 (EnableLocationGatheringContext);
+    ctx->self = g_object_ref (self);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             enable_location_gathering);
+    ctx->source = source;
+
+    /* Chain up parent's gathering enable */
+    iface_modem_location_parent->enable_location_gathering (
+        self,
+        source,
+        (GAsyncReadyCallback)parent_enable_location_gathering_ready,
+        ctx);
+}
+
+/*****************************************************************************/
 /* First initialization step */
 
 typedef struct {
@@ -5709,7 +6188,8 @@ initialization_started (MMBroadbandModem *self,
     ctx->services[0] = QMI_SERVICE_DMS;
     ctx->services[1] = QMI_SERVICE_NAS;
     ctx->services[2] = QMI_SERVICE_WMS;
-    ctx->services[3] = QMI_SERVICE_UNKNOWN;
+    ctx->services[3] = QMI_SERVICE_PDS;
+    ctx->services[4] = QMI_SERVICE_UNKNOWN;
 
     /* Now open our QMI port */
     mm_qmi_port_open (ctx->qmi,
@@ -5927,6 +6407,19 @@ iface_modem_messaging_init (MMIfaceModemMessaging *iface)
     iface->disable_unsolicited_events = messaging_disable_unsolicited_events;
     iface->disable_unsolicited_events_finish = messaging_enable_disable_unsolicited_events_finish;
     iface->create_sms = messaging_create_sms;
+}
+
+static void
+iface_modem_location_init (MMIfaceModemLocation *iface)
+{
+    iface_modem_location_parent = g_type_interface_peek_parent (iface);
+
+    iface->load_capabilities = location_load_capabilities;
+    iface->load_capabilities_finish = location_load_capabilities_finish;
+    iface->enable_location_gathering = enable_location_gathering;
+    iface->enable_location_gathering_finish = enable_location_gathering_finish;
+    iface->disable_location_gathering = disable_location_gathering;
+    iface->disable_location_gathering_finish = disable_location_gathering_finish;
 }
 
 static void
