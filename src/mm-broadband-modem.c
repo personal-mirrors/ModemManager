@@ -2295,7 +2295,7 @@ static const MMBaseModemAtCommand modem_init_sequence[] = {
      *   after the Z command because such commands may be ignored.
      * So run ATZ alone.
      */
-    { "Z", 3, FALSE, mm_base_modem_response_processor_no_result_continue },
+    { "Z", 6, FALSE, mm_base_modem_response_processor_no_result_continue },
 
     /* Ensure echo is off after the init command */
     { "E0 V1",      3, FALSE, NULL },
@@ -6883,11 +6883,15 @@ disabling_step (DisablingContext *ctx)
         ctx->step++;
 
     case DISABLING_STEP_DISCONNECT_BEARERS:
-        mm_bearer_list_disconnect_all_bearers (
-            ctx->self->priv->modem_bearer_list,
-            (GAsyncReadyCallback)bearer_list_disconnect_all_bearers_ready,
-            ctx);
-        return;
+        if (ctx->self->priv->modem_bearer_list) {
+            mm_bearer_list_disconnect_all_bearers (
+                ctx->self->priv->modem_bearer_list,
+                (GAsyncReadyCallback)bearer_list_disconnect_all_bearers_ready,
+                ctx);
+            return;
+        }
+        /* Fall down to next step */
+        ctx->step++;
 
     case DISABLING_STEP_IFACE_SIMPLE:
         /* Fall down to next step */
