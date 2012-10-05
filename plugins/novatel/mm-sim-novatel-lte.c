@@ -21,8 +21,7 @@
 #include <ctype.h>
 
 #include <ModemManager.h>
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
+#include <libmm-common.h>
 #include "mm-log.h"
 #include "mm-modem-helpers.h"
 #include "mm-base-modem-at.h"

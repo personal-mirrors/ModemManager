@@ -1,2 +1,2 @@
 
-SUBDIRS = api libmm-glib
+SUBDIRS = api

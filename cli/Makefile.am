@@ -5,9 +5,9 @@ mmcli_CPPFLAGS = \
 	-I$(top_srcdir) \
 	-I$(top_srcdir)/include \
 	-I$(top_builddir)/include \
-	-I$(top_srcdir)/libmm-glib \
-	-I${top_srcdir}/libmm-glib/generated \
-	-I${top_builddir}/libmm-glib/generated
+	-I$(top_srcdir)/libmm-common \
+	-I$(top_builddir)/libmm-common \
+	-I$(top_srcdir)/libmm-glib
 
 mmcli_SOURCES = \
 	mmcli.h \
@@ -22,11 +22,11 @@ mmcli_SOURCES = \
 	mmcli-modem-location.c \
 	mmcli-modem-messaging.c \
 	mmcli-modem-time.c \
-	mmcli-modem-firmware.c \
 	mmcli-bearer.c \
 	mmcli-sim.c \
 	mmcli-sms.c
 
 mmcli_LDADD = \
 	$(MMCLI_LIBS) \
+	$(top_builddir)/libmm-common/libmm-common.la \
 	$(top_builddir)/libmm-glib/libmm-glib.la

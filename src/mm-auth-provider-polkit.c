@@ -18,6 +18,8 @@
 
 #include <config.h>
 
+#include <libmm-common.h>
+
 #include "mm-log.h"
 #include "mm-auth-provider-polkit.h"
 

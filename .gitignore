@@ -30,13 +30,6 @@ org.freedesktop.ModemManager.conf
 callouts/mm-modem-probe
 test/lsudev
 
-libmm-glib/generated/mm-gdbus-*.[ch]
-libmm-glib/generated/mm-enums-types.[ch]
-libmm-glib/generated/mm-errors-types.[ch]
-libmm-glib/generated/mm-errors-quarks.c
-libmm-glib/generated/*.xml
-libmm-glib/tests/test-common-helpers
-
 src/ModemManager
 src/mm-daemon-enums-types.c
 src/mm-daemon-enums-types.h
@@ -62,6 +55,13 @@ data/mm-common.pc
 data/mm-glib.pc
 
 include/ModemManager-names.h
+
+libmm-common/mm-gdbus-*.[ch]
+libmm-common/mm-enums-types.[ch]
+libmm-common/mm-errors-types.[ch]
+libmm-common/mm-errors-quarks.c
+libmm-common/*.xml
+libmm-common/tests/test-common-helpers
 
 po/Makefile.in.in
 po/POTFILES
@@ -89,18 +89,6 @@ docs/reference/api/html
 docs/reference/api/tmpl
 docs/reference/api/xml
 docs/reference/api/*.png
-
-docs/reference/libmm-glib/version.xml
-docs/reference/libmm-glib/libmm-glib.args
-docs/reference/libmm-glib/libmm-glib.hierarchy
-docs/reference/libmm-glib/libmm-glib.interfaces
-docs/reference/libmm-glib/libmm-glib.prerequisites
-docs/reference/libmm-glib/libmm-glib.signals
-docs/reference/libmm-glib/*.stamp
-docs/reference/libmm-glib/*.txt
-docs/reference/libmm-glib/html
-docs/reference/libmm-glib/tmpl
-docs/reference/libmm-glib/xml
 
 docs/man/ModemManager.8
 

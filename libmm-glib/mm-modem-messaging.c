@@ -17,38 +17,13 @@
  * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
  * Boston, MA 02110-1301 USA.
  *
- * Copyright (C) 2012 Aleksander Morgado <aleksander@gnu.org>
  * Copyright (C) 2012 Google, Inc.
  */
 
 #include <gio/gio.h>
 
 #include "mm-helpers.h"
-#include "mm-common-helpers.h"
-#include "mm-errors-types.h"
 #include "mm-modem-messaging.h"
-
-/**
- * SECTION: mm-modem-messaging
- * @title: MMModemMessaging
- * @short_description: The Messaging interface
- *
- * The #MMModemMessaging is an object providing access to the methods, signals and
- * properties of the Messaging interface.
- *
- * The Messaging interface is exposed whenever a modem has messaging capabilities.
- */
-
-G_DEFINE_TYPE (MMModemMessaging, mm_modem_messaging, MM_GDBUS_TYPE_MODEM_MESSAGING_PROXY)
-
-struct _MMModemMessagingPrivate {
-    /* Supported Storage */
-    GMutex supported_storages_mutex;
-    guint supported_storages_id;
-    GArray *supported_storages;
-};
-
-/*****************************************************************************/
 
 /**
  * mm_modem_messaging_get_path:
@@ -61,7 +36,7 @@ struct _MMModemMessagingPrivate {
 const gchar *
 mm_modem_messaging_get_path (MMModemMessaging *self)
 {
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), NULL);
+    g_return_val_if_fail (G_IS_DBUS_PROXY (self), NULL);
 
     RETURN_NON_EMPTY_CONSTANT_STRING (
         g_dbus_proxy_get_object_path (G_DBUS_PROXY (self)));
@@ -80,7 +55,7 @@ mm_modem_messaging_dup_path (MMModemMessaging *self)
 {
     gchar *value;
 
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), NULL);
+    g_return_val_if_fail (G_IS_DBUS_PROXY (self), NULL);
 
     g_object_get (G_OBJECT (self),
                   "g-object-path", &value,
@@ -88,117 +63,29 @@ mm_modem_messaging_dup_path (MMModemMessaging *self)
     RETURN_NON_EMPTY_STRING (value);
 }
 
-/*****************************************************************************/
-
-static void
-supported_storages_updated (MMModemMessaging *self,
-                            GParamSpec *pspec)
-{
-    g_mutex_lock (&self->priv->supported_storages_mutex);
-    {
-        GVariant *dictionary;
-
-        if (self->priv->supported_storages)
-            g_array_unref (self->priv->supported_storages);
-
-        dictionary = mm_gdbus_modem_messaging_get_supported_storages (MM_GDBUS_MODEM_MESSAGING (self));
-        self->priv->supported_storages = (dictionary ?
-                                          mm_common_sms_storages_variant_to_garray (dictionary) :
-                                          NULL);
-    }
-    g_mutex_unlock (&self->priv->supported_storages_mutex);
-}
-
-static void
-ensure_internal_supported_storages (MMModemMessaging *self,
-                                    GArray **dup)
-{
-    g_mutex_lock (&self->priv->supported_storages_mutex);
-    {
-        /* If this is the first time ever asking for the array, setup the
-         * update listener and the initial array, if any. */
-        if (!self->priv->supported_storages_id) {
-            GVariant *dictionary;
-
-            dictionary = mm_gdbus_modem_messaging_dup_supported_storages (MM_GDBUS_MODEM_MESSAGING (self));
-            if (dictionary) {
-                self->priv->supported_storages = mm_common_sms_storages_variant_to_garray (dictionary);
-                g_variant_unref (dictionary);
-            }
-
-            /* No need to clear this signal connection when freeing self */
-            self->priv->supported_storages_id =
-                g_signal_connect (self,
-                                  "notify::supported-storages",
-                                  G_CALLBACK (supported_storages_updated),
-                                  NULL);
-        }
-
-        if (dup && self->priv->supported_storages)
-            *dup = g_array_ref (self->priv->supported_storages);
-    }
-    g_mutex_unlock (&self->priv->supported_storages_mutex);
-}
-
 /**
  * mm_modem_messaging_get_supported_storages:
  * @self: A #MMModem.
- * @storages: (out) (array length=n_storages): Return location for the array of #MMSmsStorage values. The returned array should be freed with g_free() when no longer needed.
+ * @storages: (out): Return location for the array of #MMSmsStorage values.
  * @n_storages: (out): Return location for the number of values in @storages.
  *
  * Gets the list of SMS storages supported by the #MMModem.
- *
- * Returns: %TRUE if @storages and @n_storages are set, %FALSE otherwise.
  */
-gboolean
+void
 mm_modem_messaging_get_supported_storages (MMModemMessaging *self,
                                            MMSmsStorage **storages,
                                            guint *n_storages)
 {
     GArray *array;
 
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), FALSE);
-    g_return_val_if_fail (storages != NULL, FALSE);
-    g_return_val_if_fail (n_storages != NULL, FALSE);
+    g_return_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self));
+    g_return_if_fail (storages != NULL);
+    g_return_if_fail (n_storages != NULL);
 
-    ensure_internal_supported_storages (self, &array);
-    if (!array)
-        return FALSE;
-
+    array = mm_common_sms_storages_variant_to_garray (mm_gdbus_modem_messaging_get_supported_storages (self));
     *n_storages = array->len;
     *storages = (MMSmsStorage *)g_array_free (array, FALSE);
-    return TRUE;
 }
-
-/**
- * mm_modem_messaging_peek_supported_storages:
- * @self: A #MMModem.
- * @storages: (out): Return location for the array of #MMSmsStorage values. Do not free the returned array, it is owned by @self.
- * @n_storages: (out): Return location for the number of values in @storages.
- *
- * Gets the list of SMS storages supported by the #MMModem.
- *
- * Returns: %TRUE if @storages and @n_storages are set, %FALSE otherwise.
- */
-gboolean
-mm_modem_messaging_peek_supported_storages (MMModemMessaging *self,
-                                            const MMSmsStorage **storages,
-                                            guint *n_storages)
-{
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), FALSE);
-    g_return_val_if_fail (storages != NULL, FALSE);
-    g_return_val_if_fail (n_storages != NULL, FALSE);
-
-    ensure_internal_supported_storages (self, NULL);
-    if (!self->priv->supported_storages)
-        return FALSE;
-
-    *n_storages = self->priv->supported_storages->len;
-    *storages = (MMSmsStorage *)self->priv->supported_storages->data;
-    return TRUE;
-}
-
-/*****************************************************************************/
 
 /**
  * mm_modem_messaging_get_default_storage:
@@ -211,12 +98,10 @@ mm_modem_messaging_peek_supported_storages (MMModemMessaging *self,
 MMSmsStorage
 mm_modem_messaging_get_default_storage (MMModemMessaging *self)
 {
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), MM_SMS_STORAGE_UNKNOWN);
+    g_return_val_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self), MM_SMS_STORAGE_UNKNOWN);
 
-    return (MMSmsStorage)mm_gdbus_modem_messaging_get_default_storage (MM_GDBUS_MODEM_MESSAGING (self));
+    return (MMSmsStorage)mm_gdbus_modem_messaging_get_default_storage (self);
 }
-
-/*****************************************************************************/
 
 typedef struct {
     MMModemMessaging *self;
@@ -255,7 +140,7 @@ list_sms_context_complete_and_free (ListSmsContext *ctx)
  *
  * Finishes an operation started with mm_modem_messaging_list().
  *
- * Returns: (element-type MM.Sms) (transfer full): A list of #MMSms objects, or #NULL if either not found or @error is set. The returned value should be freed with g_list_free_full() using g_object_unref() as #GDestroyNotify function.
+ * Returns: (transfer-full): The list of #MMSms objects, or %NULL if either none found or if @error is set.
  */
 GList *
 mm_modem_messaging_list_finish (MMModemMessaging *self,
@@ -264,7 +149,7 @@ mm_modem_messaging_list_finish (MMModemMessaging *self,
 {
     GList *list;
 
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), FALSE);
+    g_return_val_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self), FALSE);
 
     if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
         return NULL;
@@ -277,21 +162,15 @@ mm_modem_messaging_list_finish (MMModemMessaging *self,
     return g_list_copy (list);
 }
 
-static void create_next_sms (ListSmsContext *ctx);
-
 static void
 list_build_object_ready (GDBusConnection *connection,
                          GAsyncResult *res,
                          ListSmsContext *ctx)
 {
+    MMSms *sms;
     GError *error = NULL;
-    GObject *sms;
-    GObject *source_object;
 
-    source_object = g_async_result_get_source_object (res);
-    sms = g_async_initable_new_finish (G_ASYNC_INITABLE (source_object), res, &error);
-    g_object_unref (source_object);
-
+    sms = mm_sms_new_finish (res, &error);
     if (error) {
         g_simple_async_result_take_error (ctx->result, error);
         list_sms_context_complete_and_free (ctx);
@@ -312,23 +191,12 @@ list_build_object_ready (GDBusConnection *connection,
     }
 
     /* Keep on creating next object */
-    create_next_sms (ctx);
-}
-
-static void
-create_next_sms (ListSmsContext *ctx)
-{
-    g_async_initable_new_async (MM_TYPE_SMS,
-                                G_PRIORITY_DEFAULT,
-                                ctx->cancellable,
-                                (GAsyncReadyCallback)list_build_object_ready,
-                                ctx,
-                                "g-flags",          G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
-                                "g-name",           MM_DBUS_SERVICE,
-                                "g-connection",     g_dbus_proxy_get_connection (G_DBUS_PROXY (ctx->self)),
-                                "g-object-path",    ctx->sms_paths[ctx->i],
-                                "g-interface-name", "org.freedesktop.ModemManager1.Sms",
-                                NULL);
+    mm_sms_new (g_dbus_proxy_get_connection (
+                    G_DBUS_PROXY (ctx->self)),
+                ctx->sms_paths[ctx->i],
+                ctx->cancellable,
+                (GAsyncReadyCallback)list_build_object_ready,
+                ctx);
 }
 
 static void
@@ -338,7 +206,7 @@ list_ready (MMModemMessaging *self,
 {
     GError *error = NULL;
 
-    mm_gdbus_modem_messaging_call_list_finish (MM_GDBUS_MODEM_MESSAGING (self), &ctx->sms_paths, res, &error);
+    mm_gdbus_modem_messaging_call_list_finish (self, &ctx->sms_paths, res, &error);
     if (error) {
         g_simple_async_result_take_error (ctx->result, error);
         list_sms_context_complete_and_free (ctx);
@@ -354,7 +222,12 @@ list_ready (MMModemMessaging *self,
 
     /* Got list of paths. If at least one found, start creating objects for each */
     ctx->i = 0;
-    create_next_sms (ctx);
+    mm_sms_new (g_dbus_proxy_get_connection (
+                    G_DBUS_PROXY (self)),
+                ctx->sms_paths[ctx->i],
+                ctx->cancellable,
+                (GAsyncReadyCallback)list_build_object_ready,
+                ctx);
 }
 
 /**
@@ -379,7 +252,7 @@ mm_modem_messaging_list (MMModemMessaging *self,
 {
     ListSmsContext *ctx;
 
-    g_return_if_fail (MM_IS_MODEM_MESSAGING (self));
+    g_return_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self));
 
     ctx = g_slice_new0 (ListSmsContext);
     ctx->self = g_object_ref (self);
@@ -390,7 +263,7 @@ mm_modem_messaging_list (MMModemMessaging *self,
     if (cancellable)
         ctx->cancellable = g_object_ref (cancellable);
 
-    mm_gdbus_modem_messaging_call_list (MM_GDBUS_MODEM_MESSAGING (self),
+    mm_gdbus_modem_messaging_call_list (self,
                                         cancellable,
                                         (GAsyncReadyCallback)list_ready,
                                         ctx);
@@ -407,7 +280,7 @@ mm_modem_messaging_list (MMModemMessaging *self,
  * The calling thread is blocked until a reply is received. See mm_modem_messaging_list()
  * for the asynchronous version of this method.
  *
- * Returns: (element-type MM.Sms) (transfer full): A list of #MMSms objects, or #NULL if either not found or @error is set. The returned value should be freed with g_list_free_full() using g_object_unref() as #GDestroyNotify function.
+ * Returns: (transfer-full): The list of #MMSms objects, or %NULL if either none found or if @error is set.
  */
 GList *
 mm_modem_messaging_list_sync (MMModemMessaging *self,
@@ -418,9 +291,9 @@ mm_modem_messaging_list_sync (MMModemMessaging *self,
     gchar **sms_paths = NULL;
     guint i;
 
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), NULL);
+    g_return_val_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self), NULL);
 
-    if (!mm_gdbus_modem_messaging_call_list_sync (MM_GDBUS_MODEM_MESSAGING (self),
+    if (!mm_gdbus_modem_messaging_call_list_sync (self,
                                                   &sms_paths,
                                                   cancellable,
                                                   error))
@@ -431,17 +304,14 @@ mm_modem_messaging_list_sync (MMModemMessaging *self,
         return NULL;
 
     for (i = 0; sms_paths[i]; i++) {
-        GObject *sms;
+        MMSms *sms;
 
-        sms = g_initable_new (MM_TYPE_SMS,
-                                 cancellable,
-                                 error,
-                                 "g-flags",          G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
-                                 "g-name",           MM_DBUS_SERVICE,
-                                 "g-connection",     g_dbus_proxy_get_connection (G_DBUS_PROXY (self)),
-                                 "g-object-path",    sms_paths[i],
-                                 "g-interface-name", "org.freedesktop.ModemManager1.Sms",
-                              NULL);
+        sms = mm_sms_new_sync (g_dbus_proxy_get_connection (
+                                   G_DBUS_PROXY (self)),
+                               sms_paths[i],
+                               cancellable,
+                               error);
+
         if (!sms) {
             sms_object_list_free (sms_objects);
             g_strfreev (sms_paths);
@@ -455,8 +325,6 @@ mm_modem_messaging_list_sync (MMModemMessaging *self,
     g_strfreev (sms_paths);
     return sms_objects;
 }
-
-/*****************************************************************************/
 
 typedef struct {
     GSimpleAsyncResult *result;
@@ -481,14 +349,14 @@ create_sms_context_complete_and_free (CreateSmsContext *ctx)
  *
  * Finishes an operation started with mm_modem_messaging_create().
  *
- * Returns: (transfer full): A newly created #MMSms, or %NULL if @error is set. The returned value should be freed with g_object_unref().
+ * Returns: (transfer-full): A newly created #MMSms, or %NULL if @error is set.
  */
 MMSms *
 mm_modem_messaging_create_finish (MMModemMessaging *self,
                                   GAsyncResult *res,
                                   GError **error)
 {
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), NULL);
+    g_return_val_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self), NULL);
 
     if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
         return NULL;
@@ -502,13 +370,9 @@ new_sms_object_ready (GDBusConnection *connection,
                       CreateSmsContext *ctx)
 {
     GError *error = NULL;
-    GObject *sms;
-    GObject *source_object;
+    MMSms *sms;
 
-    source_object = g_async_result_get_source_object (res);
-    sms = g_async_initable_new_finish (G_ASYNC_INITABLE (source_object), res, &error);
-    g_object_unref (source_object);
-
+    sms = mm_sms_new_finish (res, &error);
     if (error)
         g_simple_async_result_take_error (ctx->result, error);
     else
@@ -527,7 +391,7 @@ create_sms_ready (MMModemMessaging *self,
     GError *error = NULL;
     gchar *sms_path = NULL;
 
-    if (!mm_gdbus_modem_messaging_call_create_finish (MM_GDBUS_MODEM_MESSAGING (self),
+    if (!mm_gdbus_modem_messaging_call_create_finish (self,
                                                       &sms_path,
                                                       res,
                                                       &error)) {
@@ -537,17 +401,12 @@ create_sms_ready (MMModemMessaging *self,
         return;
     }
 
-    g_async_initable_new_async (MM_TYPE_SMS,
-                                G_PRIORITY_DEFAULT,
-                                ctx->cancellable,
-                                (GAsyncReadyCallback)new_sms_object_ready,
-                                ctx,
-                                "g-flags",          G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
-                                "g-name",           MM_DBUS_SERVICE,
-                                "g-connection",     g_dbus_proxy_get_connection (G_DBUS_PROXY (self)),
-                                "g-object-path",    sms_path,
-                                "g-interface-name", "org.freedesktop.ModemManager1.Sms",
-                                NULL);
+    mm_sms_new (g_dbus_proxy_get_connection (
+                    G_DBUS_PROXY (self)),
+                sms_path,
+                ctx->cancellable,
+                (GAsyncReadyCallback)new_sms_object_ready,
+                ctx);
     g_free (sms_path);
 }
 
@@ -576,7 +435,7 @@ mm_modem_messaging_create (MMModemMessaging *self,
     CreateSmsContext *ctx;
     GVariant *dictionary;
 
-    g_return_if_fail (MM_IS_MODEM_MESSAGING (self));
+    g_return_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self));
 
     ctx = g_slice_new0 (CreateSmsContext);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
@@ -588,7 +447,7 @@ mm_modem_messaging_create (MMModemMessaging *self,
 
     dictionary = (mm_sms_properties_get_dictionary (properties));
     mm_gdbus_modem_messaging_call_create (
-        MM_GDBUS_MODEM_MESSAGING (self),
+        self,
         dictionary,
         cancellable,
         (GAsyncReadyCallback)create_sms_ready,
@@ -609,7 +468,7 @@ mm_modem_messaging_create (MMModemMessaging *self,
  * The calling thread is blocked until a reply is received. See mm_modem_messaging_create()
  * for the asynchronous version of this method.
  *
- * Returns: (transfer full): A newly created #MMSms, or %NULL if @error is set. The returned value should be freed with g_object_unref().
+ * Returns: (transfer-full): A newly created #MMSms, or %NULL if @error is set.
  */
 MMSms *
 mm_modem_messaging_create_sync (MMModemMessaging *self,
@@ -621,52 +480,26 @@ mm_modem_messaging_create_sync (MMModemMessaging *self,
     gchar *sms_path = NULL;
     GVariant *dictionary;
 
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), NULL);
+    g_return_val_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self), NULL);
 
     dictionary = (mm_sms_properties_get_dictionary (properties));
-    mm_gdbus_modem_messaging_call_create_sync (MM_GDBUS_MODEM_MESSAGING (self),
+    mm_gdbus_modem_messaging_call_create_sync (self,
                                                dictionary,
                                                &sms_path,
                                                cancellable,
                                                error);
     if (sms_path) {
-        sms = g_initable_new (MM_TYPE_SMS,
-                              cancellable,
-                              error,
-                              "g-flags",          G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
-                              "g-name",           MM_DBUS_SERVICE,
-                              "g-connection",     g_dbus_proxy_get_connection (G_DBUS_PROXY (self)),
-                              "g-object-path",    sms_path,
-                              "g-interface-name", "org.freedesktop.ModemManager1.Sms",
-                              NULL);
+        sms = mm_sms_new_sync (g_dbus_proxy_get_connection (
+                                   G_DBUS_PROXY (self)),
+                               sms_path,
+                               cancellable,
+                               error);
         g_free (sms_path);
     }
 
     g_variant_unref (dictionary);
 
-    return (sms ? MM_SMS (sms) : NULL);
-}
-
-/*****************************************************************************/
-
-/**
- * mm_modem_messaging_delete_finish:
- * @self: A #MMModemMessaging.
- * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to mm_modem_messaging_delete().
- * @error: Return location for error or %NULL.
- *
- * Finishes an operation started with mm_modem_messaging_delete().
- *
- * Returns: %TRUE if the sms was deleted, %FALSE if @error is set.
- */
-gboolean
-mm_modem_messaging_delete_finish (MMModemMessaging *self,
-                                  GAsyncResult *res,
-                                  GError **error)
-{
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), FALSE);
-
-    return mm_gdbus_modem_messaging_call_delete_finish (MM_GDBUS_MODEM_MESSAGING (self), res, error);
+    return sms;
 }
 
 /**
@@ -691,13 +524,35 @@ mm_modem_messaging_delete (MMModemMessaging *self,
                            GAsyncReadyCallback callback,
                            gpointer user_data)
 {
-    g_return_if_fail (MM_IS_MODEM_MESSAGING (self));
+    g_return_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self));
 
-    mm_gdbus_modem_messaging_call_delete (MM_GDBUS_MODEM_MESSAGING (self),
+    mm_gdbus_modem_messaging_call_delete (self,
                                           sms,
                                           cancellable,
                                           callback,
                                           user_data);
+}
+
+/**
+ * mm_modem_messaging_delete_finish:
+ * @self: A #MMModemMessaging.
+ * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to mm_modem_messaging_delete().
+ * @error: Return location for error or %NULL.
+ *
+ * Finishes an operation started with mm_modem_messaging_delete().
+ *
+ * Returns: (skip): %TRUE if the sms was deleted, %FALSE if @error is set.
+ */
+gboolean
+mm_modem_messaging_delete_finish (MMModemMessaging *self,
+                                  GAsyncResult *res,
+                                  GError **error)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self), FALSE);
+
+    return mm_gdbus_modem_messaging_call_delete_finish (self,
+                                                        res,
+                                                        error);
 }
 
 /**
@@ -712,7 +567,7 @@ mm_modem_messaging_delete (MMModemMessaging *self,
  * The calling thread is blocked until a reply is received. See mm_modem_messaging_delete()
  * for the asynchronous version of this method.
  *
- * Returns: %TRUE if the SMS was deleted, %FALSE if @error is set.
+ * Returns: (skip): %TRUE if the SMS was deleted, %FALSE if @error is set.
  */
 gboolean
 mm_modem_messaging_delete_sync (MMModemMessaging *self,
@@ -720,46 +575,10 @@ mm_modem_messaging_delete_sync (MMModemMessaging *self,
                                 GCancellable *cancellable,
                                 GError **error)
 {
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), FALSE);
+    g_return_val_if_fail (MM_GDBUS_IS_MODEM_MESSAGING (self), FALSE);
 
-    return mm_gdbus_modem_messaging_call_delete_sync (MM_GDBUS_MODEM_MESSAGING (self),
+    return mm_gdbus_modem_messaging_call_delete_sync (self,
                                                       sms,
                                                       cancellable,
                                                       error);
-}
-
-/*****************************************************************************/
-
-static void
-mm_modem_messaging_init (MMModemMessaging *self)
-{
-    /* Setup private data */
-    self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self,
-                                              MM_TYPE_MODEM_MESSAGING,
-                                              MMModemMessagingPrivate);
-    g_mutex_init (&self->priv->supported_storages_mutex);
-}
-
-static void
-finalize (GObject *object)
-{
-    MMModemMessaging *self = MM_MODEM_MESSAGING (object);
-
-    g_mutex_clear (&self->priv->supported_storages_mutex);
-
-    if (self->priv->supported_storages)
-        g_array_unref (self->priv->supported_storages);
-
-    G_OBJECT_CLASS (mm_modem_messaging_parent_class)->finalize (object);
-}
-
-static void
-mm_modem_messaging_class_init (MMModemMessagingClass *modem_class)
-{
-    GObjectClass *object_class = G_OBJECT_CLASS (modem_class);
-
-    g_type_class_add_private (object_class, sizeof (MMModemMessagingPrivate));
-
-    /* Virtual methods */
-    object_class->finalize = finalize;
 }

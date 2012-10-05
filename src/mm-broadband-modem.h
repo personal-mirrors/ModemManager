@@ -21,9 +21,8 @@
 #include <glib.h>
 #include <glib-object.h>
 
-#include <ModemManager.h>
-
 #include "mm-base-modem.h"
+#include "ModemManager-enums.h"
 
 #define MM_TYPE_BROADBAND_MODEM            (mm_broadband_modem_get_type ())
 #define MM_BROADBAND_MODEM(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_BROADBAND_MODEM, MMBroadbandModem))

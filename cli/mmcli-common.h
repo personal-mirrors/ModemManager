@@ -17,8 +17,6 @@
 #define _MMCLI_COMMON_H_
 
 #include <gio/gio.h>
-
-#define _LIBMM_INSIDE_MMCLI
 #include <libmm-glib.h>
 
 void       mmcli_get_manager        (GDBusConnection *connection,

@@ -21,7 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define _LIBMM_INSIDE_MMCLI
 #include <libmm-glib.h>
 
 #include "mmcli-common.h"

@@ -17,10 +17,6 @@
 #ifndef _MODEMMANAGER_ERRORS_H_
 #define _MODEMMANAGER_ERRORS_H_
 
-#if !defined (__MODEM_MANAGER_H_INSIDE__)
-#error "Only <ModemManager.h> can be included directly."
-#endif
-
 #include <ModemManager-names.h>
 
 /**

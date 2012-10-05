@@ -20,8 +20,7 @@
 #include <stdio.h>
 #include <locale.h>
 
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
+#include <libmm-common.h>
 
 #include "mm-sms-part.h"
 #include "mm-log.h"
@@ -264,7 +263,7 @@ test_pdu3_8bit (void)
         "+18005551212", /* number */
         "110101123456+00", /* timestamp */
         FALSE,
-        NULL, /* text */
+        "", /* text */
         expected_data, /* data */
         sizeof (expected_data)); /* data size */
 }
@@ -336,7 +335,7 @@ test_pdu_dcsf_8bit (void)
         "+18005551212", /* number */
         "110101123456+00", /* timestamp */
         FALSE,
-        NULL, /* text */
+        "", /* text */
         expected_data, /* data */
         sizeof (expected_data)); /* data size */
 }

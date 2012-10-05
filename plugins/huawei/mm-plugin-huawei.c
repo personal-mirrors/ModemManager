@@ -20,8 +20,7 @@
 #include <string.h>
 #include <errno.h>
 
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
+#include <libmm-common.h>
 
 #include "mm-serial-enums-types.h"
 #include "mm-log.h"

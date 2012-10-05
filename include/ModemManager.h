@@ -25,8 +25,6 @@
 #ifndef _MODEM_MANAGER_H_
 #define _MODEM_MANAGER_H_
 
-#define __MODEM_MANAGER_H_INSIDE__
-
 /* Public header with DBus Interface, Method, Signal and Property names */
 #include <ModemManager-names.h>
 

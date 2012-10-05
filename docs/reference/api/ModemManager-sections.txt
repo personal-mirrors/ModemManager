@@ -3,7 +3,6 @@
 <TITLE>Flags and Enumerations</TITLE>
 MMBearerIpFamily
 MMBearerIpMethod
-MMFirmwareImageType
 MMModem3gppFacility
 MMModem3gppNetworkAvailability
 MMModem3gppRegistrationState

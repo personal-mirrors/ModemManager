@@ -18,30 +18,13 @@
  * Boston, MA 02110-1301 USA.
  *
  * Copyright (C) 2011 - 2012 Aleksander Morgado <aleksander@gnu.org>
- * Copyright (C) 2012 Google, Inc.
+ * Copyright (C) Google, Inc.
  */
 
-#include "mm-errors-types.h"
 #include "mm-object.h"
 
 /**
- * SECTION: mm-object
- * @title: MMObject
- * @short_description: Generic object representing a modem in ModemManager
- *
- * The #MMObject is a generic object which represents any kind of modem exposed
- * in ModemManager, and allows accessing the exported interfaces one by one.
- *
- * When this object is available, it is ensured that at least the Modem
- * interface is also available.
- */
-
-G_DEFINE_TYPE (MMObject, mm_object, MM_GDBUS_TYPE_OBJECT_PROXY)
-
-/*****************************************************************************/
-
-/**
- * mm_object_get_path: (skip)
+ * mm_object_get_path:
  * @self: A #MMObject.
  *
  * Gets the DBus path of the #MMObject object.
@@ -51,7 +34,7 @@ G_DEFINE_TYPE (MMObject, mm_object, MM_GDBUS_TYPE_OBJECT_PROXY)
 const gchar *
 mm_object_get_path (MMObject *self)
 {
-    g_return_val_if_fail (MM_IS_OBJECT (self), NULL);
+    g_return_val_if_fail (G_IS_DBUS_OBJECT (self), NULL);
 
     return g_dbus_object_get_object_path (G_DBUS_OBJECT (self));
 }
@@ -69,7 +52,7 @@ mm_object_dup_path (MMObject *self)
 {
     gchar *value;
 
-    g_return_val_if_fail (MM_IS_OBJECT (self), NULL);
+    g_return_val_if_fail (G_IS_DBUS_OBJECT_PROXY (self), NULL);
 
     g_object_get (G_OBJECT (self),
                   "g-object-path", &value,
@@ -78,346 +61,256 @@ mm_object_dup_path (MMObject *self)
     return value;
 }
 
-/*****************************************************************************/
-
 /**
  * mm_object_get_modem:
- * @self: A #MMModem
+ * @object: A #MMModem
  *
- * Gets the #MMModem instance for the D-Bus interface org.freedesktop.ModemManager1.Modem on @self, if any.
+ * Gets the #MMModem instance for the D-Bus interface <link linkend="gdbus-interface-org-freedesktop-ModemManager1-Modem.top_of_page">org.freedesktop.ModemManager1.Modem</link> on @object, if any.
  *
- * Returns: (transfer full): A #MMModem that must be freed with g_object_unref() or %NULL if @self does not implement the interface.
+ * Returns: (transfer full): A #MMModem that must be freed with g_object_unref() or %NULL if @object does not implement the interface.
  */
 MMModem *
-mm_object_get_modem (MMObject *self)
+mm_object_get_modem (MMObject *object)
 {
-    MMModem *modem;
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
 
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
+    return mm_gdbus_object_get_modem (object);
+}
 
-    modem = (MMModem *)mm_gdbus_object_get_modem (MM_GDBUS_OBJECT (self));
-    g_warn_if_fail (MM_IS_MODEM (modem));
-    return modem;
+/**
+ * mm_object_get_modem_3gpp:
+ * @object: A #MMObject.
+ *
+ * Gets the #MMModem3gpp instance for the D-Bus interface <link linkend="gdbus-interface-org-freedesktop-ModemManager1-Modem-Modem3gpp.top_of_page">org.freedesktop.ModemManager1.Modem.Modem3gpp</link> on @object, if any.
+ *
+ * Returns: (transfer full): A #MMModem3gpp that must be freed with g_object_unref() or %NULL if @object does not implement the interface.
+ */
+MMModem3gpp *
+mm_object_get_modem_3gpp (MMObject *object)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
+
+    return mm_gdbus_object_get_modem3gpp (object);
+}
+
+/**
+ * mm_object_get_modem_3gpp_ussd:
+ * @object: A #MMObject.
+ *
+ * Gets the #MMModem3gppUssd instance for the D-Bus interface <link linkend="gdbus-interface-org-freedesktop-ModemManager1-Modem-Modem3gpp-Ussd.top_of_page">org.freedesktop.ModemManager1.Modem.Modem3gpp-Ussd</link> on @object, if any.
+ *
+ * Returns: (transfer full): A #MMModem3gppUssd that must be freed with g_object_unref() or %NULL if @object does not implement the interface.
+ */
+MMModem3gppUssd *
+mm_object_get_modem_3gpp_ussd (MMObject *object)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
+
+    return mm_gdbus_object_get_modem3gpp_ussd (object);
+}
+
+/**
+ * mm_object_get_modem_cdma:
+ * @object: A #MMObject.
+ *
+ * Gets the #MMModemCdma instance for the D-Bus interface <link linkend="gdbus-interface-org-freedesktop-ModemManager1-Modem-ModemCdma.top_of_page">org.freedesktop.ModemManager1.Modem.ModemCdma</link> on @object, if any.
+ *
+ * Returns: (transfer full): A #MMModemCdma that must be freed with g_object_unref() or %NULL if @object does not implement the interface.
+ */
+MMModemCdma *
+mm_object_get_modem_cdma (MMObject *object)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
+
+    return mm_gdbus_object_get_modem_cdma (object);
+}
+
+/**
+ * mm_object_get_modem_simple:
+ * @object: A #MMObject.
+ *
+ * Gets the #MMModemSimple instance for the D-Bus interface <link linkend="gdbus-interface-org-freedesktop-ModemManager1-Modem-Modemsimple.top_of_page">org.freedesktop.ModemManager1.Modem.Modemsimple</link> on @object, if any.
+ *
+ * Returns: (transfer full): A #MMModemSimple that must be freed with g_object_unref() or %NULL if @object does not implement the interface.
+ */
+MMModemSimple *
+mm_object_get_modem_simple (MMObject *object)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
+
+    return mm_gdbus_object_get_modem_simple (object);
+}
+
+/**
+ * mm_object_get_modem_location:
+ * @object: A #MMObject.
+ *
+ * Gets the #MMModemLocation instance for the D-Bus interface <link linkend="gdbus-interface-org-freedesktop-ModemManager1-Modem-Modemlocation.top_of_page">org.freedesktop.ModemManager1.Modem.Modemlocation</link> on @object, if any.
+ *
+ * Returns: (transfer full): A #MMModemLocation that must be freed with g_object_unref() or %NULL if @object does not implement the interface.
+ */
+MMModemLocation *
+mm_object_get_modem_location (MMObject *object)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
+
+    return mm_gdbus_object_get_modem_location (object);
+}
+
+/**
+ * mm_object_get_modem_messaging:
+ * @object: A #MMObject.
+ *
+ * Gets the #MMModemMessaging instance for the D-Bus interface <link linkend="gdbus-interface-org-freedesktop-ModemManager1-Modem-Modemmessaging.top_of_page">org.freedesktop.ModemManager1.Modem.Modemmessaging</link> on @object, if any.
+ *
+ * Returns: (transfer full): A #MMModemMessaging that must be freed with g_object_unref() or %NULL if @object does not implement the interface.
+ */
+MMModemMessaging *
+mm_object_get_modem_messaging (MMObject *object)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
+
+    return mm_gdbus_object_get_modem_messaging (object);
+}
+
+/**
+ * mm_object_get_modem_time:
+ * @object: A #MMObject.
+ *
+ * Gets the #MMModemTime instance for the D-Bus interface <link linkend="gdbus-interface-org-freedesktop-ModemManager1-Modem-Time.top_of_page">org.freedesktop.ModemManager1.Modem.Time</link> on @object, if any.
+ *
+ * Returns: (transfer full): A #MMModemTime that must be freed with g_object_unref() or %NULL if @object does not implement the interface.
+ */
+MMModemTime *
+mm_object_get_modem_time (MMObject *object)
+{
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
+
+    return mm_gdbus_object_get_modem_time (object);
 }
 
 /**
  * mm_object_peek_modem: (skip)
- * @self: A #MMObject.
+ * @object: A #MMObject.
  *
  * Like mm_object_get_modem() but doesn't increase the reference count on the returned object.
  *
  * <warning>It is not safe to use the returned object if you are on another thread than the one where the #MMManager is running.</warning>
  *
- * Returns: (transfer none): A #MMModem or %NULL if @self does not implement the interface. Do not free the returned object, it is owned by @self.
+ * Returns: (transfer none): A #MMModem or %NULL if @object does not implement the interface. Do not free the returned object, it is owned by @object.
  */
 MMModem *
-mm_object_peek_modem (MMObject *self)
+mm_object_peek_modem (MMObject *object)
 {
-    MMModem *modem;
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
 
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    modem = (MMModem *) mm_gdbus_object_peek_modem (MM_GDBUS_OBJECT (self));
-    g_warn_if_fail (MM_IS_MODEM (modem));
-    return modem;
-}
-
-/*****************************************************************************/
-
-/**
- * mm_object_get_modem_3gpp:
- * @self: A #MMObject.
- *
- * Gets the #MMModem3gpp instance for the D-Bus interface org.freedesktop.ModemManager1.Modem.Modem3gpp on @self, if any.
- *
- * Returns: (transfer full): A #MMModem3gpp that must be freed with g_object_unref() or %NULL if @self does not implement the interface.
- */
-MMModem3gpp *
-mm_object_get_modem_3gpp (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModem3gpp *)mm_gdbus_object_get_modem3gpp (MM_GDBUS_OBJECT (self));
+    return mm_gdbus_object_peek_modem (object);
 }
 
 /**
  * mm_object_peek_modem_3gpp: (skip)
- * @self: A #MMObject.
+ * @object: A #MMObject.
  *
  * Like mm_object_get_modem_3gpp() but doesn't increase the reference count on the returned object.
  *
  * <warning>It is not safe to use the returned object if you are on another thread than the one where the #MMManager is running.</warning>
  *
- * Returns: (transfer none): A #MMModem3gpp or %NULL if @self does not implement the interface. Do not free the returned object, it is owned by @self.
+ * Returns: (transfer none): A #MMModem3gpp or %NULL if @object does not implement the interface. Do not free the returned object, it is owned by @object.
  */
 MMModem3gpp *
-mm_object_peek_modem_3gpp (MMObject *self)
+mm_object_peek_modem_3gpp (MMObject *object)
 {
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
 
-    return (MMModem3gpp *)mm_gdbus_object_peek_modem3gpp (MM_GDBUS_OBJECT (self));
-}
-
-/*****************************************************************************/
-
-/**
- * mm_object_get_modem_3gpp_ussd:
- * @self: A #MMObject.
- *
- * Gets the #MMModem3gppUssd instance for the D-Bus interface org.freedesktop.ModemManager1.Modem.Modem3gpp-Ussd on @self, if any.
- *
- * Returns: (transfer full): A #MMModem3gppUssd that must be freed with g_object_unref() or %NULL if @self does not implement the interface.
- */
-MMModem3gppUssd *
-mm_object_get_modem_3gpp_ussd (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModem3gppUssd *)mm_gdbus_object_get_modem3gpp_ussd (MM_GDBUS_OBJECT (self));
+    return mm_gdbus_object_peek_modem3gpp (object);
 }
 
 /**
  * mm_object_peek_modem_3gpp_ussd: (skip)
- * @self: A #MMObject.
+ * @object: A #MMObject.
  *
  * Like mm_object_get_modem_3gpp_ussd() but doesn't increase the reference count on the returned object.
  *
  * <warning>It is not safe to use the returned object if you are on another thread than the one where the #MMManager is running.</warning>
  *
- * Returns: (transfer none): A #MMModem3gppUssd or %NULL if @self does not implement the interface. Do not free the returned object, it is owned by @self.
+ * Returns: (transfer none): A #MMModem3gppUssd or %NULL if @object does not implement the interface. Do not free the returned object, it is owned by @object.
  */
 MMModem3gppUssd *
-mm_object_peek_modem_3gpp_ussd (MMObject *self)
+mm_object_peek_modem_3gpp_ussd (MMObject *object)
 {
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
 
-    return (MMModem3gppUssd *)mm_gdbus_object_peek_modem3gpp_ussd (MM_GDBUS_OBJECT (self));
-}
-
-/*****************************************************************************/
-
-/**
- * mm_object_get_modem_cdma:
- * @self: A #MMObject.
- *
- * Gets the #MMModemCdma instance for the D-Bus interface org.freedesktop.ModemManager1.Modem.ModemCdma on @self, if any.
- *
- * Returns: (transfer full): A #MMModemCdma that must be freed with g_object_unref() or %NULL if @self does not implement the interface.
- */
-MMModemCdma *
-mm_object_get_modem_cdma (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModemCdma *)mm_gdbus_object_get_modem_cdma (MM_GDBUS_OBJECT (self));
-}
-
-/**
- * mm_object_peek_modem_cdma: (skip)
- * @self: A #MMObject.
- *
- * Like mm_object_get_modem_cdma() but doesn't increase the reference count on the returned object.
- *
- * <warning>It is not safe to use the returned object if you are on another thread than the one where the #MMManager is running.</warning>
- *
- * Returns: (transfer none): A #MMModemCdma or %NULL if @self does not implement the interface. Do not free the returned object, it is owned by @self.
- */
-MMModemCdma *
-mm_object_peek_modem_cdma (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModemCdma *)mm_gdbus_object_peek_modem_cdma (MM_GDBUS_OBJECT (self));
-}
-
-/*****************************************************************************/
-
-/**
- * mm_object_get_modem_simple:
- * @self: A #MMObject.
- *
- * Gets the #MMModemSimple instance for the D-Bus interface org.freedesktop.ModemManager1.Modem.Modemsimple on @self, if any.
- *
- * Returns: (transfer full): A #MMModemSimple that must be freed with g_object_unref() or %NULL if @self does not implement the interface.
- */
-MMModemSimple *
-mm_object_get_modem_simple (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModemSimple *)mm_gdbus_object_get_modem_simple (MM_GDBUS_OBJECT (self));
+    return mm_gdbus_object_peek_modem3gpp_ussd (object);
 }
 
 /**
  * mm_object_peek_modem_simple: (skip)
- * @self: A #MMObject.
+ * @object: A #MMObject.
  *
  * Like mm_object_get_modem_simple() but doesn't increase the reference count on the returned object.
  *
  * <warning>It is not safe to use the returned object if you are on another thread than the one where the #MMManager is running.</warning>
  *
- * Returns: (transfer none): A #MMModemSimple or %NULL if @self does not implement the interface. Do not free the returned object, it is owned by @self.
+ * Returns: (transfer none): A #MMModemSimple or %NULL if @object does not implement the interface. Do not free the returned object, it is owned by @object.
  */
 MMModemSimple *
-mm_object_peek_modem_simple (MMObject *self)
+mm_object_peek_modem_simple (MMObject *object)
 {
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
 
-    return (MMModemSimple *)mm_gdbus_object_peek_modem_simple (MM_GDBUS_OBJECT (self));
-}
-
-/*****************************************************************************/
-
-/**
- * mm_object_get_modem_location:
- * @self: A #MMObject.
- *
- * Gets the #MMModemLocation instance for the D-Bus interface org.freedesktop.ModemManager1.Modem.Modemlocation on @self, if any.
- *
- * Returns: (transfer full): A #MMModemLocation that must be freed with g_object_unref() or %NULL if @self does not implement the interface.
- */
-MMModemLocation *
-mm_object_get_modem_location (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModemLocation *)mm_gdbus_object_get_modem_location (MM_GDBUS_OBJECT (self));
+    return mm_gdbus_object_peek_modem_simple (object);
 }
 
 /**
  * mm_object_peek_modem_location: (skip)
- * @self: A #MMObject.
+ * @object: A #MMObject.
  *
  * Like mm_object_get_modem_location() but doesn't increase the reference count on the returned object.
  *
  * <warning>It is not safe to use the returned object if you are on another thread than the one where the #MMManager is running.</warning>
  *
- * Returns: (transfer none): A #MMModemLocation or %NULL if @self does not implement the interface. Do not free the returned object, it is owned by @self.
+ * Returns: (transfer none): A #MMModemLocation or %NULL if @object does not implement the interface. Do not free the returned object, it is owned by @object.
  */
 MMModemLocation *
-mm_object_peek_modem_location (MMObject *self)
+mm_object_peek_modem_location (MMObject *object)
 {
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
 
-    return (MMModemLocation *)mm_gdbus_object_peek_modem_location (MM_GDBUS_OBJECT (self));
-}
-
-/*****************************************************************************/
-
-/**
- * mm_object_get_modem_messaging:
- * @self: A #MMObject.
- *
- * Gets the #MMModemMessaging instance for the D-Bus interface org.freedesktop.ModemManager1.Modem.Modemmessaging on @self, if any.
- *
- * Returns: (transfer full): A #MMModemMessaging that must be freed with g_object_unref() or %NULL if @self does not implement the interface.
- */
-MMModemMessaging *
-mm_object_get_modem_messaging (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModemMessaging *)mm_gdbus_object_get_modem_messaging (MM_GDBUS_OBJECT (self));
+    return mm_gdbus_object_peek_modem_location (object);
 }
 
 /**
  * mm_object_peek_modem_messaging: (skip)
- * @self: A #MMObject.
+ * @object: A #MMObject.
  *
  * Like mm_object_get_modem_messaging() but doesn't increase the reference count on the returned object.
  *
  * <warning>It is not safe to use the returned object if you are on another thread than the one where the #MMManager is running.</warning>
  *
- * Returns: (transfer none): A #MMModemMessaging or %NULL if @self does not implement the interface. Do not free the returned object, it is owned by @self.
+ * Returns: (transfer none): A #MMModemMessaging or %NULL if @object does not implement the interface. Do not free the returned object, it is owned by @object.
  */
 MMModemMessaging *
-mm_object_peek_modem_messaging (MMObject *self)
+mm_object_peek_modem_messaging (MMObject *object)
 {
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
 
-    return (MMModemMessaging *)mm_gdbus_object_peek_modem_messaging (MM_GDBUS_OBJECT (self));
-}
-
-/*****************************************************************************/
-
-/**
- * mm_object_get_modem_time:
- * @self: A #MMObject.
- *
- * Gets the #MMModemTime instance for the D-Bus interface org.freedesktop.ModemManager1.Modem.Time on @self, if any.
- *
- * Returns: (transfer full): A #MMModemTime that must be freed with g_object_unref() or %NULL if @self does not implement the interface.
- */
-MMModemTime *
-mm_object_get_modem_time (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModemTime *)mm_gdbus_object_get_modem_time (MM_GDBUS_OBJECT (self));
+    return mm_gdbus_object_peek_modem_messaging (object);
 }
 
 /**
  * mm_object_peek_modem_time: (skip)
- * @self: A #MMObject.
+ * @object: A #MMObject.
  *
  * Like mm_object_get_modem_time() but doesn't increase the reference count on the returned object.
  *
  * <warning>It is not safe to use the returned object if you are on another thread than the one where the #MMManager is running.</warning>
  *
- * Returns: (transfer none): A #MMModemTime or %NULL if @self does not implement the interface. Do not free the returned object, it is owned by @self.
+ * Returns: (transfer none): A #MMModemTime or %NULL if @object does not implement the interface. Do not free the returned object, it is owned by @object.
  */
 MMModemTime *
-mm_object_peek_modem_time (MMObject *self)
+mm_object_peek_modem_time (MMObject *object)
 {
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
+    g_return_val_if_fail (MM_GDBUS_IS_OBJECT (object), NULL);
 
-    return (MMModemTime *)mm_gdbus_object_peek_modem_time (MM_GDBUS_OBJECT (self));
-}
-
-/*****************************************************************************/
-
-/**
- * mm_object_get_modem_firmware:
- * @self: A #MMObject.
- *
- * Gets the #MMModemFirmware instance for the D-Bus interface org.freedesktop.ModemManager1.Modem.Firmware on @self, if any.
- *
- * Returns: (transfer full): A #MMModemFirmware that must be freed with g_object_unref() or %NULL if @self does not implement the interface.
- */
-MMModemFirmware *
-mm_object_get_modem_firmware (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModemFirmware *)mm_gdbus_object_get_modem_firmware (MM_GDBUS_OBJECT (self));
-}
-
-/**
- * mm_object_peek_modem_firmware: (skip)
- * @self: A #MMObject.
- *
- * Like mm_object_get_modem_firmware() but doesn't increase the reference count on the returned object.
- *
- * <warning>It is not safe to use the returned object if you are on another thread than the one where the #MMManager is running.</warning>
- *
- * Returns: (transfer none): A #MMModemFirmware or %NULL if @self does not implement the interface. Do not free the returned object, it is owned by @self.
- */
-MMModemFirmware *
-mm_object_peek_modem_firmware (MMObject *self)
-{
-    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
-
-    return (MMModemFirmware *)mm_gdbus_object_peek_modem_firmware (MM_GDBUS_OBJECT (self));
-}
-
-/*****************************************************************************/
-
-static void
-mm_object_init (MMObject *self)
-{
-}
-
-static void
-mm_object_class_init (MMObjectClass *object_class)
-{
+    return mm_gdbus_object_peek_modem_time (object);
 }

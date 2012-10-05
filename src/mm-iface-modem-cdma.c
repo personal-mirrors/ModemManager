@@ -14,8 +14,7 @@
  */
 
 #include <ModemManager.h>
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
+#include <libmm-common.h>
 
 #include "libqcdm/src/commands.h"
 

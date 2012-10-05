@@ -15,15 +15,15 @@ GType @enum_name@_get_type (void) G_GNUC_CONST;
 #define @ENUMPREFIX@_TYPE_@ENUMSHORT@ (@enum_name@_get_type ())
 
 /* Define type-specific symbols */
-#undef __MM_IS_ENUM__
-#undef __MM_IS_FLAGS__
-#define __MM_IS_@TYPE@__
+#undef IS_ENUM
+#undef IS_FLAGS
+#define IS_@TYPE@
 
-#if defined __MM_IS_ENUM__
+#if defined IS_ENUM
 const gchar *@enum_name@_get_string (@EnumName@ val);
 #endif
 
-#if defined __MM_IS_FLAGS__
+#if defined IS_FLAGS
 gchar *@enum_name@_build_string_from_mask (@EnumName@ mask);
 #endif
 

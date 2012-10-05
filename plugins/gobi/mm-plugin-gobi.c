@@ -17,8 +17,7 @@
 #include <string.h>
 #include <gmodule.h>
 
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
+#include <libmm-common.h>
 
 #include "mm-plugin-gobi.h"
 #include "mm-broadband-modem-gobi.h"

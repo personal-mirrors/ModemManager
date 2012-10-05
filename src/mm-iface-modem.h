@@ -19,8 +19,7 @@
 #include <glib-object.h>
 #include <gio/gio.h>
 
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
+#include <libmm-common.h>
 
 #include "mm-charsets.h"
 #include "mm-at-serial-port.h"

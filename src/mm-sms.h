@@ -21,8 +21,7 @@
 #include <glib.h>
 #include <glib-object.h>
 
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
+#include <libmm-common.h>
 
 #include "mm-sms-part.h"
 #include "mm-base-modem.h"

@@ -16,8 +16,7 @@
  */
 
 #include <ModemManager.h>
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
+#include <libmm-common.h>
 
 #include "mm-bearer-list.h"
 #include "mm-sim.h"

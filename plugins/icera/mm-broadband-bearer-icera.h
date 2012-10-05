@@ -22,8 +22,7 @@
 #include <glib.h>
 #include <glib-object.h>
 
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
+#include <libmm-common.h>
 
 #include "mm-broadband-bearer.h"
 

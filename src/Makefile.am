@@ -14,12 +14,11 @@ libmodem_helpers_la_CPPFLAGS = \
 	-I$(top_srcdir) \
 	-I$(top_srcdir)/include \
 	-I$(top_builddir)/include \
-	-I$(top_srcdir)/libmm-glib \
-	-I${top_srcdir}/libmm-glib/generated \
-	-I${top_builddir}/libmm-glib/generated
+	-I$(top_srcdir)/libmm-common \
+	-I$(top_builddir)/libmm-common
 
 libmodem_helpers_la_LIBADD = \
-	$(top_builddir)/libmm-glib/libmm-glib.la
+	$(top_builddir)/libmm-common/libmm-common.la
 
 libmodem_helpers_la_SOURCES = \
 	mm-error-helpers.c \
@@ -62,9 +61,8 @@ libserial_la_CPPFLAGS = \
 	-I$(top_srcdir) \
 	-I$(top_srcdir)/include \
 	-I$(top_builddir)/include \
-	-I$(top_srcdir)/libmm-glib \
-	-I${top_srcdir}/libmm-glib/generated \
-	-I${top_builddir}/libmm-glib/generated
+	-I$(top_srcdir)/libmm-common \
+	-I$(top_builddir)/libmm-common
 
 nodist_libserial_la_SOURCES = \
 	mm-serial-enums-types.h \
@@ -125,10 +123,8 @@ ModemManager_CPPFLAGS = \
 	-I$(top_srcdir) \
 	-I$(top_srcdir)/include \
 	-I$(top_builddir)/include \
-	-I$(top_srcdir)/libmm-glib \
-	-I$(top_builddir)/libmm-glib \
-	-I${top_srcdir}/libmm-glib/generated \
-	-I${top_builddir}/libmm-glib/generated \
+	-I$(top_srcdir)/libmm-common \
+	-I$(top_builddir)/libmm-common \
 	-DPLUGINDIR=\"$(pkglibdir)\"
 
 ModemManager_LDADD = \
@@ -196,8 +192,6 @@ ModemManager_SOURCES = \
 	mm-iface-modem-messaging.c \
 	mm-iface-modem-time.h \
 	mm-iface-modem-time.c \
-	mm-iface-modem-firmware.h \
-	mm-iface-modem-firmware.c \
 	mm-broadband-modem.h \
 	mm-broadband-modem.c \
 	mm-serial-parsers.c \
