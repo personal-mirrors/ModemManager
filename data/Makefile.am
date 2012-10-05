@@ -32,6 +32,13 @@ icondir=${datadir}/icons/hicolor/22x22/apps
 icon_DATA = ModemManager.png
 
 
+# Logos
+logos = \
+	ModemManager-logo-square.svg ModemManager-logo-square.png \
+	ModemManager-logo-wide.svg ModemManager-logo-wide.png \
+	ModemManager-logo-wide-text.svg ModemManager-logo-wide-text.png
+
+
 # Polkit
 dist_polkit_policy_in_files = org.freedesktop.ModemManager1.policy.in
 if WITH_POLKIT
@@ -45,7 +52,6 @@ endif
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = \
 	ModemManager.pc \
-	mm-common.pc \
 	mm-glib.pc
 
 
@@ -58,4 +64,5 @@ EXTRA_DIST = \
 	$(dbusservice_file_polkit) \
 	$(dbusservice_file_nopolkit) \
 	$(icon_DATA) \
-	$(dist_polkit_policy_in_files)
+	$(dist_polkit_policy_in_files) \
+	$(logos)

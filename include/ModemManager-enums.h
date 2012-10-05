@@ -17,6 +17,10 @@
 #ifndef _MODEMMANAGER_ENUMS_H_
 #define _MODEMMANAGER_ENUMS_H_
 
+#if !defined (__MODEM_MANAGER_H_INSIDE__)
+#error "Only <ModemManager.h> can be included directly."
+#endif
+
 /**
  * SECTION:mm-enums
  * @short_description: Common enumerations and types in the API.
@@ -679,5 +683,19 @@ typedef enum { /*< underscore_name=mm_modem_3gpp_ussd_session_state >*/
     MM_MODEM_3GPP_USSD_SESSION_STATE_ACTIVE        = 2,
     MM_MODEM_3GPP_USSD_SESSION_STATE_USER_RESPONSE = 3,
 } MMModem3gppUssdSessionState;
+
+/**
+ * MMFirmwareImageType:
+ * @MM_FIRMWARE_IMAGE_TYPE_UNKNOWN: Unknown firmware type.
+ * @MM_FIRMWARE_IMAGE_TYPE_GENERIC: Generic firmware image.
+ * @MM_FIRMWARE_IMAGE_TYPE_GOBI: Firmware image of Gobi devices.
+ *
+ * Type of firmware image.
+ */
+typedef enum { /*< underscore_name=mm_firmware_image_type >*/
+    MM_FIRMWARE_IMAGE_TYPE_UNKNOWN = 0,
+    MM_FIRMWARE_IMAGE_TYPE_GENERIC = 1,
+    MM_FIRMWARE_IMAGE_TYPE_GOBI    = 2,
+} MMFirmwareImageType;
 
 #endif /*  _MODEMMANAGER_ENUMS_H_ */
