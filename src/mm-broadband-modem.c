@@ -6813,7 +6813,8 @@ disabling_context_complete_and_free (DisablingContext *ctx)
     }
 
     g_object_unref (ctx->result);
-    g_object_unref (ctx->cancellable);
+    if (ctx->cancellable)
+        g_object_unref (ctx->cancellable);
     g_object_unref (ctx->self);
     g_free (ctx);
 }
@@ -6837,10 +6838,7 @@ disable_finish (MMBaseModem *self,
                GAsyncResult *res,
                GError **error)
 {
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
-        return FALSE;
-
-    return TRUE;
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
 
 #undef INTERFACE_DISABLE_READY_FN
@@ -7006,12 +7004,17 @@ disabling_step (DisablingContext *ctx)
         ctx->step++;
 
     case DISABLING_STEP_IFACE_MODEM:
-        g_assert (ctx->self->priv->modem_dbus_skeleton != NULL);
-        /* Disabling the Modem interface */
-        mm_iface_modem_disable (MM_IFACE_MODEM (ctx->self),
-                               (GAsyncReadyCallback)iface_modem_disable_ready,
-                               ctx);
-        return;
+        /* This skeleton may be NULL when mm_base_modem_disable() gets called at
+         * the same time as modem object disposal. */
+        if (ctx->self->priv->modem_dbus_skeleton) {
+            /* Disabling the Modem interface */
+            mm_iface_modem_disable (MM_IFACE_MODEM (ctx->self),
+                                    (GAsyncReadyCallback)iface_modem_disable_ready,
+                                    ctx);
+            return;
+        }
+        /* Fall down to next step */
+        ctx->step++;
 
     case DISABLING_STEP_LAST:
         /* All disabled without errors! */
@@ -7074,12 +7077,12 @@ disable (MMBaseModem *self,
         ctx = g_new0 (DisablingContext, 1);
         ctx->self = g_object_ref (self);
         ctx->result = result;
-        ctx->cancellable = g_object_ref (cancellable);
+        ctx->cancellable = (cancellable ? g_object_ref (cancellable) : NULL);
         ctx->step = DISABLING_STEP_FIRST;
 
         disabling_step (ctx);
         return;
-    }
+      }
     }
 
     g_simple_async_result_complete_in_idle (result);

@@ -4008,10 +4008,7 @@ common_process_serving_system_cdma (MMBroadbandModemQmi *self,
     else
         qmi_indication_nas_serving_system_output_get_cdma_system_id (indication_output, &sid, &nid, NULL);
 
-    /* TODO: Roaming flags */
-
-    /* Build registration states */
-
+    /* Build generic registration states */
     if (mm_access_technologies & MM_IFACE_MODEM_CDMA_ALL_CDMA1X_ACCESS_TECHNOLOGIES_MASK)
         mm_cdma1x_registration_state = mm_modem_cdma_registration_state_from_qmi_registration_state (registration_state);
     else
@@ -4021,6 +4018,61 @@ common_process_serving_system_cdma (MMBroadbandModemQmi *self,
         mm_evdo_registration_state = mm_modem_cdma_registration_state_from_qmi_registration_state (registration_state);
     else
         mm_evdo_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
+
+    /* Process per-technology roaming flags */
+    if (response_output) {
+        GArray *array;
+
+        if (qmi_message_nas_get_serving_system_output_get_roaming_indicator_list (response_output, &array, NULL)) {
+            guint i;
+
+            for (i = 0; i < array->len; i++) {
+                QmiMessageNasGetServingSystemOutputRoamingIndicatorListElement *element;
+
+                element = &g_array_index (array, QmiMessageNasGetServingSystemOutputRoamingIndicatorListElement, i);
+
+                if (element->radio_interface == QMI_NAS_RADIO_INTERFACE_CDMA_1X &&
+                    mm_cdma1x_registration_state == MM_MODEM_CDMA_REGISTRATION_STATE_REGISTERED) {
+                    if (element->roaming_indicator == QMI_NAS_ROAMING_INDICATOR_STATUS_ON)
+                        mm_cdma1x_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING;
+                    else if (element->roaming_indicator == QMI_NAS_ROAMING_INDICATOR_STATUS_OFF)
+                        mm_cdma1x_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_HOME;
+                } else if (element->radio_interface == QMI_NAS_RADIO_INTERFACE_CDMA_1XEVDO &&
+                           mm_evdo_registration_state == MM_MODEM_CDMA_REGISTRATION_STATE_REGISTERED) {
+                    if (element->roaming_indicator == QMI_NAS_ROAMING_INDICATOR_STATUS_ON)
+                        mm_evdo_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING;
+                    else if (element->roaming_indicator == QMI_NAS_ROAMING_INDICATOR_STATUS_OFF)
+                        mm_evdo_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_HOME;
+                }
+            }
+        }
+    } else {
+        GArray *array;
+
+        if (qmi_indication_nas_serving_system_output_get_roaming_indicator_list (indication_output, &array, NULL)) {
+            guint i;
+
+            for (i = 0; i < array->len; i++) {
+                QmiIndicationNasServingSystemOutputRoamingIndicatorListElement *element;
+
+                element = &g_array_index (array, QmiIndicationNasServingSystemOutputRoamingIndicatorListElement, i);
+
+                if (element->radio_interface == QMI_NAS_RADIO_INTERFACE_CDMA_1X &&
+                    mm_cdma1x_registration_state == MM_MODEM_CDMA_REGISTRATION_STATE_REGISTERED) {
+                    if (element->roaming_indicator == QMI_NAS_ROAMING_INDICATOR_STATUS_ON)
+                        mm_cdma1x_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING;
+                    else if (element->roaming_indicator == QMI_NAS_ROAMING_INDICATOR_STATUS_OFF)
+                        mm_cdma1x_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_HOME;
+                } else if (element->radio_interface == QMI_NAS_RADIO_INTERFACE_CDMA_1XEVDO &&
+                           mm_evdo_registration_state == MM_MODEM_CDMA_REGISTRATION_STATE_REGISTERED) {
+                    if (element->roaming_indicator == QMI_NAS_ROAMING_INDICATOR_STATUS_ON)
+                        mm_evdo_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING;
+                    else if (element->roaming_indicator == QMI_NAS_ROAMING_INDICATOR_STATUS_OFF)
+                        mm_evdo_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_HOME;
+                }
+            }
+        }
+    }
 
     /* Note: don't rely on the 'Detailed Service Status', it's not always given. */
 
@@ -5742,19 +5794,32 @@ disable_location_gathering (MMIfaceModemLocation *self,
     DisableLocationGatheringContext *ctx;
     QmiClient *client = NULL;
     gboolean stop_gps = FALSE;
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        disable_location_gathering);
+
+    /* Nothing to be done to disable 3GPP location */
+    if (source == MM_MODEM_LOCATION_SOURCE_3GPP_LAC_CI) {
+        g_simple_async_result_set_op_res_gboolean (result, TRUE);
+        g_simple_async_result_complete_in_idle (result);
+        g_object_unref (result);
+        return;
+    }
 
     if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
                             QMI_SERVICE_PDS, &client,
-                            callback, user_data))
+                            callback, user_data)) {
+        g_object_unref (result);
         return;
+    }
 
     ctx = g_slice_new0 (DisableLocationGatheringContext);
     ctx->self = g_object_ref (self);
     ctx->client = g_object_ref (client);
-    ctx->result = g_simple_async_result_new (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             disable_location_gathering);
+    ctx->result = result;
 
     /* Only stop GPS engine if no GPS-related sources enabled */
     if (source & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
@@ -5782,7 +5847,7 @@ disable_location_gathering (MMIfaceModemLocation *self,
         return;
     }
 
-    /* For any other location (e.g. 3GPP), or if still some GPS needed, just return */
+    /* If still some GPS needed, just return */
     g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
     disable_location_gathering_context_complete_and_free (ctx);
 }
