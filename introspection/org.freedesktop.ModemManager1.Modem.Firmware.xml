@@ -25,19 +25,54 @@
       Certain properties are pre-defined, and some are required:
 
       <variablelist>
-        <varlistentry><term><literal>"name"</literal></term>
+        <varlistentry><term><literal>"image-type"</literal></term>
           <listitem>
-            (Required) A user-readable name for the firmware image, given as a
+            (Required) Type of the firmware image, given as a
+            <link linkend="MMFirmwareImageType">MMFirmwareImageType</link> value
+            (signature <literal>"u"</literal>). Firmware images of type
+            <link linkend="MM-FIRMWARE-IMAGE-TYPE-GENERIC:CAPS">MM_FIRMWARE_IMAGE_TYPE_GENERIC</link>
+            will only expose only the mandatory properties.
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"unique-id"</literal></term>
+          <listitem>
+            (Required) A user-readable unique ID for the firmware image, given as a
             string value (signature <literal>"s"</literal>).
           </listitem>
         </varlistentry>
-        <varlistentry><term><literal>"version"</literal></term>
+        <varlistentry><term><literal>"gobi-pri-version"</literal></term>
           <listitem>
-            (Optional) The version of the firmware, given as a string value
-            (signature <literal>"s"</literal>). The format is
-            unspecified; tools attempting to upgrade firmware automatically must
-            understand the versioning scheme used by the modem driver they are
-            interacting with.
+            (Optional) The version of the PRI firmware image, in images of type
+            <link linkend="MM-FIRMWARE-IMAGE-TYPE-GOBI:CAPS">MM_FIRMWARE_IMAGE_TYPE_GOBI</link>,
+            given as a string value (signature <literal>"s"</literal>).
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"gobi-pri-info"</literal></term>
+          <listitem>
+            (Optional) Additional information of the PRI image, in images of type
+            <link linkend="MM-FIRMWARE-IMAGE-TYPE-GOBI:CAPS">MM_FIRMWARE_IMAGE_TYPE_GOBI</link>,
+            given as a string value (signature <literal>"s"</literal>).
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"gobi-boot-version"</literal></term>
+          <listitem>
+            (Optional) The boot version of the PRI firmware image, in images of type
+            <link linkend="MM-FIRMWARE-IMAGE-TYPE-GOBI:CAPS">MM_FIRMWARE_IMAGE_TYPE_GOBI</link>,
+            given as a string value (signature <literal>"s"</literal>).
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"gobi-pri-unique-id"</literal></term>
+          <listitem>
+            (Optional) The unique ID of the PRI firmware image, in images of type
+            <link linkend="MM-FIRMWARE-IMAGE-TYPE-GOBI:CAPS">MM_FIRMWARE_IMAGE_TYPE_GOBI</link>,
+            given as a string value (signature <literal>"s"</literal>).
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"gobi-modem-unique-id"</literal></term>
+          <listitem>
+            (Optional) The unique ID of the Modem firmware image, in images of type
+            <link linkend="MM-FIRMWARE-IMAGE-TYPE-GOBI:CAPS">MM_FIRMWARE_IMAGE_TYPE_GOBI</link>,
+            given as a string value (signature <literal>"s"</literal>).
           </listitem>
         </varlistentry>
       </variablelist>
@@ -46,39 +81,35 @@
 
     <!--
         List:
-        @selected: The identifier of the selected firmware slot, or the empty string if no slot is selected (such as if all slots are empty, or no slots exist).
-        @installed: A dictionary of slots into which firmware is and/or can be installed. The key of each entry is the identifier of the slot, and the value is either an empty dictionary if the slot is empty, or a dictionary of properties of the firmware image installed in that slot. The slot identifiers and the mapping between slots and firmware images are guaranteed to remain stable only as long as the modem remains present.
-        @available: A dictionary of available firmware images. The key of each entry is the identifier of the image, and the value is a dictionary of properties of the image. The image identifiers are guaranteed to remain stable only as long as the modem remains present.
+        @selected: The unique name of the selected firmware image, or the empty string if no image is selected.
+        @installed: An array of dictionaries containing the properties of the installed firmware images.
 
-        List installed and available firmware images.
+        List installed firmware images.
 
         Depending on the type of modem, installed images may be stored on the
-        host or the modem.  The distinction between @installed and
-        @available is not one of where the firmware is stored, but that
-        installed images can be selected non-destructively, while available
-        images must be installed into a slot, possibly overwriting another
-        installed image.
+        host or the modem.
+
+        Installed images can be selected non-destructively.
     -->
     <method name="List">
-      <arg name="selected"  type="s"         direction="out" />
-      <arg name="installed" type="a{sa{sv}}" direction="out" />
-      <arg name="available" type="a{sa{sv}}" direction="out" />
+      <arg name="selected"  type="s"        direction="out" />
+      <arg name="installed" type="aa{sv}" direction="out" />
     </method>
 
     <!--
         Select:
-        @slot: The identifier of the firmware slot to select.
+        @uniqueid: The unique ID of the firmware image to select.
 
         Selects a different firmware image to use, and immediately resets the
         modem so that it begins using the new firmware image.
 
-        The method will fail if the identifier does not match any of the slot
-        identifiers returned by
+        The method will fail if the identifier does not match any of the names
+        returned by
         <link linkend="gdbus-method-org-freedesktop-ModemManager1-Modem-Firmware.List">List()</link>,
-        or if the slot could not be selected for some reason.
+        or if the image could not be selected for some reason.
     -->
     <method name="Select">
-      <arg name="slot" type="s" direction="in" />
+      <arg name="uniqueid" type="s" direction="in" />
     </method>
 
     <!--
@@ -95,11 +126,11 @@
 
         The method will fail if either of the identifiers is invalid, or if the
         image could not be installed into the slot for some reason.
-    -->
+
     <method name="Install">
       <arg name="image" type="s" direction="in" />
       <arg name="slot"  type="s" direction="in" />
-    </method>
+    </method-->
 
   </interface>
 </node>

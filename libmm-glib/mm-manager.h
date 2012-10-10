@@ -17,7 +17,8 @@
  * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
  * Boston, MA 02110-1301 USA.
  *
- * Copyright (C) 2011 Google, Inc.
+ * Copyright (C) 2011 - 2012 Aleksander Morgado <aleksander@gnu.org>
+ * Copyright (C) 2011 - 2012 Google, Inc.
  *
  * Author: Aleksander Morgado <aleksander@lanedo.com>
  */
@@ -25,8 +26,13 @@
 #ifndef _MM_MANAGER_H_
 #define _MM_MANAGER_H_
 
+#if !defined (__LIBMM_GLIB_H_INSIDE__) && !defined (LIBMM_GLIB_COMPILATION)
+#error "Only <libmm-glib.h> can be included directly."
+#endif
+
 #include <ModemManager.h>
-#include <mm-gdbus-modem.h>
+
+#include "mm-gdbus-modem.h"
 
 G_BEGIN_DECLS
 
@@ -37,18 +43,26 @@ G_BEGIN_DECLS
 #define MM_IS_MANAGER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((obj), MM_TYPE_MANAGER))
 #define MM_MANAGER_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), MM_TYPE_MANAGER, MMManagerClass))
 
+typedef struct _MMManager MMManager;
+typedef struct _MMManagerClass MMManagerClass;
 typedef struct _MMManagerPrivate MMManagerPrivate;
 
-typedef struct {
+/**
+ * MMManager:
+ *
+ * The #MMManager structure contains private data and should only be accessed
+ * using the provided API.
+ */
+struct _MMManager {
     /*< private >*/
     MmGdbusObjectManagerClient parent;
     MMManagerPrivate *priv;
-} MMManager;
+};
 
-typedef struct {
+struct _MMManagerClass {
     /*< private >*/
     MmGdbusObjectManagerClientClass parent;
-} MMManagerClass;
+};
 
 GType mm_manager_get_type (void);
 
