@@ -293,6 +293,7 @@ set_allowed_modes_ready (MMBaseModem *self,
         if (g_error_matches (error,
                              MM_CORE_ERROR,
                              MM_CORE_ERROR_UNSUPPORTED)) {
+            g_error_free (error);
             /* If setting bands is unsupported, keep on without sleep */
             ctx->step++;
             connection_step (ctx);
@@ -330,6 +331,7 @@ set_bands_ready (MMBaseModem *self,
         if (g_error_matches (error,
                              MM_CORE_ERROR,
                              MM_CORE_ERROR_UNSUPPORTED)) {
+            g_error_free (error);
             /* If setting bands is unsupported, keep on without sleep */
             ctx->step++;
             connection_step (ctx);
@@ -643,6 +645,15 @@ connection_step (ConnectionContext *ctx)
         g_object_get (ctx->self,
                       MM_IFACE_MODEM_BEARER_LIST, &list,
                       NULL);
+        if (!list) {
+            g_dbus_method_invocation_return_error (
+                ctx->invocation,
+                MM_CORE_ERROR,
+                MM_CORE_ERROR_FAILED,
+                "Couldn't get the bearer list");
+            connection_context_free (ctx);
+            return;
+        }
 
         bearer_properties = mm_simple_connect_properties_get_bearer_properties (ctx->properties);
 
@@ -891,6 +902,16 @@ disconnect_auth_ready (MMBaseModem *self,
     g_object_get (self,
                   MM_IFACE_MODEM_BEARER_LIST, &list,
                   NULL);
+    if (!list) {
+        g_dbus_method_invocation_return_error (
+            ctx->invocation,
+            MM_CORE_ERROR,
+            MM_CORE_ERROR_FAILED,
+            "Couldn't get the bearer list");
+        disconnection_context_free (ctx);
+        return;
+    }
+
     mm_bearer_list_foreach (list,
                             (MMBearerListForeachFunc)build_connected_bearer_list,
                             ctx);
@@ -968,8 +989,6 @@ mm_iface_modem_simple_initialize (MMIfaceModemSimple *self)
 {
     MmGdbusModemSimple *skeleton = NULL;
 
-    g_return_if_fail (MM_IS_IFACE_MODEM_SIMPLE (self));
-
     /* Did we already create it? */
     g_object_get (self,
                   MM_IFACE_MODEM_SIMPLE_DBUS_SKELETON, &skeleton,
@@ -1005,8 +1024,6 @@ mm_iface_modem_simple_initialize (MMIfaceModemSimple *self)
 void
 mm_iface_modem_simple_shutdown (MMIfaceModemSimple *self)
 {
-    g_return_if_fail (MM_IS_IFACE_MODEM_SIMPLE (self));
-
     /* Unexport DBus interface and remove the skeleton */
     mm_gdbus_object_skeleton_set_modem_simple (MM_GDBUS_OBJECT_SKELETON (self), NULL);
     g_object_set (self,
