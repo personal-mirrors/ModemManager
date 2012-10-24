@@ -1526,8 +1526,20 @@ set_bands_ready (MMIfaceModem *self,
     if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_bands_finish (self, res, &error))
         g_simple_async_result_take_error (ctx->result, error);
     else {
-        mm_gdbus_modem_set_bands (ctx->skeleton,
-                                  mm_common_bands_garray_to_variant (ctx->bands_array));
+        /* Never show just 'any' in the interface */
+        if (ctx->bands_array->len == 1 &&
+            g_array_index (ctx->bands_array, MMModemBand, 0) == MM_MODEM_BAND_ANY) {
+            GArray *supported_bands;
+
+            supported_bands = (mm_common_bands_variant_to_garray (
+                                   mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
+            mm_gdbus_modem_set_bands (ctx->skeleton,
+                                      mm_common_bands_garray_to_variant (supported_bands));
+            g_array_unref (supported_bands);
+        } else
+            mm_gdbus_modem_set_bands (ctx->skeleton,
+                                      mm_common_bands_garray_to_variant (ctx->bands_array));
+
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
     }
 
@@ -2757,15 +2769,25 @@ load_current_bands_ready (MMIfaceModem *self,
                           GAsyncResult *res,
                           EnablingContext *ctx)
 {
-    GArray *bands_array;
+    GArray *current_bands;
+    GArray *filtered_bands;
+    GArray *supported_bands;
     GError *error = NULL;
 
-    bands_array = MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands_finish (self, res, &error);
+    current_bands = MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands_finish (self, res, &error);
 
-    if (bands_array) {
+    supported_bands = (mm_common_bands_variant_to_garray (
+                           mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
+    filtered_bands = mm_filter_current_bands (supported_bands, current_bands);
+    if (current_bands)
+        g_array_unref (current_bands);
+    if (supported_bands)
+        g_array_unref (supported_bands);
+
+    if (filtered_bands) {
         mm_gdbus_modem_set_bands (ctx->skeleton,
-                                  mm_common_bands_garray_to_variant (bands_array));
-        g_array_unref (bands_array);
+                                  mm_common_bands_garray_to_variant (filtered_bands));
+        g_array_unref (filtered_bands);
     } else
         mm_gdbus_modem_set_bands (ctx->skeleton, mm_common_build_bands_unknown ());
 
@@ -3616,9 +3638,9 @@ interface_initialization_step (InitializationContext *ctx)
                 return;
             }
 
-            /* Loading supported bands not implemented, default to ANY */
-            mm_gdbus_modem_set_supported_bands (ctx->skeleton, mm_common_build_bands_any ());
-            mm_gdbus_modem_set_bands (ctx->skeleton, mm_common_build_bands_any ());
+            /* Loading supported bands not implemented, default to UNKNOWN */
+            mm_gdbus_modem_set_supported_bands (ctx->skeleton, mm_common_build_bands_unknown ());
+            mm_gdbus_modem_set_bands (ctx->skeleton, mm_common_build_bands_unknown ());
         }
         g_array_unref (supported_bands);
 
