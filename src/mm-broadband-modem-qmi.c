@@ -2435,11 +2435,16 @@ set_technology_preference_ready (QmiClientNas *client,
     if (!output) {
         mm_dbg ("QMI operation failed: %s", error->message);
         g_error_free (error);
-    } else if (!qmi_message_nas_set_technology_preference_output_get_result (output, &error)) {
+    } else if (!qmi_message_nas_set_technology_preference_output_get_result (output, &error) &&
+               !g_error_matches (error,
+                                 QMI_PROTOCOL_ERROR,
+                                 QMI_PROTOCOL_ERROR_NO_EFFECT)) {
         mm_dbg ("Couldn't set technology preference: %s", error->message);
         g_error_free (error);
         qmi_message_nas_set_technology_preference_output_unref (output);
     } else {
+        if (error)
+            g_error_free (error);
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
         set_allowed_modes_context_complete_and_free (ctx);
         qmi_message_nas_set_technology_preference_output_unref (output);
@@ -2506,7 +2511,9 @@ set_allowed_modes_context_step (SetAllowedModesContext *ctx)
         input = qmi_message_nas_set_system_selection_preference_input_new ();
         qmi_message_nas_set_system_selection_preference_input_set_mode_preference (input, pref, NULL);
 
-        if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (ctx->self))) {
+        /* Only set acquisition order preference if both 2G and 3G given as allowed */
+        if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (ctx->self)) &&
+            (ctx->allowed & (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G))) {
             QmiNasGsmWcdmaAcquisitionOrderPreference order;
 
             order = mm_modem_mode_to_qmi_gsm_wcdma_acquisition_order_preference (ctx->preferred);

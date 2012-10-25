@@ -2303,15 +2303,41 @@ modem_init_finish (MMIfaceModem *self,
                    GAsyncResult *res,
                    GError **error)
 {
-    GError *inner_error = NULL;
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
 
-    mm_base_modem_at_sequence_finish (MM_BASE_MODEM (self), res, NULL, &inner_error);
-    if (inner_error) {
-        g_propagate_error (error, inner_error);
-        return FALSE;
+static void
+modem_init_sequence_ready (MMBaseModem *self,
+                           GAsyncResult *res,
+                           GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+
+    mm_base_modem_at_sequence_full_finish (MM_BASE_MODEM (self), res, NULL, &error);
+    if (error)
+        g_simple_async_result_take_error (simple, error);
+    else {
+        MMAtSerialPort *secondary;
+
+        /* Disable echo in secondary port as well, if any */
+        secondary = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
+        if (secondary)
+            /* No need to wait for the reply */
+            mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                           secondary,
+                                           "E0",
+                                           3,
+                                           FALSE,
+                                           FALSE, /* raw */
+                                           NULL, /* cancellable */
+                                           NULL,
+                                           NULL);
+
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
     }
 
-    return TRUE;
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
 }
 
 static const MMBaseModemAtCommand modem_init_sequence[] = {
@@ -2341,12 +2367,34 @@ modem_init (MMIfaceModem *self,
             GAsyncReadyCallback callback,
             gpointer user_data)
 {
-    mm_base_modem_at_sequence (MM_BASE_MODEM (self),
-                               modem_init_sequence,
-                               NULL,  /* response_processor_context */
-                               NULL,  /* response_processor_context_free */
-                               callback,
-                               user_data);
+    MMAtSerialPort *primary;
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        modem_init);
+
+    primary = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
+    if (!primary) {
+        g_simple_async_result_set_error (
+            result,
+            MM_CORE_ERROR,
+            MM_CORE_ERROR_FAILED,
+            "Need primary AT port to run modem init sequence");
+        g_simple_async_result_complete_in_idle (result);
+        g_object_unref (result);
+        return;
+    }
+
+    mm_base_modem_at_sequence_full (MM_BASE_MODEM (self),
+                                    primary,
+                                    modem_init_sequence,
+                                    NULL,  /* response_processor_context */
+                                    NULL,  /* response_processor_context_free */
+                                    NULL, /* cancellable */
+                                    (GAsyncReadyCallback)modem_init_sequence_ready,
+                                    result);
 }
 
 /*****************************************************************************/
@@ -6905,6 +6953,7 @@ disabling_step (DisablingContext *ctx)
 
     switch (ctx->step) {
     case DISABLING_STEP_FIRST:
+        mm_info ("Modem disabling...");
         /* Fall down to next step */
         ctx->step++;
 
@@ -7017,6 +7066,7 @@ disabling_step (DisablingContext *ctx)
         ctx->step++;
 
     case DISABLING_STEP_LAST:
+        mm_info ("Modem fully disabled...");
         /* All disabled without errors! */
         g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (ctx->result), TRUE);
         disabling_context_complete_and_free (ctx);
@@ -7214,6 +7264,7 @@ enabling_step (EnablingContext *ctx)
 
     switch (ctx->step) {
     case ENABLING_STEP_FIRST:
+        mm_info ("Modem enabling...");
         /* Fall down to next step */
         ctx->step++;
 
@@ -7326,6 +7377,7 @@ enabling_step (EnablingContext *ctx)
         ctx->step++;
 
     case ENABLING_STEP_LAST:
+        mm_info ("Modem fully enabled...");
         /* All enabled without errors! */
         g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (ctx->result), TRUE);
         enabling_context_complete_and_free (ctx);
@@ -7619,6 +7671,7 @@ initialize_step (InitializeContext *ctx)
 
     switch (ctx->step) {
     case INITIALIZE_STEP_FIRST:
+        mm_info ("Modem initializing...");
         /* Fall down to next step */
         ctx->step++;
 
@@ -7763,6 +7816,8 @@ initialize_step (InitializeContext *ctx)
             initialize_context_complete_and_free (ctx);
             return;
         }
+
+        mm_info ("Modem fully initialized");
 
         /* All initialized without errors!
          * Set as disabled (a.k.a. initialized) */
