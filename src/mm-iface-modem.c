@@ -75,6 +75,134 @@ mm_iface_modem_bind_simple_status (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
+/* Helper method to wait for a final state */
+
+#define MODEM_STATE_IS_INTERMEDIATE(state)      \
+    (state == MM_MODEM_STATE_INITIALIZING ||    \
+     state == MM_MODEM_STATE_INITIALIZING ||    \
+     state == MM_MODEM_STATE_INITIALIZING ||    \
+     state == MM_MODEM_STATE_INITIALIZING ||    \
+     state == MM_MODEM_STATE_INITIALIZING)
+
+typedef struct {
+    MMIfaceModem *self;
+    MMModemState final_state;
+    GSimpleAsyncResult *result;
+    gulong state_changed_id;
+    guint state_changed_wait_id;
+} WaitForFinalStateContext;
+
+static void
+wait_for_final_state_context_complete_and_free (WaitForFinalStateContext *ctx)
+{
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
+    g_signal_handler_disconnect (ctx->self, ctx->state_changed_id);
+    g_source_remove (ctx->state_changed_wait_id);
+    g_object_unref (ctx->self);
+    g_slice_free (WaitForFinalStateContext, ctx);
+}
+
+MMModemState
+mm_iface_modem_wait_for_final_state_finish (MMIfaceModem *self,
+                                            GAsyncResult *res,
+                                            GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return MM_MODEM_STATE_UNKNOWN;
+
+    return (MMModemState)GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static gboolean
+state_changed_wait_expired (WaitForFinalStateContext *ctx)
+{
+    g_simple_async_result_set_error (
+        ctx->result,
+        MM_CORE_ERROR,
+        MM_CORE_ERROR_RETRY,
+        "Too much time waiting to get to a final state");
+    wait_for_final_state_context_complete_and_free (ctx);
+    return FALSE;
+}
+
+static void
+state_changed (MMIfaceModem *self,
+               GParamSpec *spec,
+               WaitForFinalStateContext *ctx)
+{
+    MMModemState state = MM_MODEM_STATE_UNKNOWN;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_STATE, &state,
+                  NULL);
+
+    /* Are we in a final state already? */
+    if (MODEM_STATE_IS_INTERMEDIATE (state))
+        return;
+
+    /* If we want a specific final state and this is not the one we were
+     * looking for, then skip */
+    if (ctx->final_state != MM_MODEM_STATE_UNKNOWN &&
+        state != MM_MODEM_STATE_UNKNOWN &&
+        state != ctx->final_state)
+        return;
+
+    /* Done! */
+    g_simple_async_result_set_op_res_gpointer (ctx->result, GUINT_TO_POINTER (state), NULL);
+    wait_for_final_state_context_complete_and_free (ctx);
+}
+
+void
+mm_iface_modem_wait_for_final_state (MMIfaceModem *self,
+                                     MMModemState final_state,
+                                     GAsyncReadyCallback callback,
+                                     gpointer user_data)
+{
+    MMModemState state = MM_MODEM_STATE_UNKNOWN;
+    WaitForFinalStateContext *ctx;
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        mm_iface_modem_wait_for_final_state);
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_STATE, &state,
+                  NULL);
+
+    /* Are we in a final state already? */
+    if (!MODEM_STATE_IS_INTERMEDIATE (state)) {
+        /* Is this the state we actually wanted? */
+        if (final_state == MM_MODEM_STATE_UNKNOWN ||
+            (state != MM_MODEM_STATE_UNKNOWN && state == final_state)) {
+            g_simple_async_result_set_op_res_gpointer (result, GUINT_TO_POINTER (state), NULL);
+            g_simple_async_result_complete_in_idle (result);
+            g_object_unref (result);
+            return;
+        }
+
+        /* Otherwise, we'll need to wait for the exact one we want */
+    }
+
+    ctx = g_slice_new0 (WaitForFinalStateContext);
+    ctx->result = result;
+    ctx->self = g_object_ref (self);
+    ctx->final_state = final_state;
+
+    /* Want to get notified when modem state changes */
+    ctx->state_changed_id = g_signal_connect (ctx->self,
+                                              "notify::" MM_IFACE_MODEM_STATE,
+                                              G_CALLBACK (state_changed),
+                                              ctx);
+    /* But we don't want to wait forever */
+    ctx->state_changed_wait_id = g_timeout_add_seconds (10,
+                                                        (GSourceFunc)state_changed_wait_expired,
+                                                        ctx);
+}
+
+/*****************************************************************************/
 
 static MMModemState get_current_consolidated_state (MMIfaceModem *self);
 
@@ -101,12 +229,22 @@ bearer_status_changed (MMBearer *bearer,
 {
     CountOthersConnectedContext ctx;
     MMBearerList *list = NULL;
+    MMModemState state = MM_MODEM_STATE_UNKNOWN;
 
     g_object_get (self,
+                  MM_IFACE_MODEM_STATE, &state,
                   MM_IFACE_MODEM_BEARER_LIST, &list,
                   NULL);
     if (!list)
         return;
+
+    if (state == MM_MODEM_STATE_DISABLING ||
+        state == MM_MODEM_STATE_ENABLING) {
+        /* Don't log modem bearer-specific status changes if we're disabling
+         * or enabling */
+        g_object_unref (list);
+        return;
+    }
 
     ctx.self = bearer;
     ctx.others_connected = 0;
@@ -1022,6 +1160,10 @@ mm_iface_modem_update_state (MMIfaceModem *self,
             new_state = old_state;
     }
 
+    /* Enabled may really be searching or registered */
+    if (new_state == MM_MODEM_STATE_ENABLED)
+        new_state = get_current_consolidated_state (self);
+
     /* Update state only if different */
     if (new_state != old_state) {
         const gchar *dbus_path;
@@ -1191,11 +1333,22 @@ mm_iface_modem_update_subsystem_state (MMIfaceModem *self,
                                        MMModemStateChangeReason reason)
 {
     MMModemState consolidated;
+    MMModemState state = MM_MODEM_STATE_UNKNOWN;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_STATE, &state,
+                  NULL);
 
     /* We may have different subsystems being handled (e.g. 3GPP and CDMA), and
      * the registration status value is unique, so if we get subsystem-specific
      * state updates, we'll need to merge all to get a consolidated one. */
     consolidated = get_updated_consolidated_state (self, subsystem, new_state);
+
+    /* Don't update registration-related states while disabling/enabling */
+    if (state == MM_MODEM_STATE_ENABLING ||
+        state == MM_MODEM_STATE_DISABLING)
+        return;
+
     mm_iface_modem_update_state (self, consolidated, reason);
 }
 
@@ -2441,7 +2594,6 @@ struct _DisablingContext {
     MMIfaceModem *self;
     DisablingStep step;
     MMModemState previous_state;
-    gboolean disabled;
     GSimpleAsyncResult *result;
     MmGdbusModem *skeleton;
 };
@@ -2450,17 +2602,6 @@ static void
 disabling_context_complete_and_free (DisablingContext *ctx)
 {
     g_simple_async_result_complete_in_idle (ctx->result);
-
-    if (ctx->disabled)
-        mm_iface_modem_update_state (ctx->self,
-                                     MM_MODEM_STATE_DISABLED,
-                                     MM_MODEM_STATE_CHANGE_REASON_USER_REQUESTED);
-    else
-        /* Fallback to previous state */
-        mm_iface_modem_update_state (ctx->self,
-                                     ctx->previous_state,
-                                     MM_MODEM_STATE_CHANGE_REASON_UNKNOWN);
-
     g_object_unref (ctx->self);
     g_object_unref (ctx->result);
     if (ctx->skeleton)
@@ -2540,7 +2681,6 @@ interface_disabling_step (DisablingContext *ctx)
     case DISABLING_STEP_LAST:
         /* We are done without errors! */
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        ctx->disabled = TRUE;
         disabling_context_complete_and_free (ctx);
         return;
     }
@@ -2575,10 +2715,6 @@ mm_iface_modem_disable (MMIfaceModem *self,
         return;
     }
 
-    mm_iface_modem_update_state (ctx->self,
-                                 MM_MODEM_STATE_DISABLING,
-                                 MM_MODEM_STATE_CHANGE_REASON_USER_REQUESTED);
-
     interface_disabling_step (ctx);
 }
 
@@ -2606,7 +2742,6 @@ struct _EnablingContext {
     EnablingStep step;
     MMModemCharset supported_charsets;
     const MMModemCharset *current_charset;
-    gboolean enabled;
     GSimpleAsyncResult *result;
     GCancellable *cancellable;
     MmGdbusModem *skeleton;
@@ -2616,26 +2751,6 @@ static void
 enabling_context_complete_and_free (EnablingContext *ctx)
 {
     g_simple_async_result_complete_in_idle (ctx->result);
-
-    if (ctx->enabled)
-        mm_iface_modem_update_state (ctx->self,
-                                     MM_MODEM_STATE_ENABLED,
-                                     MM_MODEM_STATE_CHANGE_REASON_USER_REQUESTED);
-    else if (ctx->skeleton) {
-        MMModemLock lock;
-
-        /* Fallback to DISABLED/LOCKED */
-        lock = mm_gdbus_modem_get_unlock_required (ctx->skeleton);
-        mm_iface_modem_update_state (
-            ctx->self,
-            ((lock == MM_MODEM_LOCK_NONE ||
-              lock == MM_MODEM_LOCK_SIM_PIN2 ||
-              lock == MM_MODEM_LOCK_SIM_PUK2) ?
-             MM_MODEM_STATE_DISABLED :
-             MM_MODEM_STATE_LOCKED),
-            MM_MODEM_STATE_CHANGE_REASON_UNKNOWN);
-    }
-
     g_object_unref (ctx->self);
     g_object_unref (ctx->result);
     g_object_unref (ctx->cancellable);
@@ -2958,7 +3073,6 @@ interface_enabling_step (EnablingContext *ctx)
     case ENABLING_STEP_LAST:
         /* We are done without errors! */
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        ctx->enabled = TRUE;
         enabling_context_complete_and_free (ctx);
         return;
     }
@@ -2993,10 +3107,6 @@ mm_iface_modem_enable (MMIfaceModem *self,
         enabling_context_complete_and_free (ctx);
         return;
     }
-
-    mm_iface_modem_update_state (ctx->self,
-                                 MM_MODEM_STATE_ENABLING,
-                                 MM_MODEM_STATE_CHANGE_REASON_USER_REQUESTED);
 
     interface_enabling_step (ctx);
 }
