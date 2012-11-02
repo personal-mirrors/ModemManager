@@ -45,12 +45,15 @@ libmm_glib_la_SOURCES = \
 	mm-sms-properties.c \
 	mm-bearer-ip-config.h \
 	mm-bearer-ip-config.c \
+	mm-location-common.h \
 	mm-location-3gpp.h \
 	mm-location-3gpp.c \
 	mm-location-gps-raw.h \
 	mm-location-gps-raw.c \
 	mm-location-gps-nmea.h \
 	mm-location-gps-nmea.c \
+	mm-location-cdma-bs.h \
+	mm-location-cdma-bs.c \
 	mm-unlock-retries.h \
 	mm-unlock-retries.c \
 	mm-network-timezone.h \
@@ -93,9 +96,11 @@ include_HEADERS = \
 	mm-bearer-properties.h \
 	mm-sms-properties.h \
 	mm-bearer-ip-config.h \
+	mm-location-common.h \
 	mm-location-3gpp.h \
 	mm-location-gps-nmea.h \
 	mm-location-gps-raw.h \
+	mm-location-cdma-bs.h \
 	mm-unlock-retries.h \
 	mm-network-timezone.h \
 	mm-firmware-properties.h

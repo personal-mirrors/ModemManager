@@ -302,6 +302,9 @@ mm_modem_cdma_get_type
 <FILE>mm-modem-location</FILE>
 <TITLE>MMModemLocation</TITLE>
 MMModemLocation
+MM_LOCATION_LONGITUDE_UNKNOWN
+MM_LOCATION_LATITUDE_UNKNOWN
+MM_LOCATION_ALTITUDE_UNKNOWN
 <SUBSECTION Getters>
 mm_modem_location_get_path
 mm_modem_location_dup_path
@@ -321,6 +324,9 @@ mm_modem_location_get_gps_nmea_sync
 mm_modem_location_get_gps_raw
 mm_modem_location_get_gps_raw_finish
 mm_modem_location_get_gps_raw_sync
+mm_modem_location_get_cdma_bs
+mm_modem_location_get_cdma_bs_finish
+mm_modem_location_get_cdma_bs_sync
 mm_modem_location_get_full
 mm_modem_location_get_full_finish
 mm_modem_location_get_full_sync
@@ -392,9 +398,6 @@ mm_location_gps_nmea_get_type
 <FILE>mm-location-gps-raw</FILE>
 <TITLE>MMLocationGpsRaw</TITLE>
 MMLocationGpsRaw
-MM_LOCATION_GPS_RAW_LONGITUDE_UNKNOWN
-MM_LOCATION_GPS_RAW_LATITUDE_UNKNOWN
-MM_LOCATION_GPS_RAW_ALTITUDE_UNKNOWN
 <SUBSECTION Getters>
 mm_location_gps_raw_get_utc_time
 mm_location_gps_raw_get_longitude
@@ -415,6 +418,30 @@ MM_LOCATION_GPS_RAW_CLASS
 MM_LOCATION_GPS_RAW_GET_CLASS
 MM_TYPE_LOCATION_GPS_RAW
 mm_location_gps_raw_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-location-cdma-bs</FILE>
+<TITLE>MMLocationCdmaBs</TITLE>
+MMLocationCdmaBs
+<SUBSECTION Getters>
+mm_location_cdma_bs_get_latitude
+mm_location_cdma_bs_get_longitude
+<SUBSECTION Private>
+mm_location_cdma_bs_get_dictionary
+mm_location_cdma_bs_new
+mm_location_cdma_bs_set
+mm_location_cdma_bs_new_from_dictionary
+<SUBSECTION Standard>
+MMLocationCdmaBsClass
+MMLocationCdmaBsPrivate
+MM_IS_LOCATION_CDMA_BS
+MM_IS_LOCATION_CDMA_BS_CLASS
+MM_LOCATION_CDMA_BS
+MM_LOCATION_CDMA_BS_CLASS
+MM_LOCATION_CDMA_BS_GET_CLASS
+MM_TYPE_LOCATION_CDMA_BS
+mm_location_cdma_bs_get_type
 </SECTION>
 
 <SECTION>

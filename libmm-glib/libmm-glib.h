@@ -57,9 +57,11 @@
 #include <mm-sms-properties.h>
 #include <mm-bearer-properties.h>
 #include <mm-bearer-ip-config.h>
+#include <mm-location-common.h>
 #include <mm-location-3gpp.h>
 #include <mm-location-gps-raw.h>
 #include <mm-location-gps-nmea.h>
+#include <mm-location-cdma-bs.h>
 #include <mm-unlock-retries.h>
 #include <mm-network-timezone.h>
 #include <mm-firmware-properties.h>
