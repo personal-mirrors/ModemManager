@@ -486,7 +486,8 @@ init_async_context_free (InitAsyncContext *ctx)
 {
     g_object_unref (ctx->manager);
     g_object_unref (ctx->result);
-    g_object_unref (ctx->cancellable);
+    if (ctx->cancellable)
+        g_object_unref (ctx->cancellable);
     g_free (ctx);
 }
 
@@ -595,8 +596,27 @@ initable_init_async (GAsyncInitable      *initable,
 /*****************************************************************************/
 
 static void
+register_dbus_errors (void)
+{
+  static volatile guint32 aux = 0;
+
+  if (aux)
+      return;
+
+  /* Register all known own errors */
+  aux |= MM_CORE_ERROR;
+  aux |= MM_MOBILE_EQUIPMENT_ERROR;
+  aux |= MM_CONNECTION_ERROR;
+  aux |= MM_SERIAL_ERROR;
+  aux |= MM_MESSAGE_ERROR;
+  aux |= MM_CDMA_ACTIVATION_ERROR;
+}
+
+static void
 mm_manager_init (MMManager *manager)
 {
+    register_dbus_errors ();
+
     /* Setup private data */
     manager->priv = G_TYPE_INSTANCE_GET_PRIVATE ((manager),
                                                  MM_TYPE_MANAGER,
