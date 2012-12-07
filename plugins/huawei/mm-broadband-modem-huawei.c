@@ -22,6 +22,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <time.h>
 
 #include <ModemManager.h>
 #define _LIBMM_INSIDE_MM
@@ -34,6 +35,7 @@
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-3gpp.h"
 #include "mm-iface-modem-3gpp-ussd.h"
+#include "mm-iface-modem-time.h"
 #include "mm-iface-modem-cdma.h"
 #include "mm-broadband-modem-huawei.h"
 
@@ -41,7 +43,9 @@ static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
 static void iface_modem_3gpp_ussd_init (MMIfaceModem3gppUssd *iface);
 static void iface_modem_cdma_init (MMIfaceModemCdma *iface);
+static void iface_modem_time_init (MMIfaceModemTime *iface);
 
+static MMIfaceModem *iface_modem_parent;
 static MMIfaceModem3gpp *iface_modem_3gpp_parent;
 static MMIfaceModemCdma *iface_modem_cdma_parent;
 
@@ -49,7 +53,8 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemHuawei, mm_broadband_modem_huawei, MM_TY
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP_USSD, iface_modem_3gpp_ussd_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_CDMA, iface_modem_cdma_init));
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_CDMA, iface_modem_cdma_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_TIME, iface_modem_time_init));
 
 struct _MMBroadbandModemHuaweiPrivate {
     /* Regex for signal quality related notifications */
@@ -72,11 +77,72 @@ struct _MMBroadbandModemHuaweiPrivate {
 };
 
 /*****************************************************************************/
+
+static gboolean
+sysinfo_parse (const char *reply,
+               guint *out_srv_status,
+               guint *out_srv_domain,
+               guint *out_roam_status,
+               guint *out_sys_mode,
+               guint *out_sim_state,
+               gboolean *out_sys_submode_valid,
+               guint *out_sys_submode,
+               GError **error)
+{
+    gboolean matched;
+    GRegex *r;
+    GMatchInfo *match_info = NULL;
+    GError *match_error = NULL;
+
+    /* Can't just use \d here since sometimes you get "^SYSINFO:2,1,0,3,1,,3" */
+    r = g_regex_new ("\\^SYSINFO:\\s*(\\d+),(\\d+),(\\d+),(\\d+),(\\d+),?(\\d*),?(\\d*)$", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    matched = g_regex_match_full (r, reply, -1, 0, 0, &match_info, &match_error);
+    if (!matched) {
+        if (match_error) {
+            g_propagate_error (error, match_error);
+            g_prefix_error (error, "Could not parse ^SYSINFO results: ");
+        } else {
+            g_set_error_literal (error,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Couldn't match ^SYSINFO reply");
+        }
+    } else {
+        if (out_srv_status)
+            mm_get_uint_from_match_info (match_info, 1, out_srv_status);
+        if (out_srv_domain)
+            mm_get_uint_from_match_info (match_info, 2, out_srv_domain);
+        if (out_roam_status)
+            mm_get_uint_from_match_info (match_info, 3, out_roam_status);
+        if (out_sys_mode)
+            mm_get_uint_from_match_info (match_info, 4, out_sys_mode);
+        if (out_sim_state)
+            mm_get_uint_from_match_info (match_info, 5, out_sim_state);
+
+        /* Remember that g_match_info_get_match_count() includes match #0 */
+        if (g_match_info_get_match_count (match_info) >= 8) {
+            if (out_sys_submode_valid) {
+                *out_sys_submode_valid = TRUE;
+                mm_get_uint_from_match_info (match_info, 7, out_sys_submode);
+            }
+        }
+    }
+
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+    return matched;
+}
+
+/*****************************************************************************/
 /* Load access technologies (Modem interface) */
 
 static MMModemAccessTechnology
-huawei_sysinfo_to_act (gint huawei)
+huawei_sysinfo_submode_to_act (gint huawei)
 {
+    /* new more detailed system mode/access technology */
     switch (huawei) {
     case 1:
         return MM_MODEM_ACCESS_TECHNOLOGY_GSM;
@@ -92,9 +158,44 @@ huawei_sysinfo_to_act (gint huawei)
         return MM_MODEM_ACCESS_TECHNOLOGY_HSUPA;
     case 7:
         return MM_MODEM_ACCESS_TECHNOLOGY_HSPA;
-    case 9:
+    case 9:  /* HSPA+ */
+    case 17: /* HSPA+ (64QAM) */
+    case 18: /* HSPA+ (MIMO) */
         return MM_MODEM_ACCESS_TECHNOLOGY_HSPA_PLUS;
+    case 10:
+        return MM_MODEM_ACCESS_TECHNOLOGY_EVDO0;
+    case 11:
+        return MM_MODEM_ACCESS_TECHNOLOGY_EVDOA;
+    case 12:
+        return MM_MODEM_ACCESS_TECHNOLOGY_EVDOB;
+    case 13:  /* 1xRTT */
+    case 16:  /* 3xRTT */
+        return MM_MODEM_ACCESS_TECHNOLOGY_1XRTT;
     case 8:
+        /* TD-SCDMA */
+    default:
+        break;
+    }
+
+    return MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+}
+
+static MMModemAccessTechnology
+huawei_sysinfo_sysmode_to_act (gint huawei)
+{
+    /* Older, less detailed system mode/access technology */
+    switch (huawei) {
+    case 2:  /* CDMA */
+        return MM_MODEM_ACCESS_TECHNOLOGY_1XRTT;
+    case 3:  /* GSM/GPRS */
+        return MM_MODEM_ACCESS_TECHNOLOGY_GPRS;
+    case 4:  /* HDR */
+    case 8:  /* CDMA/HDR hybrid */
+        return MM_MODEM_ACCESS_TECHNOLOGY_EVDO0;
+    case 5:  /* WCDMA */
+    case 7:  /* GSM/WCDMA */
+        return MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
+    case 15:
         /* TD-SCDMA */
     default:
         break;
@@ -112,36 +213,26 @@ load_access_technologies_finish (MMIfaceModem *self,
 {
     MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
     const gchar *result;
-    gchar *str;
-    GRegex *r;
-    GMatchInfo *match_info = NULL;
-    gint srv_stat = 0;
+    char *str;
+    guint srv_stat = 0;
+    gboolean submode_valid = FALSE;
+    guint submode = 0;
+    guint sysmode = 0;
 
     result = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
     if (!result)
         return FALSE;
 
-    /* Can't just use \d here since sometimes you get "^SYSINFO:2,1,0,3,1,,3" */
-    r = g_regex_new ("\\^SYSINFO:\\s*(\\d?),(\\d?),(\\d?),(\\d?),(\\d?),(\\d?),(\\d?)$", G_REGEX_UNGREEDY, 0, NULL);
-    g_assert (r != NULL);
-
-    if (!g_regex_match_full (r, result, strlen (result), 0, 0, &match_info, error)) {
-        g_prefix_error (error, "Could not parse ^SYSINFO results: ");
-        g_regex_unref (r);
+    if (!sysinfo_parse (result, &srv_stat, NULL, NULL, &sysmode, NULL, &submode_valid, &submode, error))
         return FALSE;
-    }
-
-    str = g_match_info_fetch (match_info, 1);
-    if (str && str[0])
-        srv_stat = atoi (str);
-    g_free (str);
 
     if (srv_stat != 0) {
         /* Valid service */
-        str = g_match_info_fetch (match_info, 7);
-        if (str && str[0])
-            act = huawei_sysinfo_to_act (atoi (str));
-        g_free (str);
+        if (submode_valid)
+            act = huawei_sysinfo_submode_to_act (submode);
+
+        if (act == MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN)
+            act = huawei_sysinfo_sysmode_to_act (sysmode);
     }
 
     str = mm_modem_access_technology_build_string_from_mask (act);
@@ -150,9 +241,6 @@ load_access_technologies_finish (MMIfaceModem *self,
 
     *access_technologies = act;
     *mask = MM_MODEM_ACCESS_TECHNOLOGY_ANY;
-
-    g_match_info_free (match_info);
-    g_regex_unref (r);
     return TRUE;
 }
 
@@ -571,6 +659,31 @@ set_bands (MMIfaceModem *self,
 /* Load initial allowed/preferred modes (Modem interface) */
 
 static gboolean
+parse_prefmode (const gchar *response, MMModemMode *preferred, GError **error)
+{
+    int a;
+
+    response = mm_strip_tag (response, "^PREFMODE:");
+    a = atoi (response);
+    if (a == 2) {
+        *preferred = MM_MODEM_MODE_2G;
+        return TRUE;
+    } else if (a == 4) {
+        *preferred = MM_MODEM_MODE_3G;
+        return TRUE;
+    } else if (a == 8) {
+        *preferred = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+        return TRUE;
+    }
+
+    g_set_error_literal (error,
+                         MM_CORE_ERROR,
+                         MM_CORE_ERROR_FAILED,
+                         "Failed to parse ^PREFMODE response");
+    return FALSE;
+}
+
+static gboolean
 load_allowed_modes_finish (MMIfaceModem *self,
                            GAsyncResult *res,
                            MMModemMode *allowed,
@@ -583,6 +696,14 @@ load_allowed_modes_finish (MMIfaceModem *self,
     if (!response)
         return FALSE;
 
+    if (mm_iface_modem_is_cdma_only (self)) {
+        /* CDMA-only devices always support 2G and 3G if they have 3G, so just
+         * use the modes from GCAP as the list of allowed modes.
+         */
+        *allowed = mm_iface_modem_get_supported_modes (self);
+        return parse_prefmode (response, preferred, error);
+    }
+
     return parse_syscfg (response, NULL, allowed, preferred, error);
 }
 
@@ -591,9 +712,13 @@ load_allowed_modes (MMIfaceModem *self,
                     GAsyncReadyCallback callback,
                     gpointer user_data)
 {
+    const char *command;
+
     mm_dbg ("loading allowed_modes (huawei)...");
+
+    command = mm_iface_modem_is_cdma_only (self) ? "^PREFMODE?" : "^SYSCFG?";
     mm_base_modem_at_command (MM_BASE_MODEM (self),
-                              "^SYSCFG?",
+                              command,
                               3,
                               FALSE,
                               callback,
@@ -602,6 +727,33 @@ load_allowed_modes (MMIfaceModem *self,
 
 /*****************************************************************************/
 /* Set allowed modes (Modem interface) */
+
+static gboolean
+allowed_mode_to_prefmode (MMModemMode allowed, guint *huawei_mode, GError **error)
+{
+    char *allowed_str;
+
+    *huawei_mode = 0;
+    if (allowed == MM_MODEM_MODE_ANY)
+        *huawei_mode = 8;
+    else if (allowed == (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G))
+        *huawei_mode = 8;
+    else if (allowed == MM_MODEM_MODE_2G)
+        *huawei_mode = 2;
+    else if (allowed == MM_MODEM_MODE_3G)
+        *huawei_mode = 4;
+    else {
+        /* Not supported */
+        allowed_str = mm_modem_mode_build_string_from_mask (allowed);
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Requested mode (allowed: '%s') not supported by the modem.",
+                     allowed_str);
+        g_free (allowed_str);
+    }
+    return *huawei_mode ? TRUE : FALSE;
+}
 
 static gboolean
 set_allowed_modes_finish (MMIfaceModem *self,
@@ -636,8 +788,8 @@ set_allowed_modes (MMIfaceModem *self,
                    gpointer user_data)
 {
     GSimpleAsyncResult *result;
-    gchar *command;
-    guint mode;
+    gchar *command = NULL;
+    guint mode = 0;
     guint acquisition_order;
     GError *error = NULL;
 
@@ -646,25 +798,32 @@ set_allowed_modes (MMIfaceModem *self,
                                         user_data,
                                         set_allowed_modes);
 
-    if (!allowed_mode_to_huawei (allowed,
-                                 preferred,
-                                 &mode,
-                                 &acquisition_order,
-                                 &error)) {
+    if (mm_iface_modem_is_cdma_only (self)) {
+        if (allowed_mode_to_prefmode (allowed, &mode, &error))
+            command = g_strdup_printf ("^PREFMODE=%d", mode);
+    } else {
+        if (allowed_mode_to_huawei (allowed,
+                                    preferred,
+                                    &mode,
+                                    &acquisition_order,
+                                    &error))
+            command = g_strdup_printf ("AT^SYSCFG=%d,%d,40000000,2,4", mode, acquisition_order);
+    }
+
+    if (command) {
+        mm_base_modem_at_command (
+            MM_BASE_MODEM (self),
+            command,
+            3,
+            FALSE,
+            (GAsyncReadyCallback)allowed_mode_update_ready,
+            result);
+    } else {
+        g_assert (error);
         g_simple_async_result_take_error (result, error);
         g_simple_async_result_complete_in_idle (result);
         g_object_unref (result);
-        return;
     }
-
-    command = g_strdup_printf ("AT^SYSCFG=%d,%d,40000000,2,4", mode, acquisition_order);
-    mm_base_modem_at_command (
-        MM_BASE_MODEM (self),
-        command,
-        3,
-        FALSE,
-        (GAsyncReadyCallback)allowed_mode_update_ready,
-        result);
     g_free (command);
 }
 
@@ -701,13 +860,16 @@ huawei_mode_changed (MMAtSerialPort *port,
     MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
     gchar *str;
     gint a;
+    guint32 mask = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
 
     str = g_match_info_fetch (match_info, 1);
     a = atoi (str);
     g_free (str);
 
+    /* CDMA/EVDO devices may not send this */
     str = g_match_info_fetch (match_info, 2);
-    act = huawei_sysinfo_to_act (atoi (str));
+    if (str[0])
+        act = huawei_sysinfo_submode_to_act (atoi (str));
     g_free (str);
 
     switch (a) {
@@ -721,6 +883,7 @@ huawei_mode_changed (MMAtSerialPort *port,
             g_free (str);
             act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
         }
+        mask = MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK;
         break;
 
     case 5:
@@ -733,6 +896,36 @@ huawei_mode_changed (MMAtSerialPort *port,
             g_free (str);
             act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
         }
+        mask = MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK;
+        break;
+
+    case 2:
+        /* CDMA mode */
+        if (act != MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN &&
+            act != MM_MODEM_ACCESS_TECHNOLOGY_1XRTT) {
+            str = mm_modem_access_technology_build_string_from_mask (act);
+            mm_warn ("Unexpected access technology (%s) in CDMA mode", str);
+            g_free (str);
+            act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+        }
+        if (act == MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN)
+            act = MM_MODEM_ACCESS_TECHNOLOGY_1XRTT;
+        mask = MM_IFACE_MODEM_CDMA_ALL_ACCESS_TECHNOLOGIES_MASK;
+        break;
+
+    case 4:  /* HDR mode */
+    case 8:  /* CDMA/HDR hybrid mode */
+        if (act != MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN &&
+            (act < MM_MODEM_ACCESS_TECHNOLOGY_EVDO0 ||
+             act > MM_MODEM_ACCESS_TECHNOLOGY_EVDOB)) {
+            str = mm_modem_access_technology_build_string_from_mask (act);
+            mm_warn ("Unexpected access technology (%s) in EVDO mode", str);
+            g_free (str);
+            act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+        }
+        if (act == MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN)
+            act = MM_MODEM_ACCESS_TECHNOLOGY_EVDO0;
+        mask = MM_IFACE_MODEM_CDMA_ALL_ACCESS_TECHNOLOGIES_MASK;
         break;
 
     case 0:
@@ -748,9 +941,7 @@ huawei_mode_changed (MMAtSerialPort *port,
     mm_dbg ("Access Technology: '%s'", str);
     g_free (str);
 
-    mm_iface_modem_update_access_technologies (MM_IFACE_MODEM (self),
-                                               act,
-                                               MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK);
+    mm_iface_modem_update_access_technologies (MM_IFACE_MODEM (self), act, mask);
 }
 
 static void
@@ -1101,7 +1292,6 @@ decode (MMIfaceModem3gppUssd *self,
 }
 
 /*****************************************************************************/
-/* Setup/Cleanup unsolicited events (CDMA interface) */
 
 static void
 huawei_1x_signal_changed (MMAtSerialPort *port,
@@ -1133,6 +1323,132 @@ huawei_evdo_signal_changed (MMAtSerialPort *port,
     mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), (guint)quality);
 }
 
+/* Signal quality loading (Modem interface) */
+
+static guint
+modem_load_signal_quality_finish (MMIfaceModem *self,
+                                  GAsyncResult *res,
+                                  GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return 0;
+
+    return GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
+                                 G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static void
+parent_load_signal_quality_ready (MMIfaceModem *self,
+                                  GAsyncResult *res,
+                                  GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+    guint signal_quality;
+
+    signal_quality = iface_modem_parent->load_signal_quality_finish (self, res, &error);
+    if (error)
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gpointer (simple,
+                                                   GUINT_TO_POINTER (signal_quality),
+                                                   NULL);
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+signal_ready (MMBaseModem *self,
+              GAsyncResult *res,
+              GSimpleAsyncResult *simple)
+{
+    const gchar *response, *command;
+    gchar buf[5];
+    guint quality = 0, i = 0;
+
+    response = mm_base_modem_at_command_finish (self, res, NULL);
+    if (!response) {
+        /* Fallback to parent's method */
+        iface_modem_parent->load_signal_quality (
+            MM_IFACE_MODEM (self),
+            (GAsyncReadyCallback)parent_load_signal_quality_ready,
+            simple);
+        return;
+    }
+
+    command = g_object_get_data (G_OBJECT (simple), "command");
+    g_assert (command);
+    response = mm_strip_tag (response, command);
+    /* 'command' won't include the trailing ':' in the response, so strip that */
+    while ((*response == ':') || isspace (*response))
+        response++;
+
+    /* Sanitize response for mm_get_uint_from_str() which wants only digits */
+    memset (buf, 0, sizeof (buf));
+    while (i < (sizeof (buf) - 1) && isdigit (*response))
+        buf[i++] = *response++;
+
+    if (mm_get_uint_from_str (buf, &quality)) {
+        quality = CLAMP (quality, 0, 100);
+        g_simple_async_result_set_op_res_gpointer (simple,
+                                                   GUINT_TO_POINTER (quality),
+                                                   NULL);
+    } else {
+        g_simple_async_result_set_error (simple,
+                                         MM_CORE_ERROR,
+                                         MM_CORE_ERROR_FAILED,
+                                         "Couldn't parse %s response: '%s'",
+                                         command, response);
+    }
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+modem_load_signal_quality (MMIfaceModem *self,
+                           GAsyncReadyCallback callback,
+                           gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+    MMModemCdmaRegistrationState evdo_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
+    const char *command = "^CSQLVL";
+
+    mm_dbg ("loading signal quality...");
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        modem_load_signal_quality);
+
+    /* 3GPP modems can just run parent's signal quality loading */
+    if (mm_iface_modem_is_3gpp (self)) {
+        iface_modem_parent->load_signal_quality (
+            self,
+            (GAsyncReadyCallback)parent_load_signal_quality_ready,
+            result);
+        return;
+    }
+
+    /* CDMA modems need custom signal quality loading */
+
+    g_object_get (G_OBJECT (self),
+                  MM_IFACE_MODEM_CDMA_EVDO_REGISTRATION_STATE, &evdo_state,
+                  NULL);
+    if (evdo_state > MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN)
+        command = "^HDRCSQLVL";
+    g_object_set_data (G_OBJECT (result), "command", (gpointer) command);
+
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        command,
+        3,
+        FALSE,
+        (GAsyncReadyCallback)signal_ready,
+        result);
+}
+
+/*****************************************************************************/
+/* Setup/Cleanup unsolicited events (CDMA interface) */
+
 static void
 set_cdma_unsolicited_events_handlers (MMBroadbandModemHuawei *self,
                                       gboolean enable)
@@ -1159,6 +1475,13 @@ set_cdma_unsolicited_events_handlers (MMBroadbandModemHuawei *self,
             ports[i],
             self->priv->hrssilvl_regex,
             enable ? (MMAtSerialUnsolicitedMsgFn)huawei_evdo_signal_changed : NULL,
+            enable ? self : NULL,
+            NULL);
+        /* Access technology related */
+        mm_at_serial_port_add_unsolicited_msg_handler (
+            ports[i],
+            self->priv->mode_regex,
+            enable ? (MMAtSerialUnsolicitedMsgFn)huawei_mode_changed : NULL,
             enable ? self : NULL,
             NULL);
     }
@@ -1203,11 +1526,21 @@ modem_cdma_setup_unsolicited_events (MMIfaceModemCdma *self,
                                         user_data,
                                         modem_cdma_setup_unsolicited_events);
 
-    /* Chain up parent's setup */
-    iface_modem_cdma_parent->setup_unsolicited_events (
-        self,
-        (GAsyncReadyCallback)parent_cdma_setup_unsolicited_events_ready,
-        result);
+    /* Chain up parent's setup if needed */
+    if (iface_modem_cdma_parent->setup_unsolicited_events &&
+        iface_modem_cdma_parent->setup_unsolicited_events_finish) {
+        iface_modem_cdma_parent->setup_unsolicited_events (
+            self,
+            (GAsyncReadyCallback)parent_cdma_setup_unsolicited_events_ready,
+            result);
+        return;
+    }
+
+    /* Otherwise just run our setup and complete */
+    set_cdma_unsolicited_events_handlers (MM_BROADBAND_MODEM_HUAWEI (self), TRUE);
+    g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (result), TRUE);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
 }
 
 static void
@@ -1240,11 +1573,20 @@ modem_cdma_cleanup_unsolicited_events (MMIfaceModemCdma *self,
     /* Our own cleanup first */
     set_cdma_unsolicited_events_handlers (MM_BROADBAND_MODEM_HUAWEI (self), FALSE);
 
-    /* And now chain up parent's cleanup */
-    iface_modem_cdma_parent->cleanup_unsolicited_events (
-        self,
-        (GAsyncReadyCallback)parent_cdma_cleanup_unsolicited_events_ready,
-        result);
+    /* Chain up parent's setup if needed */
+    if (iface_modem_cdma_parent->cleanup_unsolicited_events &&
+        iface_modem_cdma_parent->cleanup_unsolicited_events_finish) {
+        iface_modem_cdma_parent->cleanup_unsolicited_events (
+            self,
+            (GAsyncReadyCallback)parent_cdma_cleanup_unsolicited_events_ready,
+            result);
+        return;
+    }
+
+    /* Otherwise we're done */
+    g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (result), TRUE);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
 }
 
 /*****************************************************************************/
@@ -1392,8 +1734,9 @@ sysinfo_ready (MMIfaceModemCdma *self,
 {
     GError *error = NULL;
     const gchar *response;
-    GRegex *r;
-    GMatchInfo *match_info;
+    guint srv_stat = 0;
+    guint sysmode = 0;
+    guint roaming = 0;
 
     response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
 
@@ -1407,57 +1750,36 @@ sysinfo_ready (MMIfaceModemCdma *self,
         return;
     }
 
-    response = mm_strip_tag (response, "^SYSINFO:");
+    if (!sysinfo_parse (response, &srv_stat, NULL, &roaming, &sysmode, NULL, NULL, NULL, NULL)) {
+        /* NOTE: always complete NOT in idle here */
+        g_simple_async_result_set_op_res_gpointer (ctx->result, &ctx->state, NULL);
+        detailed_registration_state_context_complete_and_free (ctx);
+        return;
+    }
 
-    /* Format is "<srv_status>,<srv_domain>,<roam_status>,<sys_mode>,<sim_state>" */
-    r = g_regex_new ("\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)",
-                     G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
-    g_assert (r != NULL);
+    if (srv_stat == 2) {
+        MMModemCdmaRegistrationState reg_state = MM_MODEM_CDMA_REGISTRATION_STATE_REGISTERED;
 
-    /* Try to parse the results */
-
-    g_regex_match (r, response, 0, &match_info);
-    if (g_match_info_get_match_count (match_info) >= 5) {
-        MMModemCdmaRegistrationState reg_state;
-        guint val = 0;
-
-        /* At this point the generic code already knows we've been registered */
-        reg_state = MM_MODEM_CDMA_REGISTRATION_STATE_REGISTERED;
-
-        if (mm_get_uint_from_match_info (match_info, 1, &val)) {
-            if (val == 2) {
-                /* Service available, check roaming state */
-                val = 0;
-                if (mm_get_uint_from_match_info (match_info, 3, &val)) {
-                    if (val == 0)
-                        reg_state = MM_MODEM_CDMA_REGISTRATION_STATE_HOME;
-                    else if (val == 1)
-                        reg_state = MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING;
-                }
-            }
-        }
+        /* Service available, check roaming state */
+        if (roaming == 0)
+            reg_state = MM_MODEM_CDMA_REGISTRATION_STATE_HOME;
+        else if (roaming == 1)
+            reg_state = MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING;
 
         /* Check service type */
-        val = 0;
-        if (mm_get_uint_from_match_info (match_info, 4, &val)) {
-            if (val == 2)
-                ctx->state.detailed_cdma1x_state = reg_state;
-            else if (val == 4)
-                ctx->state.detailed_evdo_state = reg_state;
-            else if (val == 8) {
-                ctx->state.detailed_cdma1x_state = reg_state;
-                ctx->state.detailed_evdo_state = reg_state;
-            }
+        if (sysmode == 2)
+            ctx->state.detailed_cdma1x_state = reg_state;
+        else if (sysmode == 4)
+            ctx->state.detailed_evdo_state = reg_state;
+        else if (sysmode == 8) {
+            ctx->state.detailed_cdma1x_state = reg_state;
+            ctx->state.detailed_evdo_state = reg_state;
         } else {
             /* Say we're registered to something even though sysmode parsing failed */
             mm_dbg ("SYSMODE parsing failed: assuming registered at least in CDMA1x");
-            ctx->state.detailed_cdma1x_state = reg_state;
+            ctx->state.detailed_cdma1x_state = MM_MODEM_CDMA_REGISTRATION_STATE_REGISTERED;
         }
-    } else
-        mm_warn ("Huawei: failed to parse ^SYSINFO response: '%s'", response);
-
-    g_match_info_free (match_info);
-    g_regex_unref (r);
+    }
 
     /* NOTE: always complete NOT in idle here */
     g_simple_async_result_set_op_res_gpointer (ctx->result, &ctx->state, NULL);
@@ -1489,6 +1811,126 @@ get_detailed_registration_state (MMIfaceModemCdma *self,
                               FALSE,
                               (GAsyncReadyCallback)sysinfo_ready,
                               ctx);
+}
+
+/*****************************************************************************/
+/* Load network time (Time interface) */
+
+static gchar *
+modem_time_load_network_time_finish (MMIfaceModemTime *self,
+                                     GAsyncResult *res,
+                                     GError **error)
+{
+    const gchar *response;
+    GRegex *r;
+    GMatchInfo *match_info = NULL;
+    GError *match_error = NULL;
+    guint year, month, day, hour, minute, second;
+    gchar *result = NULL;
+
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+    if (!response)
+        return NULL;
+
+    /* Already in ISO-8601 format, but verify just to be sure */
+    r = g_regex_new ("\\^TIME:\\s*(\\d+)/(\\d+)/(\\d+)\\s*(\\d+):(\\d+):(\\d*)$", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    if (!g_regex_match_full (r, response, -1, 0, 0, &match_info, &match_error)) {
+        if (match_error) {
+            g_propagate_error (error, match_error);
+            g_prefix_error (error, "Could not parse ^TIME results: ");
+        } else {
+            g_set_error_literal (error,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Couldn't match ^TIME reply");
+        }
+    } else {
+        /* Remember that g_match_info_get_match_count() includes match #0 */
+        g_assert (g_match_info_get_match_count (match_info) >= 7);
+
+        if (mm_get_uint_from_match_info (match_info, 1, &year) &&
+            mm_get_uint_from_match_info (match_info, 2, &month) &&
+            mm_get_uint_from_match_info (match_info, 3, &day) &&
+            mm_get_uint_from_match_info (match_info, 4, &hour) &&
+            mm_get_uint_from_match_info (match_info, 5, &minute) &&
+            mm_get_uint_from_match_info (match_info, 6, &second)) {
+            /* Return ISO-8601 format date/time string */
+            result = g_strdup_printf ("%04d/%02d/%02d %02d:%02d:%02d",
+                                      year, month, day, hour, minute, second);
+        } else {
+            g_set_error_literal (error,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Failed to parse ^TIME reply");
+        }
+    }
+
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+    return result;
+}
+
+static void
+modem_time_load_network_time (MMIfaceModemTime *self,
+                              GAsyncReadyCallback callback,
+                              gpointer user_data)
+{
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "^TIME",
+                              3,
+                              FALSE,
+                              callback,
+                              user_data);
+}
+
+/*****************************************************************************/
+/* Check support (Time interface) */
+
+static gboolean
+modem_time_check_support_finish (MMIfaceModemTime *self,
+                                 GAsyncResult *res,
+                                 GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+modem_time_check_ready (MMBroadbandModem *self,
+                        GAsyncResult *res,
+                        GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+
+    mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
+    if (error)
+        g_simple_async_result_take_error (simple, error);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+modem_time_check_support (MMIfaceModemTime *self,
+                          GAsyncReadyCallback callback,
+                          gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        modem_time_check_support);
+
+    /* Only CDMA devices support this at the moment */
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "^TIME",
+                              3,
+                              TRUE,
+                              (GAsyncReadyCallback)modem_time_check_ready,
+                              result);
 }
 
 /*****************************************************************************/
@@ -1577,8 +2019,13 @@ mm_broadband_modem_huawei_init (MMBroadbandModemHuawei *self)
                                              G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     self->priv->hrssilvl_regex = g_regex_new ("\\r\\n\\^HRSSILVL:(\\d+)\\r\\n",
                                               G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
-    self->priv->mode_regex = g_regex_new ("\\r\\n\\^MODE:(\\d),(\\d)\\r\\n",
+
+    /* 3GPP: <cr><lf>^MODE:5<cr><lf>
+     * CDMA: <cr><lf>^MODE: 2<cr><cr><lf>
+     */
+    self->priv->mode_regex = g_regex_new ("\\r\\n\\^MODE:\\s*(\\d*),?(\\d*)\\r+\\n",
                                           G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+
     self->priv->dsflowrpt_regex = g_regex_new ("\\r\\n\\^DSFLOWRPT:(.+)\\r\\n",
                                                G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     self->priv->boot_regex = g_regex_new ("\\r\\n\\^BOOT:.+\\r\\n",
@@ -1615,6 +2062,8 @@ finalize (GObject *object)
 static void
 iface_modem_init (MMIfaceModem *iface)
 {
+    iface_modem_parent = g_type_interface_peek_parent (iface);
+
     iface->load_access_technologies = load_access_technologies;
     iface->load_access_technologies_finish = load_access_technologies_finish;
     iface->load_unlock_retries = load_unlock_retries;
@@ -1627,6 +2076,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_allowed_modes_finish = load_allowed_modes_finish;
     iface->set_allowed_modes = set_allowed_modes;
     iface->set_allowed_modes_finish = set_allowed_modes_finish;
+    iface->load_signal_quality = modem_load_signal_quality;
+    iface->load_signal_quality_finish = modem_load_signal_quality_finish;
 }
 
 static void
@@ -1664,6 +2115,15 @@ iface_modem_cdma_init (MMIfaceModemCdma *iface)
     iface->setup_registration_checks_finish = setup_registration_checks_finish;
     iface->get_detailed_registration_state = get_detailed_registration_state;
     iface->get_detailed_registration_state_finish = get_detailed_registration_state_finish;
+}
+
+static void
+iface_modem_time_init (MMIfaceModemTime *iface)
+{
+    iface->check_support = modem_time_check_support;
+    iface->check_support_finish = modem_time_check_support_finish;
+    iface->load_network_time = modem_time_load_network_time;
+    iface->load_network_time_finish = modem_time_load_network_time_finish;
 }
 
 static void

@@ -1445,9 +1445,15 @@ parse_tlts_query_reply (const gchar *response,
         }
 
         if (iso8601) {
+            /* Icera modems only report a 2-digit year, while ISO-8601 requires
+             * a 4-digit year.  Assume 2000.
+             */
+            if (year < 100)
+                year += 2000;
+
             /* don't give tz info in the date/time string, we have another
              * property for that */
-            *iso8601 = g_strdup_printf ("%02d/%02d/%02d %02d:%02d:%02d",
+            *iso8601 = g_strdup_printf ("%04d/%02d/%02d %02d:%02d:%02d",
                                         year, month, day,
                                         hour, minute, second);
         }
@@ -1526,6 +1532,37 @@ modem_time_load_network_time (MMIfaceModemTime *self,
                               FALSE,
                               callback,
                               user_data);
+}
+
+/*****************************************************************************/
+/* Check support (Time interface) */
+
+static gboolean
+modem_time_check_support_finish (MMIfaceModemTime *self,
+                                 GAsyncResult *res,
+                                 GError **error)
+{
+    /* We assume Icera devices always support *TLTS, since they appear
+     * to return ERROR if the modem is not powered up, and thus we cannot
+     * check for *TLTS support during modem initialization.
+     */
+    return TRUE;
+}
+
+static void
+modem_time_check_support (MMIfaceModemTime *self,
+                          GAsyncReadyCallback callback,
+                          gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        modem_time_check_support);
+
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
 }
 
 /*****************************************************************************/
@@ -1671,7 +1708,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
 static void
 iface_modem_time_init (MMIfaceModemTime *iface)
 {
-    /* Use default Icera implementation */
+    iface->check_support = modem_time_check_support;
+    iface->check_support_finish = modem_time_check_support_finish;
     iface->load_network_time = modem_time_load_network_time;
     iface->load_network_time_finish = modem_time_load_network_time_finish;
     iface->load_network_timezone = modem_time_load_network_timezone;
