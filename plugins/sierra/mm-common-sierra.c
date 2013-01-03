@@ -118,7 +118,7 @@ get_current_functionality_status_ready (MMBaseModem *self,
      */
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               "+CFUN=1,0", /* ",0" ensures no reset */
-                              3,
+                              10,
                               FALSE,
                               (GAsyncReadyCallback)full_functionality_status_ready,
                               simple);
@@ -202,9 +202,9 @@ mm_common_sierra_setup_ports (MMBroadbandModem *self)
 {
     MMAtSerialPort *ports[2];
     guint i;
-    GRegex *pacsp0_regex;
+    GRegex *pacsp_regex;
 
-    pacsp0_regex = g_regex_new ("\\r\\n\\+PACSP0\\r\\n", G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+    pacsp_regex = g_regex_new ("\\r\\n\\+PACSP.*\\r\\n", G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 
     ports[0] = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
     ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
@@ -228,9 +228,9 @@ mm_common_sierra_setup_ports (MMBroadbandModem *self)
 
         mm_at_serial_port_add_unsolicited_msg_handler (
             ports[i],
-            pacsp0_regex,
+            pacsp_regex,
             NULL, NULL, NULL);
     }
 
-    g_regex_unref (pacsp0_regex);
+    g_regex_unref (pacsp_regex);
 }
