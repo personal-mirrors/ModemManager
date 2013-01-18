@@ -58,14 +58,6 @@ struct _MMIfaceModem {
                                                            GAsyncResult *res,
                                                            GError **error);
 
-    /* Asynchronous modem power-down operation run during initialization */
-    void (*modem_init_power_down) (MMIfaceModem *self,
-                                   GAsyncReadyCallback callback,
-                                   gpointer user_data);
-    gboolean (*modem_init_power_down_finish) (MMIfaceModem *self,
-                                              GAsyncResult *res,
-                                              GError **error);
-
     /* Loading of the Manufacturer property */
     void (*load_manufacturer) (MMIfaceModem *self,
                                GAsyncReadyCallback callback,
@@ -163,6 +155,14 @@ struct _MMIfaceModem {
     GArray * (*load_current_bands_finish) (MMIfaceModem *self,
                                            GAsyncResult *res,
                                            GError **error);
+
+    /* Loading of the PowerState property */
+    void (* load_power_state) (MMIfaceModem *self,
+                               GAsyncReadyCallback callback,
+                               gpointer user_data);
+    MMModemPowerState (*load_power_state_finish) (MMIfaceModem *self,
+                                                  GAsyncResult *res,
+                                                  GError **error);
 
     /* Loading of the SignalQuality property */
     void  (*load_signal_quality) (MMIfaceModem *self,
@@ -361,6 +361,15 @@ void     mm_iface_modem_disable        (MMIfaceModem *self,
 gboolean mm_iface_modem_disable_finish (MMIfaceModem *self,
                                         GAsyncResult *res,
                                         GError **error);
+
+/* Allow setting power state */
+void     mm_iface_modem_set_power_state        (MMIfaceModem *self,
+                                                MMModemPowerState power_state,
+                                                GAsyncReadyCallback callback,
+                                                gpointer user_data);
+gboolean mm_iface_modem_set_power_state_finish (MMIfaceModem *self,
+                                                GAsyncResult *res,
+                                                GError **error);
 
 /* Shutdown Modem interface */
 void mm_iface_modem_shutdown (MMIfaceModem *self);

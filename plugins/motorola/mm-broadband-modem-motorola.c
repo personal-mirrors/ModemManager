@@ -75,10 +75,10 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_equipment_identifier_finish = NULL;
 
     /* These devices just don't implement AT+CFUN */
+    iface->load_power_state = NULL;
+    iface->load_power_state_finish = NULL;
     iface->modem_power_up = NULL;
     iface->modem_power_up_finish = NULL;
-    iface->modem_init_power_down = NULL;
-    iface->modem_init_power_down_finish = NULL;
     iface->modem_power_down = NULL;
     iface->modem_power_down_finish = NULL;
 }

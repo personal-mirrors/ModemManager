@@ -40,6 +40,9 @@ static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_cdma_init (MMIfaceModemCdma *iface);
 static void iface_modem_time_init (MMIfaceModemTime *iface);
 
+static MMIfaceModem *iface_modem_parent;
+static MMIfaceModemCdma *iface_modem_cdma_parent;
+
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemSierra, mm_broadband_modem_sierra, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_CDMA, iface_modem_cdma_init)
@@ -56,7 +59,280 @@ struct _MMBroadbandModemSierraPrivate {
 };
 
 /*****************************************************************************/
+/* Generic AT!STATUS parsing */
+
+typedef enum {
+    SYS_MODE_UNKNOWN,
+    SYS_MODE_NO_SERVICE,
+    SYS_MODE_CDMA_1X,
+    SYS_MODE_EVDO_REV0,
+    SYS_MODE_EVDO_REVA
+} SysMode;
+
+#define MODEM_REG_TAG "Modem has registered"
+#define GENERIC_ROAM_TAG "Roaming:"
+#define ROAM_1X_TAG "1xRoam:"
+#define ROAM_EVDO_TAG "HDRRoam:"
+#define SYS_MODE_TAG "Sys Mode:"
+#define SYS_MODE_NO_SERVICE_TAG "NO SRV"
+#define SYS_MODE_EVDO_TAG "HDR"
+#define SYS_MODE_1X_TAG "1x"
+#define SYS_MODE_CDMA_TAG "CDMA"
+#define EVDO_REV_TAG "HDR Revision:"
+#define SID_TAG "SID:"
+
+static gboolean
+get_roam_value (const gchar *reply,
+                const gchar *tag,
+                gboolean is_eri,
+                gboolean *out_roaming)
+{
+    gchar *p;
+    gboolean success;
+    guint32 ind = 0;
+
+    p = strstr (reply, tag);
+    if (!p)
+        return FALSE;
+
+    p += strlen (tag);
+    while (*p && isspace (*p))
+        p++;
+
+    /* Use generic ERI parsing if it's an ERI */
+    if (is_eri) {
+        success = mm_cdma_parse_eri (p, out_roaming, &ind, NULL);
+        if (success) {
+            /* Sierra redefines ERI 0, 1, and 2 */
+            if (ind == 0)
+                *out_roaming = FALSE;  /* home */
+            else if (ind == 1 || ind == 2)
+                *out_roaming = TRUE;   /* roaming */
+        }
+        return success;
+    }
+
+    /* If it's not an ERI, roaming is just true/false */
+    if (*p == '1') {
+        *out_roaming = TRUE;
+        return TRUE;
+    } else if (*p == '0') {
+        *out_roaming = FALSE;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static gboolean
+sys_mode_has_service (SysMode mode)
+{
+    return (   mode == SYS_MODE_CDMA_1X
+            || mode == SYS_MODE_EVDO_REV0
+            || mode == SYS_MODE_EVDO_REVA);
+}
+
+static gboolean
+sys_mode_is_evdo (SysMode mode)
+{
+    return (mode == SYS_MODE_EVDO_REV0 || mode == SYS_MODE_EVDO_REVA);
+}
+
+static gboolean
+parse_status (const char *response,
+              MMModemCdmaRegistrationState *out_cdma1x_state,
+              MMModemCdmaRegistrationState *out_evdo_state,
+              MMModemAccessTechnology *out_act)
+{
+    gchar **lines;
+    gchar **iter;
+    gboolean registered = FALSE;
+    gboolean have_sid = FALSE;
+    SysMode evdo_mode = SYS_MODE_UNKNOWN;
+    SysMode sys_mode = SYS_MODE_UNKNOWN;
+    gboolean evdo_roam = FALSE, cdma1x_roam = FALSE;
+
+    lines = g_strsplit_set (response, "\n\r", 0);
+    if (!lines)
+        return FALSE;
+
+    /* Sierra CDMA parts have two general formats depending on whether they
+     * support EVDO or not.  EVDO parts report both 1x and EVDO roaming status
+     * while of course 1x parts only report 1x status.  Some modems also do not
+     * report the Roaming information (MP 555 GPS).
+     *
+     * AT!STATUS responses:
+     *
+     * Unregistered MC5725:
+     * -----------------------
+     * Current band: PCS CDMA
+     * Current channel: 350
+     * SID: 0  NID: 0  1xRoam: 0 HDRRoam: 0
+     * Temp: 33  State: 100  Sys Mode: NO SRV
+     * Pilot NOT acquired
+     * Modem has NOT registered
+     *
+     * Registered MC5725:
+     * -----------------------
+     * Current band: Cellular Sleep
+     * Current channel: 775
+     * SID: 30  NID: 2  1xRoam: 0 HDRRoam: 0
+     * Temp: 29  State: 200  Sys Mode: HDR
+     * Pilot acquired
+     * Modem has registered
+     * HDR Revision: A
+     *
+     * Unregistered AC580:
+     * -----------------------
+     * Current band: PCS CDMA
+     * Current channel: 350
+     * SID: 0 NID: 0  Roaming: 0
+     * Temp: 39  State: 100  Scan Mode: 0
+     * Pilot NOT acquired
+     * Modem has NOT registered
+     *
+     * Registered AC580:
+     * -----------------------
+     * Current band: Cellular Sleep
+     * Current channel: 548
+     * SID: 26  NID: 1  Roaming: 1
+     * Temp: 39  State: 200  Scan Mode: 0
+     * Pilot Acquired
+     * Modem has registered
+     */
+
+    /* We have to handle the two formats slightly differently; for newer formats
+     * with "Sys Mode", we consider the modem registered if the Sys Mode is not
+     * "NO SRV".  The explicit registration status is just icing on the cake.
+     * For older formats (no "Sys Mode") we treat the modem as registered if
+     * the SID is non-zero.
+     */
+
+    for (iter = lines; iter && *iter; iter++) {
+        gboolean bool_val = FALSE;
+        char *p;
+
+        if (!strncmp (*iter, MODEM_REG_TAG, strlen (MODEM_REG_TAG))) {
+            registered = TRUE;
+            continue;
+        }
+
+        /* Roaming */
+        get_roam_value (*iter, ROAM_1X_TAG, TRUE, &cdma1x_roam);
+        get_roam_value (*iter, ROAM_EVDO_TAG, TRUE, &evdo_roam);
+        if (get_roam_value (*iter, GENERIC_ROAM_TAG, FALSE, &bool_val))
+            cdma1x_roam = evdo_roam = bool_val;
+
+        /* Current system mode */
+        p = strstr (*iter, SYS_MODE_TAG);
+        if (p) {
+            p += strlen (SYS_MODE_TAG);
+            while (*p && isspace (*p))
+                p++;
+            if (!strncmp (p, SYS_MODE_NO_SERVICE_TAG, strlen (SYS_MODE_NO_SERVICE_TAG)))
+                sys_mode = SYS_MODE_NO_SERVICE;
+            else if (!strncmp (p, SYS_MODE_EVDO_TAG, strlen (SYS_MODE_EVDO_TAG)))
+                sys_mode = SYS_MODE_EVDO_REV0;
+            else if (   !strncmp (p, SYS_MODE_1X_TAG, strlen (SYS_MODE_1X_TAG))
+                     || !strncmp (p, SYS_MODE_CDMA_TAG, strlen (SYS_MODE_CDMA_TAG)))
+                sys_mode = SYS_MODE_CDMA_1X;
+        }
+
+        /* Current EVDO revision if system mode is EVDO */
+        p = strstr (*iter, EVDO_REV_TAG);
+        if (p) {
+            p += strlen (EVDO_REV_TAG);
+            while (*p && isspace (*p))
+                p++;
+            if (*p == 'A')
+                evdo_mode = SYS_MODE_EVDO_REVA;
+            else if (*p == '0')
+                evdo_mode = SYS_MODE_EVDO_REV0;
+        }
+
+        /* SID */
+        p = strstr (*iter, SID_TAG);
+        if (p) {
+            p += strlen (SID_TAG);
+            while (*p && isspace (*p))
+                p++;
+            if (isdigit (*p) && (*p != '0'))
+                have_sid = TRUE;
+        }
+    }
+
+    /* Update current system mode */
+    if (sys_mode_is_evdo (sys_mode)) {
+        /* Prefer the explicit EVDO mode from EVDO_REV_TAG */
+        if (evdo_mode != SYS_MODE_UNKNOWN)
+            sys_mode = evdo_mode;
+    }
+
+    /* If the modem didn't report explicit registration with "Modem has
+     * registered" then get registration status by looking at either system
+     * mode or (for older devices that don't report that) just the SID.
+     */
+    if (!registered) {
+        if (sys_mode != SYS_MODE_UNKNOWN)
+            registered = sys_mode_has_service (sys_mode);
+        else
+            registered = have_sid;
+    }
+
+    if (registered) {
+        *out_cdma1x_state = (cdma1x_roam ?
+                                MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING :
+                                MM_MODEM_CDMA_REGISTRATION_STATE_HOME);
+
+        if (sys_mode_is_evdo (sys_mode)) {
+            *out_evdo_state = (evdo_roam ?
+                                  MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING :
+                                  MM_MODEM_CDMA_REGISTRATION_STATE_HOME);
+        } else {
+            *out_evdo_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
+        }
+    } else {
+        /* Not registered */
+        *out_cdma1x_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
+        *out_evdo_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
+    }
+
+    if (out_act) {
+        *out_act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+        if (registered) {
+            if (sys_mode == SYS_MODE_CDMA_1X)
+                *out_act = MM_MODEM_ACCESS_TECHNOLOGY_1XRTT;
+            else if (sys_mode == SYS_MODE_EVDO_REV0)
+                *out_act = MM_MODEM_ACCESS_TECHNOLOGY_EVDO0;
+            else if (sys_mode == SYS_MODE_EVDO_REVA)
+                *out_act = MM_MODEM_ACCESS_TECHNOLOGY_EVDOA;
+        }
+    }
+
+    return TRUE;
+}
+
+/*****************************************************************************/
 /* Load access technologies (Modem interface) */
+
+typedef struct {
+    MMModemAccessTechnology act;
+    guint mask;
+} AccessTechInfo;
+
+static void
+access_tech_set_result (GSimpleAsyncResult *simple,
+                        MMModemAccessTechnology act,
+                        guint mask)
+{
+    AccessTechInfo *info;
+
+    info = g_new (AccessTechInfo, 1);
+    info->act = act;
+    info->mask = mask;
+
+    g_simple_async_result_set_op_res_gpointer (simple, info, g_free);
+}
 
 static gboolean
 load_access_technologies_finish (MMIfaceModem *self,
@@ -65,21 +341,22 @@ load_access_technologies_finish (MMIfaceModem *self,
                                  guint *mask,
                                  GError **error)
 {
+    AccessTechInfo *info;
+
     if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
         return FALSE;
 
-    /* We are reporting ALL 3GPP access technologies here */
-    *access_technologies = ((MMModemAccessTechnology) GPOINTER_TO_UINT (
-                                g_simple_async_result_get_op_res_gpointer (
-                                    G_SIMPLE_ASYNC_RESULT (res))));
-    *mask = MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK;
+    info = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
+    g_assert (info);
+    *access_technologies = info->act;
+    *mask = info->mask;
     return TRUE;
 }
 
 static void
-cnti_set_ready (MMBaseModem *self,
-                GAsyncResult *res,
-                GSimpleAsyncResult *simple)
+access_tech_3gpp_ready (MMBaseModem *self,
+                        GAsyncResult *res,
+                        GSimpleAsyncResult *simple)
 {
     GError *error = NULL;
     const gchar *response;
@@ -104,7 +381,38 @@ cnti_set_ready (MMBaseModem *self,
                 "Couldn't parse access technologies result: '%s'",
                 response);
         else
-            g_simple_async_result_set_op_res_gpointer (simple, GUINT_TO_POINTER (act), NULL);
+            access_tech_set_result (simple, act, MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK);
+    }
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+access_tech_cdma_ready (MMIfaceModemCdma *self,
+                        GAsyncResult *res,
+                        GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+    const gchar *response;
+
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
+    if (!response)
+        g_simple_async_result_take_error (simple, error);
+    else {
+        MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+        MMModemCdmaRegistrationState cdma1x_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
+        MMModemCdmaRegistrationState evdo_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
+
+        if (!parse_status (response, &cdma1x_state, &evdo_state, &act))
+            g_simple_async_result_set_error (
+                simple,
+                MM_CORE_ERROR,
+                MM_CORE_ERROR_FAILED,
+                "Couldn't parse access technologies result: '%s'",
+                response);
+        else
+            access_tech_set_result (simple, act, MM_IFACE_MODEM_CDMA_ALL_ACCESS_TECHNOLOGIES_MASK);
     }
 
     g_simple_async_result_complete (simple);
@@ -128,18 +436,17 @@ load_access_technologies (MMIfaceModem *self,
                                   "*CNTI=0",
                                   3,
                                   FALSE,
-                                  (GAsyncReadyCallback)cnti_set_ready,
+                                  (GAsyncReadyCallback)access_tech_3gpp_ready,
                                   result);
-        return;
+    } else if (mm_iface_modem_is_cdma (self)) {
+        mm_base_modem_at_command (MM_BASE_MODEM (self),
+                                  "!STATUS",
+                                  3,
+                                  FALSE,
+                                  (GAsyncReadyCallback)access_tech_cdma_ready,
+                                  result);
     }
-
-    /* Cannot do this in CDMA modems */
-    g_simple_async_result_set_error (result,
-                                     MM_CORE_ERROR,
-                                     MM_CORE_ERROR_UNSUPPORTED,
-                                     "Cannot load access technologies in CDMA modems");
-    g_simple_async_result_complete_in_idle (result);
-    g_object_unref (result);
+    g_assert_not_reached ();
 }
 
 /*****************************************************************************/
@@ -436,6 +743,122 @@ set_allowed_modes (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
+/* Load own numbers (Modem interface) */
+
+static GStrv
+modem_load_own_numbers_finish (MMIfaceModem *self,
+                               GAsyncResult *res,
+                               GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return NULL;
+
+    return g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
+}
+
+static void
+parent_load_own_numbers_ready (MMIfaceModem *self,
+                               GAsyncResult *res,
+                               GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+    GStrv numbers;
+
+    numbers = iface_modem_parent->load_own_numbers_finish (self, res, &error);
+    if (error)
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gpointer (simple, numbers, NULL);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+#define MDN_TAG  "MDN: "
+
+static void
+own_numbers_ready (MMBaseModem *self,
+                   GAsyncResult *res,
+                   GSimpleAsyncResult *simple)
+{
+    const gchar *response, *p;
+    const gchar *numbers[2] = { NULL, NULL };
+    gchar mdn[15];
+    guint i;
+
+    response = mm_base_modem_at_command_finish (self, res, NULL);
+    if (!response)
+        goto fallback;
+
+    p = strstr (response, MDN_TAG);
+    if (!p)
+        goto fallback;
+
+    response = p + strlen (MDN_TAG);
+    while (isspace (*response))
+        response++;
+
+    for (i = 0; i < (sizeof (mdn) - 1) && isdigit (response[i]); i++)
+        mdn[i] = response[i];
+    mdn[i] = '\0';
+    numbers[0] = &mdn[0];
+
+    /* MDNs are 10 digits in length */
+    if (i != 10) {
+        mm_warn ("Failed to parse MDN: expected 10 digits, got %d", i);
+        goto fallback;
+    }
+
+    g_simple_async_result_set_op_res_gpointer (simple,
+                                               g_strdupv ((gchar **) numbers),
+                                               NULL);
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+    return;
+
+fallback:
+    /* Fall back to parent method */
+    iface_modem_parent->load_own_numbers (
+        MM_IFACE_MODEM (self),
+        (GAsyncReadyCallback)parent_load_own_numbers_ready,
+        simple);
+}
+
+static void
+modem_load_own_numbers (MMIfaceModem *self,
+                        GAsyncReadyCallback callback,
+                        gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    mm_dbg ("loading own numbers (Sierra)...");
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        modem_load_own_numbers);
+
+    /* 3GPP modems can just run parent's own number loading */
+    if (mm_iface_modem_is_3gpp (self)) {
+        iface_modem_parent->load_own_numbers (
+            self,
+            (GAsyncReadyCallback)parent_load_own_numbers_ready,
+            result);
+        return;
+    }
+
+    /* CDMA modems try AT~NAMVAL?0 first, then fall back to parent for
+     * loading own number from NV memory with QCDM.
+     */
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        "~NAMVAL?0",
+        3,
+        FALSE,
+        (GAsyncReadyCallback)own_numbers_ready,
+        result);
+}
+
+/*****************************************************************************/
 /* Create Bearer (Modem interface) */
 
 static MMBearer *
@@ -574,15 +997,95 @@ modem_power_down (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Detailed registration state (CDMA interface) */
+/* Setup registration checks (CDMA interface) */
 
-typedef enum {
-    SYS_MODE_UNKNOWN,
-    SYS_MODE_NO_SERVICE,
-    SYS_MODE_CDMA_1X,
-    SYS_MODE_EVDO_REV0,
-    SYS_MODE_EVDO_REVA
-} SysMode;
+typedef struct {
+    gboolean skip_qcdm_call_manager_step;
+    gboolean skip_qcdm_hdr_step;
+    gboolean skip_at_cdma_service_status_step;
+    gboolean skip_at_cdma1x_serving_system_step;
+    gboolean skip_detailed_registration_state;
+} SetupRegistrationChecksResults;
+
+static gboolean
+setup_registration_checks_finish (MMIfaceModemCdma *self,
+                                  GAsyncResult *res,
+                                  gboolean *skip_qcdm_call_manager_step,
+                                  gboolean *skip_qcdm_hdr_step,
+                                  gboolean *skip_at_cdma_service_status_step,
+                                  gboolean *skip_at_cdma1x_serving_system_step,
+                                  gboolean *skip_detailed_registration_state,
+                                  GError **error)
+{
+    SetupRegistrationChecksResults *results;
+
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return FALSE;
+
+    results = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
+    *skip_qcdm_call_manager_step = results->skip_qcdm_call_manager_step;
+    *skip_qcdm_hdr_step = results->skip_qcdm_hdr_step;
+    *skip_at_cdma_service_status_step = results->skip_at_cdma_service_status_step;
+    *skip_at_cdma1x_serving_system_step = results->skip_at_cdma1x_serving_system_step;
+    *skip_detailed_registration_state = results->skip_detailed_registration_state;
+    return TRUE;
+}
+
+static void
+parent_setup_registration_checks_ready (MMIfaceModemCdma *self,
+                                        GAsyncResult *res,
+                                        GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+    SetupRegistrationChecksResults results = { 0 };
+
+    if (!iface_modem_cdma_parent->setup_registration_checks_finish (self,
+                                                                    res,
+                                                                    &results.skip_qcdm_call_manager_step,
+                                                                    &results.skip_qcdm_hdr_step,
+                                                                    &results.skip_at_cdma_service_status_step,
+                                                                    &results.skip_at_cdma1x_serving_system_step,
+                                                                    &results.skip_detailed_registration_state,
+                                                                    &error)) {
+        g_simple_async_result_take_error (simple, error);
+    } else {
+        /* Skip +CSS */
+        results.skip_at_cdma1x_serving_system_step = TRUE;
+        /* Skip +CAD */
+        results.skip_at_cdma_service_status_step = TRUE;
+
+        /* Force to always use the detailed registration checks, as we have
+         * !STATUS for that */
+        results.skip_detailed_registration_state = FALSE;
+
+        g_simple_async_result_set_op_res_gpointer (simple, &results, NULL);
+    }
+
+    /* All done. NOTE: complete NOT in idle! */
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+setup_registration_checks (MMIfaceModemCdma *self,
+                           GAsyncReadyCallback callback,
+                           gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        setup_registration_checks);
+
+    /* Run parent's checks first */
+    iface_modem_cdma_parent->setup_registration_checks (self,
+                                                        (GAsyncReadyCallback)parent_setup_registration_checks_ready,
+                                                        result);
+}
+
+/*****************************************************************************/
+/* Detailed registration state (CDMA interface) */
 
 typedef struct {
     MMModemCdmaRegistrationState detailed_cdma1x_state;
@@ -623,75 +1126,6 @@ get_detailed_registration_state_finish (MMIfaceModemCdma *self,
     return TRUE;
 }
 
-#define MODEM_REG_TAG "Modem has registered"
-#define GENERIC_ROAM_TAG "Roaming:"
-#define ROAM_1X_TAG "1xRoam:"
-#define ROAM_EVDO_TAG "HDRRoam:"
-#define SYS_MODE_TAG "Sys Mode:"
-#define SYS_MODE_NO_SERVICE_TAG "NO SRV"
-#define SYS_MODE_EVDO_TAG "HDR"
-#define SYS_MODE_1X_TAG "1x"
-#define SYS_MODE_CDMA_TAG "CDMA"
-#define EVDO_REV_TAG "HDR Revision:"
-#define SID_TAG "SID:"
-
-static gboolean
-get_roam_value (const gchar *reply,
-                const gchar *tag,
-                gboolean is_eri,
-                gboolean *out_roaming)
-{
-    gchar *p;
-    gboolean success;
-    guint32 ind = 0;
-
-    p = strstr (reply, tag);
-    if (!p)
-        return FALSE;
-
-    p += strlen (tag);
-    while (*p && isspace (*p))
-        p++;
-
-    /* Use generic ERI parsing if it's an ERI */
-    if (is_eri) {
-        success = mm_cdma_parse_eri (p, out_roaming, &ind, NULL);
-        if (success) {
-            /* Sierra redefines ERI 0, 1, and 2 */
-            if (ind == 0)
-                *out_roaming = FALSE;  /* home */
-            else if (ind == 1 || ind == 2)
-                *out_roaming = TRUE;   /* roaming */
-        }
-        return success;
-    }
-
-    /* If it's not an ERI, roaming is just true/false */
-    if (*p == '1') {
-        *out_roaming = TRUE;
-        return TRUE;
-    } else if (*p == '0') {
-        *out_roaming = FALSE;
-        return TRUE;
-    }
-
-    return FALSE;
-}
-
-static gboolean
-sys_mode_has_service (SysMode mode)
-{
-    return (   mode == SYS_MODE_CDMA_1X
-            || mode == SYS_MODE_EVDO_REV0
-            || mode == SYS_MODE_EVDO_REVA);
-}
-
-static gboolean
-sys_mode_is_evdo (SysMode mode)
-{
-    return (mode == SYS_MODE_EVDO_REV0 || mode == SYS_MODE_EVDO_REVA);
-}
-
 static void
 status_ready (MMIfaceModemCdma *self,
               GAsyncResult *res,
@@ -699,13 +1133,6 @@ status_ready (MMIfaceModemCdma *self,
 {
     GError *error = NULL;
     const gchar *response;
-    gchar **lines;
-    gchar **iter;
-    gboolean registered = FALSE;
-    gboolean have_sid = FALSE;
-    SysMode evdo_mode = SYS_MODE_UNKNOWN;
-    SysMode sys_mode = SYS_MODE_UNKNOWN;
-    gboolean evdo_roam = FALSE, cdma1x_roam = FALSE;
 
     response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
     /* If error, leave superclass' reg state alone if AT!STATUS isn't supported. */
@@ -718,154 +1145,10 @@ status_ready (MMIfaceModemCdma *self,
         return;
     }
 
-    lines = g_strsplit_set (response, "\n\r", 0);
-    if (!lines) {
-        /* NOTE: always complete NOT in idle here */
-        g_simple_async_result_set_op_res_gpointer (ctx->result, &ctx->state, NULL);
-        detailed_registration_state_context_complete_and_free (ctx);
-        return;
-    }
-
-    /* Sierra CDMA parts have two general formats depending on whether they
-     * support EVDO or not.  EVDO parts report both 1x and EVDO roaming status
-     * while of course 1x parts only report 1x status.  Some modems also do not
-     * report the Roaming information (MP 555 GPS).
-     *
-     * AT!STATUS responses:
-     *
-     * Unregistered MC5725:
-     * -----------------------
-     * Current band: PCS CDMA
-     * Current channel: 350
-     * SID: 0  NID: 0  1xRoam: 0 HDRRoam: 0
-     * Temp: 33  State: 100  Sys Mode: NO SRV
-     * Pilot NOT acquired
-     * Modem has NOT registered
-     *
-     * Registered MC5725:
-     * -----------------------
-     * Current band: Cellular Sleep
-     * Current channel: 775
-     * SID: 30  NID: 2  1xRoam: 0 HDRRoam: 0
-     * Temp: 29  State: 200  Sys Mode: HDR
-     * Pilot acquired
-     * Modem has registered
-     * HDR Revision: A
-     *
-     * Unregistered AC580:
-     * -----------------------
-     * Current band: PCS CDMA
-     * Current channel: 350
-     * SID: 0 NID: 0  Roaming: 0
-     * Temp: 39  State: 100  Scan Mode: 0
-     * Pilot NOT acquired
-     * Modem has NOT registered
-     *
-     * Registered AC580:
-     * -----------------------
-     * Current band: Cellular Sleep
-     * Current channel: 548
-     * SID: 26  NID: 1  Roaming: 1
-     * Temp: 39  State: 200  Scan Mode: 0
-     * Pilot Acquired
-     * Modem has registered
-     */
-
-    /* We have to handle the two formats slightly differently; for newer formats
-     * with "Sys Mode", we consider the modem registered if the Sys Mode is not
-     * "NO SRV".  The explicit registration status is just icing on the cake.
-     * For older formats (no "Sys Mode") we treat the modem as registered if
-     * the SID is non-zero.
-     */
-
-    for (iter = lines; iter && *iter; iter++) {
-        gboolean bool_val = FALSE;
-        char *p;
-
-        if (!strncmp (*iter, MODEM_REG_TAG, strlen (MODEM_REG_TAG))) {
-            registered = TRUE;
-            continue;
-        }
-
-        /* Roaming */
-        get_roam_value (*iter, ROAM_1X_TAG, TRUE, &cdma1x_roam);
-        get_roam_value (*iter, ROAM_EVDO_TAG, TRUE, &evdo_roam);
-        if (get_roam_value (*iter, GENERIC_ROAM_TAG, FALSE, &bool_val))
-            cdma1x_roam = evdo_roam = bool_val;
-
-        /* Current system mode */
-        p = strstr (*iter, SYS_MODE_TAG);
-        if (p) {
-            p += strlen (SYS_MODE_TAG);
-            while (*p && isspace (*p))
-                p++;
-            if (!strncmp (p, SYS_MODE_NO_SERVICE_TAG, strlen (SYS_MODE_NO_SERVICE_TAG)))
-                sys_mode = SYS_MODE_NO_SERVICE;
-            else if (!strncmp (p, SYS_MODE_EVDO_TAG, strlen (SYS_MODE_EVDO_TAG)))
-                sys_mode = SYS_MODE_EVDO_REV0;
-            else if (   !strncmp (p, SYS_MODE_1X_TAG, strlen (SYS_MODE_1X_TAG))
-                     || !strncmp (p, SYS_MODE_CDMA_TAG, strlen (SYS_MODE_CDMA_TAG)))
-                sys_mode = SYS_MODE_CDMA_1X;
-        }
-
-        /* Current EVDO revision if system mode is EVDO */
-        p = strstr (*iter, EVDO_REV_TAG);
-        if (p) {
-            p += strlen (EVDO_REV_TAG);
-            while (*p && isspace (*p))
-                p++;
-            if (*p == 'A')
-                evdo_mode = SYS_MODE_EVDO_REVA;
-            else if (*p == '0')
-                evdo_mode = SYS_MODE_EVDO_REV0;
-        }
-
-        /* SID */
-        p = strstr (*iter, SID_TAG);
-        if (p) {
-            p += strlen (SID_TAG);
-            while (*p && isspace (*p))
-                p++;
-            if (isdigit (*p) && (*p != '0'))
-                have_sid = TRUE;
-        }
-    }
-
-    /* Update current system mode */
-    if (sys_mode_is_evdo (sys_mode)) {
-        /* Prefer the explicit EVDO mode from EVDO_REV_TAG */
-        if (evdo_mode != SYS_MODE_UNKNOWN)
-            sys_mode = evdo_mode;
-    }
-
-    /* If the modem didn't report explicit registration with "Modem has
-     * registered" then get registration status by looking at either system
-     * mode or (for older devices that don't report that) just the SID.
-     */
-    if (!registered) {
-        if (sys_mode != SYS_MODE_UNKNOWN)
-            registered = sys_mode_has_service (sys_mode);
-        else
-            registered = have_sid;
-    }
-
-    if (registered) {
-        ctx->state.detailed_cdma1x_state = (cdma1x_roam ?
-                                            MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING :
-                                            MM_MODEM_CDMA_REGISTRATION_STATE_HOME);
-
-        if (sys_mode_is_evdo (sys_mode)) {
-            ctx->state.detailed_evdo_state = (evdo_roam ?
-                                              MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING :
-                                              MM_MODEM_CDMA_REGISTRATION_STATE_HOME);
-        } else {
-            ctx->state.detailed_evdo_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
-        }
-    } else {
-        /* Not registered */
-        ctx->state.detailed_cdma1x_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
-        ctx->state.detailed_evdo_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
-    }
+    parse_status (response,
+                  &(ctx->state.detailed_cdma1x_state),
+                  &(ctx->state.detailed_evdo_state),
+                  NULL);
 
     /* NOTE: always complete NOT in idle here */
     g_simple_async_result_set_op_res_gpointer (ctx->result, &ctx->state, NULL);
@@ -1153,18 +1436,24 @@ mm_broadband_modem_sierra_init (MMBroadbandModemSierra *self)
 static void
 iface_modem_init (MMIfaceModem *iface)
 {
+    iface_modem_parent = g_type_interface_peek_parent (iface);
+
+    mm_common_sierra_peek_parent_interfaces (iface);
+
     iface->load_allowed_modes = load_allowed_modes;
     iface->load_allowed_modes_finish = load_allowed_modes_finish;
     iface->set_allowed_modes = set_allowed_modes;
     iface->set_allowed_modes_finish = set_allowed_modes_finish;
     iface->load_access_technologies = load_access_technologies;
     iface->load_access_technologies_finish = load_access_technologies_finish;
+    iface->load_own_numbers = modem_load_own_numbers;
+    iface->load_own_numbers_finish = modem_load_own_numbers_finish;
     iface->reset = modem_reset;
     iface->reset_finish = modem_reset_finish;
+    iface->load_power_state = mm_common_sierra_load_power_state;
+    iface->load_power_state_finish = mm_common_sierra_load_power_state_finish;
     iface->modem_power_up = mm_common_sierra_modem_power_up;
     iface->modem_power_up_finish = mm_common_sierra_modem_power_up_finish;
-    iface->modem_init_power_down = modem_power_down;
-    iface->modem_init_power_down_finish = modem_power_down_finish;
     iface->modem_power_down = modem_power_down;
     iface->modem_power_down_finish = modem_power_down_finish;
     iface->create_sim = mm_common_sierra_create_sim;
@@ -1176,6 +1465,10 @@ iface_modem_init (MMIfaceModem *iface)
 static void
 iface_modem_cdma_init (MMIfaceModemCdma *iface)
 {
+    iface_modem_cdma_parent = g_type_interface_peek_parent (iface);
+
+    iface->setup_registration_checks = setup_registration_checks;
+    iface->setup_registration_checks_finish = setup_registration_checks_finish;
     iface->get_detailed_registration_state = get_detailed_registration_state;
     iface->get_detailed_registration_state_finish = get_detailed_registration_state_finish;
 }

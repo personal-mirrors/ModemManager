@@ -467,12 +467,12 @@ iface_modem_init (MMIfaceModem *iface)
     iface->setup_flow_control_finish = setup_flow_control_finish;
 
     /* No need to power-up/power-down the modem */
+    iface->load_power_state = NULL;
+    iface->load_power_state_finish = NULL;
     iface->modem_power_up = NULL;
     iface->modem_power_up_finish = NULL;
     iface->modem_power_down = NULL;
     iface->modem_power_down_finish = NULL;
-    iface->modem_init_power_down = NULL;
-    iface->modem_init_power_down_finish = NULL;
 
     /* Supported modes cannot be queried */
     iface->load_supported_modes = load_supported_modes;

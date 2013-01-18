@@ -11,8 +11,10 @@
  * GNU General Public License for more details:
  *
  * Copyright (C) 2008 - 2009 Novell, Inc.
- * Copyright (C) 2009 - 2011 Red Hat, Inc.
- * Copyright (C) 2011 Google Inc.
+ * Copyright (C) 2009 - 2012 Red Hat, Inc.
+ * Copyright (C) 2011 - 2012 Google Inc.
+ * Copyright (C) 2012 Huawei Technologies Co., Ltd
+ * Copyright (C) 2012 Aleksander Morgado <aleksander@gnu.org>
  */
 
 #include <config.h>
@@ -38,6 +40,8 @@
 #include "mm-iface-modem-time.h"
 #include "mm-iface-modem-cdma.h"
 #include "mm-broadband-modem-huawei.h"
+#include "mm-broadband-bearer-huawei.h"
+#include "mm-broadband-bearer.h"
 
 static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
@@ -55,6 +59,12 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemHuawei, mm_broadband_modem_huawei, MM_TY
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP_USSD, iface_modem_3gpp_ussd_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_CDMA, iface_modem_cdma_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_TIME, iface_modem_time_init));
+
+typedef enum {
+    NDISDUP_SUPPORT_UNKNOWN,
+    NDISDUP_NOT_SUPPORTED,
+    NDISDUP_SUPPORTED
+} NdisdupSupport;
 
 struct _MMBroadbandModemHuaweiPrivate {
     /* Regex for signal quality related notifications */
@@ -74,6 +84,8 @@ struct _MMBroadbandModemHuaweiPrivate {
     GRegex *simst_regex;
     GRegex *srvst_regex;
     GRegex *stin_regex;
+
+    NdisdupSupport ndisdup_support;
 };
 
 /*****************************************************************************/
@@ -1237,6 +1249,161 @@ modem_3gpp_disable_unsolicited_events (MMIfaceModem3gpp *self,
 }
 
 /*****************************************************************************/
+/* Create Bearer (Modem interface) */
+
+typedef struct {
+    MMBroadbandModemHuawei *self;
+    GSimpleAsyncResult *result;
+    MMBearerProperties *properties;
+} CreateBearerContext;
+
+static void
+create_bearer_context_complete_and_free (CreateBearerContext *ctx)
+{
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
+    g_object_unref (ctx->self);
+    g_object_unref (ctx->properties);
+    g_slice_free (CreateBearerContext, ctx);
+}
+
+static MMBearer *
+huawei_modem_create_bearer_finish (MMIfaceModem *self,
+                                   GAsyncResult *res,
+                                   GError **error)
+{
+    MMBearer *bearer;
+
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return NULL;
+
+    bearer = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
+    mm_dbg ("New huawei bearer created at DBus path '%s'", mm_bearer_get_path (bearer));
+    return g_object_ref (bearer);
+}
+
+static void
+broadband_bearer_huawei_new_ready (GObject *source,
+                                   GAsyncResult *res,
+                                   CreateBearerContext *ctx)
+{
+    MMBearer *bearer;
+    GError *error = NULL;
+
+    bearer = mm_broadband_bearer_huawei_new_finish (res, &error);
+    if (!bearer)
+        g_simple_async_result_take_error (ctx->result, error);
+    else
+        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, (GDestroyNotify)g_object_unref);
+    create_bearer_context_complete_and_free (ctx);
+}
+
+static void
+broadband_bearer_new_ready (GObject *source,
+                            GAsyncResult *res,
+                            CreateBearerContext *ctx)
+{
+    MMBearer *bearer;
+    GError *error = NULL;
+
+    bearer = mm_broadband_bearer_new_finish (res, &error);
+    if (!bearer)
+        g_simple_async_result_take_error (ctx->result, error);
+    else
+        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, (GDestroyNotify)g_object_unref);
+    create_bearer_context_complete_and_free (ctx);
+}
+
+static void
+create_bearer_for_net_port (CreateBearerContext *ctx)
+{
+    switch (ctx->self->priv->ndisdup_support) {
+    case NDISDUP_SUPPORT_UNKNOWN:
+        g_assert_not_reached ();
+    case NDISDUP_NOT_SUPPORTED:
+        mm_dbg ("^NDISDUP not supported, creating default bearer...");
+        mm_broadband_bearer_new (MM_BROADBAND_MODEM (ctx->self),
+                                 ctx->properties,
+                                 NULL, /* cancellable */
+                                 (GAsyncReadyCallback)broadband_bearer_new_ready,
+                                 ctx);
+        return;
+    case NDISDUP_SUPPORTED:
+        mm_dbg ("^NDISDUP supported, creating huawei bearer...");
+        mm_broadband_bearer_huawei_new (MM_BROADBAND_MODEM_HUAWEI (ctx->self),
+                                        ctx->properties,
+                                        NULL, /* cancellable */
+                                        (GAsyncReadyCallback)broadband_bearer_huawei_new_ready,
+                                        ctx);
+        return;
+    }
+}
+
+static void
+ndisdup_check_ready (MMIfaceModem *self,
+                     GAsyncResult *res,
+                     CreateBearerContext *ctx)
+{
+    if (!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, NULL))
+        ctx->self->priv->ndisdup_support = NDISDUP_NOT_SUPPORTED;
+    else
+        ctx->self->priv->ndisdup_support = NDISDUP_SUPPORTED;
+
+    create_bearer_for_net_port (ctx);
+}
+
+static void
+huawei_modem_create_bearer (MMIfaceModem *self,
+                            MMBearerProperties *properties,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
+{
+    CreateBearerContext *ctx;
+
+    ctx = g_slice_new0 (CreateBearerContext);
+    ctx->self = g_object_ref (self);
+    ctx->properties = g_object_ref (properties);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             huawei_modem_create_bearer);
+
+    if (mm_port_get_port_type (mm_base_modem_peek_best_data_port (MM_BASE_MODEM (self))) == MM_PORT_TYPE_NET) {
+        /* If we get a 'net' port, check if driver is 'cdc_ether' or 'cdc_ncm' */
+        const gchar **drivers;
+        guint i;
+
+        drivers = mm_base_modem_get_drivers (MM_BASE_MODEM (self));
+        for (i = 0; drivers[i]; i++) {
+            if (g_str_equal (drivers[i], "cdc_ether") || g_str_equal (drivers[i], "cdc_ncm")) {
+                /* If never checked yet, check NDISDUP support */
+                if (ctx->self->priv->ndisdup_support == NDISDUP_SUPPORT_UNKNOWN) {
+                    mm_dbg ("Checking ^NDISDUP support...");
+                    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                                              "^NDISDUP?",
+                                              3,
+                                              FALSE,
+                                              (GAsyncReadyCallback)ndisdup_check_ready,
+                                              ctx);
+                } else {
+                    /* Already checked, create bearer */
+                    create_bearer_for_net_port (ctx);
+                }
+                return;
+            }
+        }
+    }
+
+    mm_dbg ("Creating default bearer...");
+    mm_broadband_bearer_new (MM_BROADBAND_MODEM (self),
+                             properties,
+                             NULL, /* cancellable */
+                             (GAsyncReadyCallback)broadband_bearer_new_ready,
+                             ctx);
+}
+
+
+/*****************************************************************************/
 /* USSD encode/decode (3GPP-USSD interface) */
 
 static gchar *
@@ -2038,6 +2205,8 @@ mm_broadband_modem_huawei_init (MMBroadbandModemHuawei *self)
                                            G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     self->priv->stin_regex = g_regex_new ("\\r\\n\\^STIN:.+\\r\\n",
                                           G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+
+    self->priv->ndisdup_support = NDISDUP_SUPPORT_UNKNOWN;
 }
 
 static void
@@ -2078,6 +2247,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface->set_allowed_modes_finish = set_allowed_modes_finish;
     iface->load_signal_quality = modem_load_signal_quality;
     iface->load_signal_quality_finish = modem_load_signal_quality_finish;
+    iface->create_bearer = huawei_modem_create_bearer;
+    iface->create_bearer_finish = huawei_modem_create_bearer_finish;
 }
 
 static void

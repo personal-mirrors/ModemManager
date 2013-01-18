@@ -418,6 +418,7 @@ typedef enum {
 
     REGISTRATION_CHECK_STEP_QCDM_CALL_MANAGER_STATE,
     REGISTRATION_CHECK_STEP_QCDM_HDR_STATE,
+    REGISTRATION_CHECK_STEP_QCDM_CDMA1X_SERVING_SYSTEM,
     REGISTRATION_CHECK_STEP_QCDM_LAST,
 
     REGISTRATION_CHECK_STEP_AT_CDMA_SERVICE_STATUS,
@@ -630,6 +631,8 @@ get_cdma1x_serving_system_ready (MMIfaceModemCdma *self,
 {
     GError *error = NULL;
 
+    /* Note: used for *both* AT and QCDM serving system checks */
+
     if (!MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->get_cdma1x_serving_system_finish (
             self,
             res,
@@ -764,6 +767,22 @@ registration_check_step (RunRegistrationChecksContext *ctx)
         /* Fall down to next step */
         ctx->step++;
 
+    case REGISTRATION_CHECK_STEP_QCDM_CDMA1X_SERVING_SYSTEM:
+        /* We only care about SID/NID here; nothing to do with registration
+         * state.
+         */
+        if (MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->get_cdma1x_serving_system &&
+            MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->get_cdma1x_serving_system_finish) {
+            MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->get_cdma1x_serving_system (
+                ctx->self,
+                (GAsyncReadyCallback)get_cdma1x_serving_system_ready,
+                ctx);
+            return;
+        }
+        mm_dbg ("  Skipping CDMA1x Serving System check");
+        /* Fall down to next step */
+        ctx->step++;
+
     case REGISTRATION_CHECK_STEP_QCDM_LAST:
         /* When we get all QCDM results, parse them */
         parse_qcdm_results (ctx);
@@ -824,8 +843,8 @@ registration_check_step (RunRegistrationChecksContext *ctx)
             MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->get_detailed_registration_state &&
             MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->get_detailed_registration_state_finish) {
             /* We pass the CDMA1x/EVDO registration states we got up to now.
-             * If the implementation can't improve the detail, it can either
-             * must return the values it already got as input, or issue an error,
+             * If the implementation can't improve the detail, it must either
+             * return the values it already got as input, or issue an error,
              * and we'll assume it couldn't get any better value. */
             MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->get_detailed_registration_state (
                 ctx->self,
@@ -848,23 +867,6 @@ registration_check_step (RunRegistrationChecksContext *ctx)
                                                               ctx->cdma1x_nid);
         mm_iface_modem_cdma_update_evdo_registration_state (ctx->self,
                                                             ctx->evdo_state);
-
-        /* Update access technologies.
-         * TODO: proper EV-DO revision reporting */
-        {
-            MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
-
-            if (ctx->cdma1x_state == MM_MODEM_CDMA_REGISTRATION_STATE_HOME ||
-                ctx->cdma1x_state == MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING ||
-                ctx->cdma1x_state == MM_MODEM_CDMA_REGISTRATION_STATE_REGISTERED)
-                act |= MM_IFACE_MODEM_CDMA_ALL_CDMA1X_ACCESS_TECHNOLOGIES_MASK;
-
-            if (ctx->evdo_state == MM_MODEM_CDMA_REGISTRATION_STATE_HOME ||
-                ctx->evdo_state == MM_MODEM_CDMA_REGISTRATION_STATE_ROAMING ||
-                ctx->evdo_state == MM_MODEM_CDMA_REGISTRATION_STATE_REGISTERED)
-                act |= MM_IFACE_MODEM_CDMA_ALL_EVDO_ACCESS_TECHNOLOGIES_MASK;
-            mm_iface_modem_cdma_update_access_technologies (MM_IFACE_MODEM_CDMA (ctx->self), act);
-        }
 
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
         run_registration_checks_context_complete_and_free (ctx);
