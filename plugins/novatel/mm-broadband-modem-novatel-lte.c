@@ -793,6 +793,11 @@ mm_broadband_modem_novatel_lte_new (const gchar *device,
                          MM_BASE_MODEM_PLUGIN, plugin,
                          MM_BASE_MODEM_VENDOR_ID, vendor_id,
                          MM_BASE_MODEM_PRODUCT_ID, product_id,
+                         /* Temporarily allows only EPS network registration status */
+                         /* TODO(benchan): Remove this constraint */
+                         MM_IFACE_MODEM_3GPP_CS_NETWORK_SUPPORTED, FALSE,
+                         MM_IFACE_MODEM_3GPP_PS_NETWORK_SUPPORTED, FALSE,
+                         MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED, TRUE,
                          NULL);
 }
 
