@@ -4064,7 +4064,7 @@ unsolicited_registration_events_context_step (UnsolicitedRegistrationEventsConte
      * precendence over PS errors and PS errors take precendence over CS errors. */
     if (ctx->eps_error) {
         g_simple_async_result_take_error (ctx->result, ctx->eps_error);
-        ctx->ps_error = NULL;
+        ctx->eps_error = NULL;
     } else if (ctx->ps_error) {
         g_simple_async_result_take_error (ctx->result, ctx->ps_error);
         ctx->ps_error = NULL;
