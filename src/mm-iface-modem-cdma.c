@@ -544,9 +544,9 @@ get_hdr_state_ready (MMIfaceModemCdma *self,
     if (!MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->get_hdr_state_finish (
             self,
             res,
+            &ctx->hdr_hybrid_mode,
             &ctx->hdr_session_state,
             &ctx->hdr_almp_state,
-            &ctx->hdr_hybrid_mode,
             &error)) {
         mm_dbg ("Could not get HDR state: %s", error->message);
         g_error_free (error);
@@ -564,6 +564,11 @@ get_hdr_state_ready (MMIfaceModemCdma *self,
 static void
 parse_qcdm_results (RunRegistrationChecksContext *ctx)
 {
+    mm_dbg ("QCDM CM System Mode: %d", ctx->call_manager_system_mode);
+    mm_dbg ("QCDM HDR Hybrid Mode: %d", ctx->hdr_hybrid_mode);
+    mm_dbg ("QCDM HDR Session State: %d", ctx->hdr_session_state);
+    mm_dbg ("QCDM HDR ALMP State: %d", ctx->hdr_almp_state);
+
     /* Set QCDM-obtained registration info */
     switch (ctx->call_manager_system_mode) {
     case QCDM_CMD_CM_SUBSYS_STATE_INFO_SYSTEM_MODE_CDMA:
