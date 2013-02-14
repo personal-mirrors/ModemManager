@@ -1077,9 +1077,8 @@ run_deferred_registration_state_update (MMIfaceModem3gpp *self)
                   NULL);
     new_state = ctx->deferred_new_state;
 
-    /* Only set new state if it is known and different from the old one */
-    if (new_state == MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN ||
-        new_state == old_state)
+    /* Only set new state if different */
+    if (new_state == old_state)
         return FALSE;
 
     mm_info ("Modem %s: (deferred) 3GPP Registration state changed (%s -> %s)",
@@ -1106,10 +1105,25 @@ update_registration_state (MMIfaceModem3gpp *self,
     ctx = get_registration_state_context (self);
     g_assert (ctx);
 
-    /* Cancel any deferred registration state update */
     if (ctx->deferred_update_id != 0) {
+        /* If there is already a deferred 'registration loss' state update and the new update
+         * is not a registered state, update the deferred state update without extending the
+         * timeout. */
+        if (new_state != MM_MODEM_3GPP_REGISTRATION_STATE_HOME &&
+            new_state != MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
+            mm_info ("Modem %s: 3GPP Registration state changed (%s -> %s), update deferred",
+                     g_dbus_object_get_object_path (G_DBUS_OBJECT (self)),
+                     mm_modem_3gpp_registration_state_get_string (old_state),
+                     mm_modem_3gpp_registration_state_get_string (new_state));
+
+            ctx->deferred_new_state = new_state;
+            return;
+        }
+
+        /* Otherwise, cancel any deferred registration state update */
         g_source_remove (ctx->deferred_update_id);
         ctx->deferred_update_id = 0;
+        ctx->deferred_new_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
     }
 
     /* Only set new state if different */
