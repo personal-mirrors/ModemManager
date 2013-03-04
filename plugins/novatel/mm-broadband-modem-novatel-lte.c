@@ -106,6 +106,12 @@ static const MMBaseModemAtCommand modem_init_sequence[] = {
     /* Additional OPTIONAL initialization */
     { "X4 &C1",  3, FALSE, NULL },
 
+    /* Temporarily force the modem into LTE only mode to prevent it from falling
+     * back to 3G.
+     * TODO(benchan): Remove this constraint
+     */
+    { "$NWPREFMODE=30", 6, FALSE, mm_base_modem_response_processor_continue_on_error },
+
     { NULL }
 };
 
