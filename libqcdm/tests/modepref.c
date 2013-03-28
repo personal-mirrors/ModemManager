@@ -26,15 +26,10 @@
 #include <assert.h>
 #include <unistd.h>
 
-#include "libwmc/src/utils.h"
-#include "libwmc/src/errors.h"
-#include "libwmc/src/commands.h"
-#include "libwmc/src/com.h"
-
-#include "libqcdm/src/utils.h"
-#include "libqcdm/src/errors.h"
-#include "libqcdm/src/commands.h"
-#include "libqcdm/src/com.h"
+#include "utils.h"
+#include "errors.h"
+#include "commands.h"
+#include "com.h"
 
 static int debug = 0;
 
@@ -42,7 +37,7 @@ static void
 print_buf (const char *detail, const char *buf, size_t len)
 {
 	int i = 0, z;
-	wmcbool newline = FALSE;
+	qcdmbool newline = FALSE;
 	char tmp[500];
 	u_int32_t flen;
 
@@ -84,242 +79,6 @@ com_setup (const char *port)
 	}
 
 	return fd;
-}
-
-/******************************************************************/
-
-static wmcbool
-wmc_send (int fd, char *inbuf, size_t inbuf_len, size_t cmd_len)
-{
-	int status;
-	int eagain_count = 1000;
-	size_t i = 0, sendlen;
-	char sendbuf[600];
-
-	if (debug)
-		print_buf ("\nWMC:RAW>>>", inbuf, cmd_len);
-
-	/* Encapsulate the data for the device */
-	sendlen = wmc_encapsulate (inbuf, cmd_len, inbuf_len, sendbuf, sizeof (sendbuf), TRUE);
-	if (sendlen <= 0) {
-		fprintf (stderr, "E: failed to encapsulate WMC command\n");
-		return FALSE;
-	}
-
-	if (debug)
-		print_buf ("WMC:ENC>>>", sendbuf, sendlen);
-
-	while (i < sendlen) {
-		errno = 0;
-		status = write (fd, &sendbuf[i], 1);
-		if (status < 0) {
-			if (errno == EAGAIN) {
-				eagain_count--;
-				if (eagain_count <= 0)
-					return FALSE;
-			} else
-				assert (errno == 0);
-		} else
-			i++;
-
-		usleep (1000);
-	}
-
-	return TRUE;
-}
-
-static size_t
-wmc_wait_reply (int fd, char *buf, size_t len)
-{
-	fd_set in;
-	int result;
-	struct timeval timeout = { 1, 0 };
-	char readbuf[2048];
-	ssize_t bytes_read;
-	int total = 0, retries = 0;
-	size_t decap_len = 0;
-
-	FD_ZERO (&in);
-	FD_SET (fd, &in);
-	result = select (fd + 1, &in, NULL, NULL, &timeout);
-	if (result != 1 || !FD_ISSET (fd, &in))
-		return 0;
-
-	do {
-		errno = 0;
-		bytes_read = read (fd, &readbuf[total], 1);
-		if ((bytes_read == 0) || (errno == EAGAIN)) {
-			/* Haven't gotten the async control char yet */
-			if (retries > 20)
-				return 0; /* 2 seconds, give up */
-
-			/* Otherwise wait a bit and try again */
-			usleep (100000);
-			retries++;
-			continue;
-		} else if (bytes_read == 1) {
-			wmcbool more = FALSE, success;
-			size_t used = 0;
-
-			total++;
-			decap_len = 0;
-			success = wmc_decapsulate (readbuf, total, buf, len, &decap_len, &used, &more, TRUE);
-
-			if (success && !more && debug)
-				print_buf ("WMC:RAW<<<", readbuf, total);
-
-			/* Discard used data */
-			if (used > 0) {
-				total -= used;
-				memmove (readbuf, &readbuf[used], total);
-			}
-
-			if (success && !more) {
-				/* Success; we have a packet */
-				break;
-			}
-		} else {
-			/* Some error occurred */
-			return 0;
-		}
-	} while (total < sizeof (readbuf));
-
-	if (debug)
-		print_buf ("WMC:DEC<<<", buf, decap_len);
-
-	return decap_len;
-}
-
-static int
-wmc_set_global_mode (const char *port, u_int8_t mode)
-{
-	int fd, err;
-	char buf[1024];
-	size_t len;
-	WmcResult *result;
-	size_t reply_len;
-
-	fd = com_setup (port);
-	if (fd < 0)
-		return -1;
-
-	err = wmc_port_setup (fd);
-	if (err) {
-		fprintf (stderr, "E: failed to set up WMC port %s: %d\n", port, err);
-		goto error;
-	}
-
-	len = wmc_cmd_set_global_mode_new (buf, sizeof (buf), mode);
-	assert (len);
-
-	/* Send the command */
-	if (!wmc_send (fd, buf, sizeof (buf), len)) {
-		fprintf (stderr, "E: failed to send WMC global mode command\n");
-		goto error;
-	}
-
-	reply_len = wmc_wait_reply (fd, buf, sizeof (buf));
-	if (!reply_len) {
-		fprintf (stderr, "E: failed to receive global mode command reply\n");
-		goto error;
-	}
-
-	/* Parse the response into a result structure */
-	result = wmc_cmd_set_global_mode_result (buf, reply_len);
-	if (!result) {
-		fprintf (stderr, "E: failed to parse global mode command reply\n");
-		goto error;
-	}
-	wmc_result_unref (result);
-
-	close (fd);
-	return 0;
-
-error:
-	close (fd);
-	return -1;
-}
-
-static const char *
-wmc_get_global_mode (const char *port)
-{
-	int fd, err;
-	char buf[1024];
-	size_t len;
-	WmcResult *result;
-	size_t reply_len;
-	u_int8_t mode = 0;
-	const char *smode = NULL;
-
-	fd = com_setup (port);
-	if (fd < 0)
-		return NULL;
-
-	err = wmc_port_setup (fd);
-	if (err) {
-		fprintf (stderr, "E: failed to set up WMC port %s: %d\n", port, err);
-		goto error;
-	}
-
-	len = wmc_cmd_get_global_mode_new (buf, sizeof (buf));
-	assert (len);
-
-	/* Send the command */
-	if (!wmc_send (fd, buf, sizeof (buf), len)) {
-		fprintf (stderr, "E: failed to send WMC global mode command\n");
-		goto error;
-	}
-
-	reply_len = wmc_wait_reply (fd, buf, sizeof (buf));
-	if (!reply_len) {
-		fprintf (stderr, "E: failed to receive global mode command reply\n");
-		goto error;
-	}
-
-	/* Parse the response into a result structure */
-	result = wmc_cmd_get_global_mode_result (buf, reply_len);
-	if (!result) {
-		fprintf (stderr, "E: failed to parse global mode command reply\n");
-		goto error;
-	}
-	wmc_result_unref (result);
-
-    wmc_result_get_u8 (result, WMC_CMD_GET_GLOBAL_MODE_ITEM_MODE, &mode);
-    switch (mode) {
-    case WMC_NETWORK_MODE_AUTO_CDMA:
-        smode = "CDMA/EVDO";
-        break;
-    case WMC_NETWORK_MODE_CDMA_ONLY:
-        smode = "CDMA only";
-        break;
-    case WMC_NETWORK_MODE_EVDO_ONLY:
-        smode = "EVDO only";
-        break;
-    case WMC_NETWORK_MODE_AUTO_GSM:
-        smode = "GSM/UMTS";
-        break;
-    case WMC_NETWORK_MODE_GPRS_ONLY:
-        smode = "GSM/GPRS/EDGE only";
-        break;
-    case WMC_NETWORK_MODE_UMTS_ONLY:
-        smode = "UMTS/HSPA only";
-        break;
-    case WMC_NETWORK_MODE_AUTO:
-        smode = "Auto";
-        break;
-    case WMC_NETWORK_MODE_LTE_ONLY:
-        smode = "LTE only";
-        break;
-    default:
-		break;
-    }
-
-	close (fd);
-	return smode;
-
-error:
-	close (fd);
-	return NULL;
 }
 
 /******************************************************************/
@@ -414,23 +173,131 @@ qcdm_wait_reply (int fd, char *buf, size_t len)
 }
 
 static int
-qcdm_set_hdr_pref (const char *port, u_int8_t hdrpref)
+qcdm_set_mode_pref (int fd, u_int8_t modepref)
 {
-	int fd, err;
+	int err;
 	char buf[512];
 	size_t len;
 	QcdmResult *result;
 	size_t reply_len;
 
-	fd = com_setup (port);
-	if (fd < 0)
-		return -1;
+	len = qcdm_cmd_nv_set_mode_pref_new (buf, sizeof (buf), 0, modepref);
+	assert (len);
 
-	err = qcdm_port_setup (fd);
-	if (err != QCDM_SUCCESS) {
-		fprintf (stderr, "E: failed to set up DM port %s: %d\n", port, err);
-		goto error;
+	/* Send the command */
+	if (!qcdm_send (fd, buf, len)) {
+		fprintf (stderr, "E: failed to send QCDM mode pref command\n");
+		return -1;
 	}
+
+	reply_len = qcdm_wait_reply (fd, buf, sizeof (buf));
+	if (!reply_len) {
+		fprintf (stderr, "E: failed to receive QCDM mode pref command reply\n");
+		return -1;
+	}
+
+	/* Parse the response into a result structure */
+	err = QCDM_SUCCESS;
+	result = qcdm_cmd_nv_set_mode_pref_result (buf, reply_len, &err);
+	if (!result) {
+		fprintf (stderr, "E: failed to parse QCDM mode pref command reply: %d\n", err);
+		return -1;
+	}
+
+	qcdm_result_unref (result);
+	return 0;
+}
+
+static const char *
+qcdm_get_mode_pref (int fd)
+{
+	int err;
+	char buf[512];
+	size_t len;
+	QcdmResult *result;
+	size_t reply_len;
+	const char *smode = NULL;
+	u_int8_t mode = 0;
+
+	len = qcdm_cmd_nv_get_mode_pref_new (buf, sizeof (buf), 0);
+	assert (len);
+
+	/* Send the command */
+	if (!qcdm_send (fd, buf, len)) {
+		fprintf (stderr, "E: failed to send QCDM mode pref command\n");
+		return NULL;
+	}
+
+	reply_len = qcdm_wait_reply (fd, buf, sizeof (buf));
+	if (!reply_len) {
+		fprintf (stderr, "E: failed to receive QCDM mode pref command reply\n");
+		return NULL;
+	}
+
+	/* Parse the response into a result structure */
+	err = QCDM_SUCCESS;
+	result = qcdm_cmd_nv_get_mode_pref_result (buf, reply_len, &err);
+	if (!result) {
+		fprintf (stderr, "E: failed to parse QCDM mode pref command reply: %d\n", err);
+		return NULL;
+	}
+
+    err = qcdm_result_get_u8 (result, QCDM_CMD_NV_GET_MODE_PREF_ITEM_MODE_PREF, &mode);
+	if (err == QCDM_SUCCESS) {
+	    switch (mode) {
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_DIGITAL:
+		    smode = "digital";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_DIGITAL_ONLY:
+		    smode = "digital only";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_AUTO:
+		    smode = "automatic";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_1X_ONLY:
+		    smode = "CDMA 1x only";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_HDR_ONLY:
+		    smode = "HDR only";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_GPRS_ONLY:
+		    smode = "GPRS only";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_UMTS_ONLY:
+		    smode = "UMTS only";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_GSM_UMTS_ONLY:
+		    smode = "GSM and UMTS only";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_1X_HDR_ONLY:
+		    smode = "CDMA 1x and HDR only";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_LTE_ONLY:
+		    smode = "LTE only";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_GSM_UMTS_LTE_ONLY:
+		    smode = "GSM/UMTS/LTE only";
+		    break;
+		case QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_1X_HDR_LTE_ONLY:
+		    smode = "CDMA 1x, HDR, and LTE only";
+		    break;
+		default:
+		    break;
+		}
+	}
+
+	qcdm_result_unref (result);
+	return smode;
+}
+
+static int
+qcdm_set_hdr_pref (int fd, u_int8_t hdrpref)
+{
+	int err;
+	char buf[512];
+	size_t len;
+	QcdmResult *result;
+	size_t reply_len;
 
 	len = qcdm_cmd_nv_set_hdr_rev_pref_new (buf, sizeof (buf), hdrpref);
 	assert (len);
@@ -438,13 +305,13 @@ qcdm_set_hdr_pref (const char *port, u_int8_t hdrpref)
 	/* Send the command */
 	if (!qcdm_send (fd, buf, len)) {
 		fprintf (stderr, "E: failed to send QCDM HDR pref command\n");
-		goto error;
+		return -1;
 	}
 
 	reply_len = qcdm_wait_reply (fd, buf, sizeof (buf));
 	if (!reply_len) {
 		fprintf (stderr, "E: failed to receive HDR pref command reply\n");
-		goto error;
+		return -1;
 	}
 
 	/* Parse the response into a result structure */
@@ -452,38 +319,23 @@ qcdm_set_hdr_pref (const char *port, u_int8_t hdrpref)
 	result = qcdm_cmd_nv_set_hdr_rev_pref_result (buf, reply_len, &err);
 	if (!result) {
 		fprintf (stderr, "E: failed to parse HDR pref command reply: %d\n", err);
-		goto error;
+		return -1;
 	}
 
 	qcdm_result_unref (result);
-	close (fd);
 	return 0;
-
-error:
-	close (fd);
-	return -1;
 }
 
 static const char *
-qcdm_get_hdr_pref (const char *port)
+qcdm_get_hdr_pref (int fd)
 {
-	int fd, err;
+	int err;
 	char buf[512];
 	size_t len;
 	QcdmResult *result = NULL;
 	size_t reply_len;
     u_int8_t pref;
     const char *spref = NULL;
-
-	fd = com_setup (port);
-	if (fd < 0)
-		return NULL;
-
-	err = qcdm_port_setup (fd);
-	if (err != QCDM_SUCCESS) {
-		fprintf (stderr, "E: failed to set up DM port %s: %d\n", port, err);
-		goto error;
-	}
 
     len = qcdm_cmd_nv_get_hdr_rev_pref_new (buf, sizeof (buf));
     assert (len > 0);
@@ -526,35 +378,20 @@ qcdm_get_hdr_pref (const char *port)
         break;
     }
 
-	qcdm_result_unref (result);
-	close (fd);
-	return spref;
-
 error:
 	if (result)
 		qcdm_result_unref (result);
-	close (fd);
-	return NULL;
+	return spref;
 }
 
 static int
-qcdm_set_mode (const char *port, u_int8_t mode)
+qcdm_set_mode (int fd, u_int8_t mode)
 {
-	int fd, err;
+	int err;
 	char buf[512];
 	size_t len;
 	QcdmResult *result;
 	size_t reply_len;
-
-	fd = com_setup (port);
-	if (fd < 0)
-		return -1;
-
-	err = qcdm_port_setup (fd);
-	if (err != QCDM_SUCCESS) {
-		fprintf (stderr, "E: failed to set up DM port %s: %d\n", port, err);
-		goto error;
-	}
 
 	len = qcdm_cmd_control_new (buf, sizeof (buf), mode);
 	assert (len);
@@ -580,11 +417,9 @@ qcdm_set_mode (const char *port, u_int8_t mode)
 	}
 
 	qcdm_result_unref (result);
-	close (fd);
 	return 0;
 
 error:
-	close (fd);
 	return -1;
 }
 
@@ -593,128 +428,144 @@ error:
 static void
 usage (const char *prog)
 {
-	fprintf (stderr, "Usage: %s <WMC port> <DM port> [<mode>] [--debug]\n", prog);
-	fprintf (stderr, "         <mode> = lte, auto-cdma, auto, cdma, evdo, auto-gsm, gprs, umts\n");
+	fprintf (stderr, "Usage: %s <DM port> [<mode>] [--debug]\n", prog);
+	fprintf (stderr, "         <mode> = auto, lte, auto-cdma-lte, auto-cdma, cdma, evdo, auto-gsm-lte, auto-gsm, gsm, umts\n");
 	fprintf (stderr, "         If <mode> is missing, current mode will be printed.\n\n");
 }
 
-static wmcbool
+static qcdmbool
 parse_mode (const char *s,
             u_int8_t *out_mode,
             u_int8_t *out_hdrpref,
-            wmcbool *out_set_evdo)
+            qcdmbool *out_set_evdo)
 {
 	if (strcasecmp (s, "lte") == 0) {
-		*out_mode = WMC_NETWORK_MODE_LTE_ONLY;
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_LTE_ONLY;
+		*out_hdrpref = QCDM_CMD_NV_HDR_REV_PREF_ITEM_REV_PREF_EHRPD;
+		return TRUE;
+	}
+
+	if (strcasecmp (s, "auto-cdma-lte") == 0) {
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_1X_HDR_LTE_ONLY;
 		*out_hdrpref = QCDM_CMD_NV_HDR_REV_PREF_ITEM_REV_PREF_EHRPD;
 		*out_set_evdo = TRUE;
 		return TRUE;
 	}
 
 	if (strcasecmp (s, "auto-cdma") == 0) {
-		*out_mode = WMC_NETWORK_MODE_AUTO_CDMA;
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_1X_HDR_ONLY;
 		*out_hdrpref = QCDM_CMD_NV_HDR_REV_PREF_ITEM_REV_PREF_A;
 		*out_set_evdo = TRUE;
 		return TRUE;
 	}
 
 	if (strcasecmp (s, "auto") == 0) {
-		*out_mode = WMC_NETWORK_MODE_AUTO;
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_AUTO;
 		*out_hdrpref = QCDM_CMD_NV_HDR_REV_PREF_ITEM_REV_PREF_EHRPD;
 		*out_set_evdo = TRUE;
 		return TRUE;
 	}
 
 	if (strcasecmp (s, "cdma") == 0) {
-		*out_mode = WMC_NETWORK_MODE_CDMA_ONLY;
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_1X_ONLY;
 		*out_hdrpref = QCDM_CMD_NV_HDR_REV_PREF_ITEM_REV_PREF_A;
 		*out_set_evdo = TRUE;
 		return TRUE;
 	}
 
 	if (strcasecmp (s, "evdo") == 0) {
-		*out_mode = WMC_NETWORK_MODE_EVDO_ONLY;
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_HDR_ONLY;
 		*out_hdrpref = QCDM_CMD_NV_HDR_REV_PREF_ITEM_REV_PREF_A;
 		*out_set_evdo = TRUE;
 		return TRUE;
 	}
 
-	if (strcasecmp (s, "auto-gsm") == 0) {
-		*out_mode = WMC_NETWORK_MODE_AUTO_GSM;
-		*out_set_evdo = FALSE;
+	if (strcasecmp (s, "auto-gsm-lte") == 0) {
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_GSM_UMTS_LTE_ONLY;
 		return TRUE;
 	}
 
-	if (strcasecmp (s, "gprs") == 0) {
-		*out_mode = WMC_NETWORK_MODE_GPRS_ONLY;
-		*out_set_evdo = FALSE;
+	if (strcasecmp (s, "auto-gsm") == 0) {
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_GSM_UMTS_ONLY;
+		return TRUE;
+	}
+
+	if (strcasecmp (s, "gsm") == 0) {
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_GPRS_ONLY;
 		return TRUE;
 	}
 
 	if (strcasecmp (s, "umts") == 0) {
-		*out_mode = WMC_NETWORK_MODE_UMTS_ONLY;
-		*out_set_evdo = FALSE;
+		*out_mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_UMTS_ONLY;
 		return TRUE;
 	}
 
 	return FALSE;
 }
 
-
 int
 main (int argc, char *argv[])
 {
-	u_int8_t mode = WMC_NETWORK_MODE_AUTO;
+	u_int8_t mode = QCDM_CMD_NV_MODE_PREF_ITEM_MODE_PREF_AUTO;
 	u_int8_t hdrpref = QCDM_CMD_NV_HDR_REV_PREF_ITEM_REV_PREF_EHRPD;
-	const char *wmcport = argv[1];
-	const char *dmport = argv[2];
-	const char *msg = NULL;
-	wmcbool set_evdo = FALSE;
-	wmcbool set_mode = FALSE;
+	const char *dmport = argv[1];
+	const char *smode = argv[2];
+	const char *msg;
+	qcdmbool set_evdo = FALSE;
+	qcdmbool set_mode = FALSE;
+	int fd, err;
 
-	if (argc < 3 || argc > 5) {
+	if (argc < 2 || argc > 4) {
 		usage (argv[0]);
 		return 1;
 	}
 
-	if (argc >= 4) {
-		if (strcasecmp (argv[3], "--debug") == 0)
+	if (argc >= 3) {
+		if (strcasecmp (argv[2], "--debug") == 0)
 			debug = 1;
 		else {
-			set_mode = parse_mode (argv[3], &mode, &hdrpref, &set_evdo);
+			set_mode = parse_mode (argv[2], &mode, &hdrpref, &set_evdo);
 			if (!set_mode) {
 				usage (argv[0]);
 				return 1;
 			}
 		}
 
-		if (argc >= 5 && strcasecmp (argv[4], "--debug") == 0)
+		if (argc >= 4 && strcasecmp (argv[3], "--debug") == 0)
 			debug = 1;
 	}
 
-	if (debug) {
-		putenv ("WMC_DEBUG=1");
+	if (debug)
 		putenv ("QCDM_DEBUG=1");
+
+	fd = com_setup (dmport);
+	if (fd < 0)
+		return 1;
+
+	err = qcdm_port_setup (fd);
+	if (err != QCDM_SUCCESS) {
+		fprintf (stderr, "E: failed to set up DM port %s: %d\n", dmport, err);
+		return 1;
 	}
 
 	if (set_mode) {
-		if (wmc_set_global_mode (wmcport, mode))
+		if (qcdm_set_mode_pref (fd, mode))
 			return 1;
-		if (set_evdo && qcdm_set_hdr_pref (dmport, hdrpref))
+		if (set_evdo && qcdm_set_hdr_pref (fd, hdrpref))
 			return 1;
 
 		/* Send DM reset command */
-		qcdm_set_mode (dmport, QCDM_CMD_CONTROL_MODE_OFFLINE);
+		qcdm_set_mode (fd, QCDM_CMD_CONTROL_MODE_OFFLINE);
 		sleep (2);
-		qcdm_set_mode (dmport, QCDM_CMD_CONTROL_MODE_RESET);
+		qcdm_set_mode (fd, QCDM_CMD_CONTROL_MODE_RESET);
 		sleep (2);
 
-		fprintf (stdout, "Success setting mode to '%s': replug your device.\n", argv[3]);
+		fprintf (stdout, "Success setting mode to '%s': replug your device.\n", smode);
 	} else {
-		msg = wmc_get_global_mode (wmcport);
-		fprintf (stdout, "WMC Global Mode:   %s\n", msg ? msg : "(unknown)");
-		msg = qcdm_get_hdr_pref (dmport);
-		fprintf (stdout, "QCDM HDR Revision: %s\n", msg ? msg : "(unknown)");
+		msg = qcdm_get_mode_pref (fd);
+		fprintf (stdout, "Mode preference: %s\n", msg ? msg : "(unknown)");
+		msg = qcdm_get_hdr_pref (fd);
+		fprintf (stdout, "HDR revision:    %s\n", msg ? msg : "(unknown)");
 	}
 
 	return 0;

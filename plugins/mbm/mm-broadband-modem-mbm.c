@@ -50,9 +50,11 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbm, mm_broadband_modem_mbm, MM_TYPE_BRO
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init))
 
-#define MBM_NETWORK_MODE_ANY  1
-#define MBM_NETWORK_MODE_2G   5
-#define MBM_NETWORK_MODE_3G   6
+#define MBM_NETWORK_MODE_OFFLINE   0
+#define MBM_NETWORK_MODE_ANY       1
+#define MBM_NETWORK_MODE_LOW_POWER 4
+#define MBM_NETWORK_MODE_2G        5
+#define MBM_NETWORK_MODE_3G        6
 
 #define MBM_E2NAP_DISCONNECTED 0
 #define MBM_E2NAP_CONNECTED    1
@@ -68,6 +70,8 @@ struct _MMBroadbandModemMbmPrivate {
     GRegex *estksmenu_regex;
     GRegex *emwi_regex;
     GRegex *erinfo_regex;
+
+    guint mbm_mode;
 };
 
 /*****************************************************************************/
@@ -165,12 +169,13 @@ modem_after_sim_unlock (MMIfaceModem *self,
 /* Load initial allowed/preferred modes (Modem interface) */
 
 static gboolean
-load_allowed_modes_finish (MMIfaceModem *self,
+load_allowed_modes_finish (MMIfaceModem *_self,
                            GAsyncResult *res,
                            MMModemMode *allowed,
                            MMModemMode *preferred,
                            GError **error)
 {
+    MMBroadbandModemMbm *self = MM_BROADBAND_MODEM_MBM (_self);
     const gchar *response;
     guint a;
 
@@ -178,18 +183,26 @@ load_allowed_modes_finish (MMIfaceModem *self,
     if (!response)
         return FALSE;
 
-    if (mm_get_uint_from_str (mm_strip_tag (response, "CFUN:"), &a)) {
+    if (mm_get_uint_from_str (mm_strip_tag (response, "+CFUN:"), &a)) {
         /* No settings to set preferred */
         *preferred = MM_MODEM_MODE_NONE;
 
         switch (a) {
+        case MBM_NETWORK_MODE_OFFLINE:
+        case MBM_NETWORK_MODE_LOW_POWER:
+            /* Do not update internal mbm_mode */
+            *allowed = MM_MODEM_MODE_NONE;
+            break;
         case MBM_NETWORK_MODE_2G:
+            self->priv->mbm_mode = MBM_NETWORK_MODE_2G;
             *allowed = MM_MODEM_MODE_2G;
             break;
         case MBM_NETWORK_MODE_3G:
+            self->priv->mbm_mode = MBM_NETWORK_MODE_3G;
             *allowed = MM_MODEM_MODE_3G;
             break;
         default:
+            /* Do not update internal mbm_mode */
             *allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
             break;
         }
@@ -221,6 +234,21 @@ load_allowed_modes (MMIfaceModem *self,
 /*****************************************************************************/
 /* Set allowed modes (Modem interface) */
 
+typedef struct {
+    MMBroadbandModemMbm *self;
+    GSimpleAsyncResult *result;
+    gint mbm_mode;
+} SetAllowedModesContext;
+
+static void
+set_allowed_modes_context_complete_and_free (SetAllowedModesContext *ctx)
+{
+    g_simple_async_result_complete_in_idle (ctx->result);
+    g_object_unref (ctx->result);
+    g_object_unref (ctx->self);
+    g_slice_free (SetAllowedModesContext, ctx);
+}
+
 static gboolean
 set_allowed_modes_finish (MMIfaceModem *self,
                           GAsyncResult *res,
@@ -232,53 +260,56 @@ set_allowed_modes_finish (MMIfaceModem *self,
 static void
 allowed_mode_update_ready (MMBaseModem *self,
                            GAsyncResult *res,
-                           GSimpleAsyncResult *operation_result)
+                           SetAllowedModesContext *ctx)
 {
     GError *error = NULL;
 
     mm_base_modem_at_command_finish (self, res, &error);
     if (error)
         /* Let the error be critical. */
-        g_simple_async_result_take_error (operation_result, error);
-    else
-        g_simple_async_result_set_op_res_gboolean (operation_result, TRUE);
-    g_simple_async_result_complete (operation_result);
-    g_object_unref (operation_result);
+        g_simple_async_result_take_error (ctx->result, error);
+    else {
+        /* Cache current allowed mode */
+        ctx->self->priv->mbm_mode = ctx->mbm_mode;
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    }
+    set_allowed_modes_context_complete_and_free (ctx);
 }
 
 static void
-set_allowed_modes (MMIfaceModem *_self,
+set_allowed_modes (MMIfaceModem *self,
                    MMModemMode allowed,
                    MMModemMode preferred,
                    GAsyncReadyCallback callback,
                    gpointer user_data)
 {
-    MMBroadbandModemMbm *self = MM_BROADBAND_MODEM_MBM (_self);
-    GSimpleAsyncResult *result;
+    SetAllowedModesContext *ctx;
     gchar *command;
-    gint mbm_mode = -1;
 
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        set_allowed_modes);
+    ctx = g_slice_new (SetAllowedModesContext);
+    ctx->self = g_object_ref (self);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             set_allowed_modes);
+    ctx->mbm_mode = -1;
 
     if (allowed == MM_MODEM_MODE_2G)
-        mbm_mode = MBM_NETWORK_MODE_2G;
+        ctx->mbm_mode = MBM_NETWORK_MODE_2G;
     else if (allowed == MM_MODEM_MODE_3G)
-        mbm_mode = MBM_NETWORK_MODE_3G;
+        ctx->mbm_mode = MBM_NETWORK_MODE_3G;
     else if ((allowed == (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G) ||
               allowed == MM_MODEM_MODE_ANY) &&
              preferred == MM_MODEM_MODE_NONE)
-        mbm_mode = MBM_NETWORK_MODE_ANY;
+        ctx->mbm_mode = MBM_NETWORK_MODE_ANY;
 
-    if (mbm_mode < 0) {
+    if (ctx->mbm_mode < 0) {
         gchar *allowed_str;
         gchar *preferred_str;
 
         allowed_str = mm_modem_mode_build_string_from_mask (allowed);
         preferred_str = mm_modem_mode_build_string_from_mask (preferred);
-        g_simple_async_result_set_error (result,
+        g_simple_async_result_set_error (ctx->result,
                                          MM_CORE_ERROR,
                                          MM_CORE_ERROR_FAILED,
                                          "Requested mode (allowed: '%s', preferred: '%s') not "
@@ -288,82 +319,82 @@ set_allowed_modes (MMIfaceModem *_self,
         g_free (allowed_str);
         g_free (preferred_str);
 
-        g_simple_async_result_complete_in_idle (result);
-        g_object_unref (result);
+        set_allowed_modes_context_complete_and_free (ctx);
         return;
     }
 
-    command = g_strdup_printf ("+CFUN=%d", mbm_mode);
+    command = g_strdup_printf ("+CFUN=%d", ctx->mbm_mode);
     mm_base_modem_at_command (
         MM_BASE_MODEM (self),
         command,
         3,
         FALSE,
         (GAsyncReadyCallback)allowed_mode_update_ready,
-        result);
+        ctx);
     g_free (command);
 }
 
 /*****************************************************************************/
-/* Initializing the modem (Modem interface) */
+/* Initializing the modem (during first enabling) */
 
 typedef struct {
     GSimpleAsyncResult *result;
     MMBroadbandModemMbm *self;
-} ModemInitContext;
+} EnablingModemInitContext;
 
 static void
-modem_init_context_complete_and_free (ModemInitContext *ctx)
+enabling_modem_init_context_complete_and_free (EnablingModemInitContext *ctx)
 {
     g_simple_async_result_complete (ctx->result);
     g_object_unref (ctx->result);
     g_object_unref (ctx->self);
-    g_slice_free (ModemInitContext, ctx);
+    g_slice_free (EnablingModemInitContext, ctx);
 }
 
 static gboolean
-modem_init_finish (MMIfaceModem *self,
-                   GAsyncResult *res,
-                   GError **error)
+enabling_modem_init_finish (MMBroadbandModem *self,
+                            GAsyncResult *res,
+                            GError **error)
 {
-    /* Ignore errors */
-    mm_base_modem_at_sequence_finish (MM_BASE_MODEM (self), res, NULL, NULL);
-    return TRUE;
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
 
 static void
-init_sequence_ready (MMBaseModem *self,
-                     GAsyncResult *res,
-                     ModemInitContext *ctx)
+enabling_init_sequence_ready (MMBaseModem *self,
+                              GAsyncResult *res,
+                              EnablingModemInitContext *ctx)
 {
-    mm_base_modem_at_sequence_finish (self, res, NULL, NULL);
+    /* Ignore errors */
+    mm_base_modem_at_sequence_full_finish (self, res, NULL, NULL);
     g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-    modem_init_context_complete_and_free (ctx);
+    enabling_modem_init_context_complete_and_free (ctx);
 }
 
-static const MMBaseModemAtCommand modem_init_sequence[] = {
+static const MMBaseModemAtCommand enabling_modem_init_sequence[] = {
     /* Init command */
-    { "&F E0 V1 X4 &C1 +CMEE=1", 3, FALSE, NULL },
+    { "&F", 3, FALSE, NULL },
     /* Ensure disconnected */
     { "*ENAP=0", 3, FALSE, NULL },
     { NULL }
 };
 
 static void
-run_init_sequence (ModemInitContext *ctx)
+run_enabling_init_sequence (EnablingModemInitContext *ctx)
 {
-    mm_base_modem_at_sequence (MM_BASE_MODEM (ctx->self),
-                               modem_init_sequence,
-                               NULL,  /* response_processor_context */
-                               NULL,  /* response_processor_context_free */
-                               (GAsyncReadyCallback)init_sequence_ready,
-                               ctx);
+    mm_base_modem_at_sequence_full (MM_BASE_MODEM (ctx->self),
+                                    mm_base_modem_peek_port_primary (MM_BASE_MODEM (ctx->self)),
+                                    enabling_modem_init_sequence,
+                                    NULL,  /* response_processor_context */
+                                    NULL,  /* response_processor_context_free */
+                                    NULL, /* cancellable */
+                                    (GAsyncReadyCallback)enabling_init_sequence_ready,
+                                    ctx);
 }
 
 static void
 emrdy_ready (MMBaseModem *self,
              GAsyncResult *res,
-             ModemInitContext *ctx)
+             EnablingModemInitContext *ctx)
 {
     GError *error = NULL;
 
@@ -386,26 +417,26 @@ emrdy_ready (MMBaseModem *self,
         g_error_free (error);
     }
 
-    run_init_sequence (ctx);
+    run_enabling_init_sequence (ctx);
 }
 
 static void
-modem_init (MMIfaceModem *self,
-            GAsyncReadyCallback callback,
-            gpointer user_data)
+enabling_modem_init (MMBroadbandModem *self,
+                     GAsyncReadyCallback callback,
+                     gpointer user_data)
 {
-    ModemInitContext *ctx;
+    EnablingModemInitContext *ctx;
 
-    ctx = g_slice_new0 (ModemInitContext);
+    ctx = g_slice_new0 (EnablingModemInitContext);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
                                              callback,
                                              user_data,
-                                             modem_init);
+                                             enabling_modem_init);
     ctx->self = g_object_ref (self);
 
     /* Modem is ready?, no need to check EMRDY */
     if (ctx->self->priv->have_emrdy) {
-        run_init_sequence (ctx);
+        run_enabling_init_sequence (ctx);
         return;
     }
 
@@ -415,6 +446,32 @@ modem_init (MMIfaceModem *self,
                               FALSE,
                               (GAsyncReadyCallback)emrdy_ready,
                               ctx);
+}
+
+/*****************************************************************************/
+/* Modem power down (Modem interface) */
+
+static gboolean
+modem_power_down_finish (MMIfaceModem *self,
+                         GAsyncResult *res,
+                         GError **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_power_down (MMIfaceModem *self,
+                  GAsyncReadyCallback callback,
+                  gpointer user_data)
+{
+    /* Use AT+CFUN=4 for power down. It will stop the RF (IMSI detach), and
+     * keeps access to the SIM */
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CFUN=4",
+                              3,
+                              FALSE,
+                              callback,
+                              user_data);
 }
 
 /*****************************************************************************/
@@ -438,9 +495,11 @@ modem_power_up (MMIfaceModem *_self,
     MMBroadbandModemMbm *self = MM_BROADBAND_MODEM_MBM (_self);
     gchar *command;
 
-    /* The power-up command will be run *only* during the first enabling
-     * of the modem, as there is no power-down command implemented */
-    command = g_strdup_printf ("+CFUN=%u", MBM_NETWORK_MODE_ANY);
+    g_assert (self->priv->mbm_mode == MBM_NETWORK_MODE_ANY ||
+              self->priv->mbm_mode == MBM_NETWORK_MODE_2G  ||
+              self->priv->mbm_mode == MBM_NETWORK_MODE_3G);
+
+    command = g_strdup_printf ("+CFUN=%u", self->priv->mbm_mode);
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               command,
                               5,
@@ -448,6 +507,59 @@ modem_power_up (MMIfaceModem *_self,
                               callback,
                               user_data);
     g_free (command);
+}
+
+/*****************************************************************************/
+/* Power state loading (Modem interface) */
+
+static MMModemPowerState
+load_power_state_finish (MMIfaceModem *self,
+                         GAsyncResult *res,
+                         GError **error)
+{
+    const gchar *response;
+    guint a;
+
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+    if (!response)
+        return FALSE;
+
+    if (mm_get_uint_from_str (mm_strip_tag (response, "+CFUN:"), &a)) {
+        switch (a) {
+        case MBM_NETWORK_MODE_OFFLINE:
+            return MM_MODEM_POWER_STATE_OFF;
+
+        case MBM_NETWORK_MODE_LOW_POWER:
+            return MM_MODEM_POWER_STATE_LOW;
+
+        case MBM_NETWORK_MODE_ANY:
+        case MBM_NETWORK_MODE_2G:
+        case MBM_NETWORK_MODE_3G:
+            return MM_MODEM_POWER_STATE_ON;
+        default:
+            break;
+        }
+    }
+
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_FAILED,
+                 "Couldn't parse +CFUN response: '%s'",
+                 response);
+    return MM_MODEM_POWER_STATE_UNKNOWN;
+}
+
+static void
+load_power_state (MMIfaceModem *self,
+                  GAsyncReadyCallback callback,
+                  gpointer user_data)
+{
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CFUN?",
+                              3,
+                              FALSE,
+                              callback,
+                              user_data);
 }
 
 /*****************************************************************************/
@@ -1068,7 +1180,9 @@ mm_broadband_modem_mbm_init (MMBroadbandModemMbm *self)
     self->priv->emwi_regex = g_regex_new ("\\r\\n\\*EMWI: (\\d),(\\d).*\\r\\n",
                                           G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     self->priv->erinfo_regex = g_regex_new ("\\r\\n\\*ERINFO:\\s*(\\d),(\\d),(\\d).*\\r\\n",
-                                            G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);;
+                                            G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+
+    self->priv->mbm_mode = MBM_NETWORK_MODE_ANY;
 }
 
 static void
@@ -1098,23 +1212,18 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_allowed_modes_finish = load_allowed_modes_finish;
     iface->set_allowed_modes = set_allowed_modes;
     iface->set_allowed_modes_finish = set_allowed_modes_finish;
-    iface->modem_init = modem_init;
-    iface->modem_init_finish = modem_init_finish;
     iface->reset = reset;
     iface->reset_finish = reset_finish;
     iface->factory_reset = factory_reset;
     iface->factory_reset_finish = factory_reset_finish;
     iface->load_unlock_retries = load_unlock_retries;
     iface->load_unlock_retries_finish = load_unlock_retries_finish;
-
-    /* Initially we'll assume power state is unknown; which will force an
-     * initial unconditional power-up during the first enabling.
-     * In these modems CFUN is associated to the allowed/preferred modes,
-     * so don't play with it much. */
-    iface->load_power_state = NULL;
-    iface->load_power_state_finish = NULL;
+    iface->load_power_state = load_power_state;
+    iface->load_power_state_finish = load_power_state_finish;
     iface->modem_power_up = modem_power_up;
     iface->modem_power_up_finish = modem_power_up_finish;
+    iface->modem_power_down = modem_power_down;
+    iface->modem_power_down_finish = modem_power_down_finish;
 }
 
 static void
@@ -1143,4 +1252,6 @@ mm_broadband_modem_mbm_class_init (MMBroadbandModemMbmClass *klass)
 
     object_class->finalize = finalize;
     broadband_modem_class->setup_ports = setup_ports;
+    broadband_modem_class->enabling_modem_init = enabling_modem_init;
+    broadband_modem_class->enabling_modem_init_finish = enabling_modem_init_finish;
 }

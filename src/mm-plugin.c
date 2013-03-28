@@ -546,6 +546,7 @@ port_probe_run_ready (MMPortProbe *probe,
             g_simple_async_result_set_op_res_gpointer (ctx->result,
                                                        GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED),
                                                        NULL);
+            g_error_free (error);
         }
         /* Probing failed but the plugin tells us to retry; so we'll defer the
          * probing a bit */
@@ -555,6 +556,7 @@ port_probe_run_ready (MMPortProbe *probe,
             g_simple_async_result_set_op_res_gpointer (ctx->result,
                                                        GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_DEFER),
                                                        NULL);
+            g_error_free (error);
         }
         /* For remaining errors, just propagate them */
         else {
@@ -627,7 +629,7 @@ mm_plugin_supports_port (MMPlugin *self,
                          GAsyncReadyCallback callback,
                          gpointer user_data)
 {
-    MMPortProbe *probe;
+    MMPortProbe *probe = NULL;
     GSimpleAsyncResult *async_result;
     PortProbeRunContext *ctx;
     gboolean need_vendor_probing;
@@ -748,6 +750,8 @@ mm_plugin_supports_port (MMPlugin *self,
 
 out:
     g_object_unref (async_result);
+    if (probe)
+        g_object_unref (probe);
 }
 
 /*****************************************************************************/
@@ -1059,6 +1063,23 @@ finalize (GObject *object)
     MMPlugin *self = MM_PLUGIN (object);
 
     g_free (self->priv->name);
+
+#define _g_boxed_free0(t,p) if (p) g_boxed_free (t, p)
+
+    _g_boxed_free0 (G_TYPE_STRV, self->priv->subsystems);
+    _g_boxed_free0 (G_TYPE_STRV, self->priv->drivers);
+    _g_boxed_free0 (G_TYPE_STRV, self->priv->forbidden_drivers);
+    _g_boxed_free0 (MM_TYPE_UINT16_ARRAY, self->priv->vendor_ids);
+    _g_boxed_free0 (MM_TYPE_UINT16_PAIR_ARRAY, self->priv->product_ids);
+    _g_boxed_free0 (MM_TYPE_UINT16_PAIR_ARRAY, self->priv->forbidden_product_ids);
+    _g_boxed_free0 (G_TYPE_STRV, self->priv->udev_tags);
+    _g_boxed_free0 (G_TYPE_STRV, self->priv->vendor_strings);
+    _g_boxed_free0 (MM_TYPE_STR_PAIR_ARRAY, self->priv->product_strings);
+    _g_boxed_free0 (MM_TYPE_STR_PAIR_ARRAY, self->priv->forbidden_product_strings);
+    _g_boxed_free0 (MM_TYPE_POINTER_ARRAY, self->priv->custom_at_probe);
+    _g_boxed_free0 (MM_TYPE_ASYNC_METHOD, self->priv->custom_init);
+
+#undef _g_boxed_free0
 
     G_OBJECT_CLASS (mm_plugin_parent_class)->finalize (object);
 }

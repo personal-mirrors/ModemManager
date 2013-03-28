@@ -351,13 +351,18 @@ print_modem_info (void)
     g_print ("  -------------------------\n"
              "  Status   |           lock: '%s'\n"
              "           | unlock retries: '%s'\n"
-             "           |          state: '%s'\n"
-             "           |    power state: '%s'\n"
-             "           |    access tech: '%s'\n"
-             "           | signal quality: '%u' (%s)\n",
+             "           |          state: '%s'\n",
              mm_modem_lock_get_string (mm_modem_get_unlock_required (ctx->modem)),
              VALIDATE_UNKNOWN (unlock_retries_string),
-             VALIDATE_UNKNOWN (mm_modem_state_get_string (mm_modem_get_state (ctx->modem))),
+             VALIDATE_UNKNOWN (mm_modem_state_get_string (mm_modem_get_state (ctx->modem))));
+
+    if (mm_modem_get_state (ctx->modem) == MM_MODEM_STATE_FAILED)
+        g_print ("           |  failed reason: '%s'\n",
+                 VALIDATE_UNKNOWN (mm_modem_state_failed_reason_get_string (mm_modem_get_state_failed_reason (ctx->modem))));
+
+    g_print ("           |    power state: '%s'\n"
+             "           |    access tech: '%s'\n"
+             "           | signal quality: '%u' (%s)\n",
              VALIDATE_UNKNOWN (mm_modem_power_state_get_string (mm_modem_get_power_state (ctx->modem))),
              VALIDATE_UNKNOWN (access_technologies_string),
              signal_quality, signal_quality_recent ? "recent" : "cached");
@@ -422,15 +427,18 @@ print_modem_info (void)
                  "           |            sid: '%s'\n"
                  "           |            nid: '%s'\n"
                  "           |   registration: CDMA1x '%s'\n"
-                 "           |                 EV-DO  '%s'\n",
+                 "           |                 EV-DO  '%s'\n"
+                 "           |     activation: '%s'\n",
                  VALIDATE_UNKNOWN (mm_modem_cdma_get_meid (ctx->modem_cdma)),
                  VALIDATE_UNKNOWN (mm_modem_cdma_get_esn (ctx->modem_cdma)),
                  VALIDATE_UNKNOWN (sid_str),
                  VALIDATE_UNKNOWN (nid_str),
                  mm_modem_cdma_registration_state_get_string (
-                     mm_modem_cdma_get_cdma1x_registration_state ((ctx->modem_cdma))),
+                     mm_modem_cdma_get_cdma1x_registration_state (ctx->modem_cdma)),
                  mm_modem_cdma_registration_state_get_string (
-                     mm_modem_cdma_get_evdo_registration_state ((ctx->modem_cdma))));
+                     mm_modem_cdma_get_evdo_registration_state (ctx->modem_cdma)),
+                 mm_modem_cdma_activation_state_get_string (
+                     mm_modem_cdma_get_activation_state (ctx->modem_cdma)));
 
         g_free (sid_str);
         g_free (nid_str);

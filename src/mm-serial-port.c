@@ -98,6 +98,7 @@ typedef struct {
     guint n_consecutive_timeouts;
 
     guint flash_id;
+    guint reopen_id;
     guint connected_id;
 } MMSerialPortPrivate;
 
@@ -412,7 +413,7 @@ real_config_fd (MMSerialPort *self, int fd, GError **error)
 
     if (memcmp (&stbuf, &other, sizeof (other)) != 0) {
         mm_warn ("(%s): port attributes not fully set",
-                   mm_port_get_device (MM_PORT (self)));
+                 mm_port_get_device (MM_PORT (self)));
     }
 
     return TRUE;
@@ -874,15 +875,23 @@ mm_serial_port_open (MMSerialPort *self, GError **error)
     g_return_val_if_fail (MM_IS_SERIAL_PORT (self), FALSE);
 
     priv = MM_SERIAL_PORT_GET_PRIVATE (self);
-
     device = mm_port_get_device (MM_PORT (self));
+
+    if (priv->reopen_id) {
+        g_set_error (error,
+                     MM_SERIAL_ERROR,
+                     MM_SERIAL_ERROR_OPEN_FAILED,
+                     "Could not open serial device %s: reopen operation in progress",
+                     device);
+        return FALSE;
+    }
 
     if (priv->open_count) {
         /* Already open */
         goto success;
     }
 
-    mm_info ("(%s) opening serial port...", device);
+    mm_dbg ("(%s) opening serial port...", device);
 
     g_get_current_time (&tv_start);
 
@@ -950,6 +959,11 @@ mm_serial_port_open (MMSerialPort *self, GError **error)
 success:
     priv->open_count++;
     mm_dbg ("(%s) device open count is %d (open)", device, priv->open_count);
+
+    /* Run additional port config if just opened */
+    if (priv->open_count == 1 && MM_SERIAL_PORT_GET_CLASS (self)->config)
+        MM_SERIAL_PORT_GET_CLASS (self)->config (self);
+
     return TRUE;
 
 error:
@@ -1005,7 +1019,7 @@ mm_serial_port_close (MMSerialPort *self)
         GTimeVal tv_start, tv_end;
         struct serial_struct sinfo = { 0 };
 
-        mm_info ("(%s) closing serial port...", device);
+        mm_dbg ("(%s) closing serial port...", device);
 
         mm_port_set_connected (MM_PORT (self), FALSE);
 
@@ -1036,7 +1050,7 @@ mm_serial_port_close (MMSerialPort *self)
 
         g_get_current_time (&tv_end);
 
-        mm_info ("(%s) serial port closed", device);
+        mm_dbg ("(%s) serial port closed", device);
 
         /* Some ports don't respond to data and when close is called
          * the serial layer waits up to 30 second (closing_wait) for
@@ -1104,8 +1118,7 @@ mm_serial_port_close_force (MMSerialPort *self)
     if (priv->forced_close)
         return;
 
-    mm_info ("(%s) forced to close port",
-             mm_port_get_device (MM_PORT (self)));
+    mm_dbg ("(%s) forced to close port", mm_port_get_device (MM_PORT (self)));
 
     /* If already closed, done */
     if (!priv->open_count)
@@ -1201,6 +1214,99 @@ mm_serial_port_queue_command_cached (MMSerialPort *self,
                                      gpointer user_data)
 {
     internal_queue_command (self, command, take_command, TRUE, timeout_seconds, cancellable, callback, user_data);
+}
+
+typedef struct {
+    MMSerialPort *port;
+    guint initial_open_count;
+    MMSerialReopenFn callback;
+    gpointer user_data;
+} ReopenInfo;
+
+static void
+serial_port_reopen_cancel (MMSerialPort *self)
+{
+    MMSerialPortPrivate *priv;
+
+    g_return_if_fail (MM_IS_SERIAL_PORT (self));
+
+    priv = MM_SERIAL_PORT_GET_PRIVATE (self);
+
+    if (priv->reopen_id > 0) {
+        g_source_remove (priv->reopen_id);
+        priv->reopen_id = 0;
+    }
+}
+
+static gboolean
+reopen_do (gpointer data)
+{
+    ReopenInfo *info = (ReopenInfo *) data;
+    MMSerialPortPrivate *priv = MM_SERIAL_PORT_GET_PRIVATE (info->port);
+    GError *error = NULL;
+    guint i;
+
+    priv->reopen_id = 0;
+
+    for (i = 0; i < info->initial_open_count; i++) {
+        if (!mm_serial_port_open (info->port, &error)) {
+            g_prefix_error (&error, "Couldn't reopen port (%u): ", i);
+            break;
+        }
+    }
+
+    info->callback (info->port, error, info->user_data);
+    if (error)
+        g_error_free (error);
+    g_slice_free (ReopenInfo, info);
+    return FALSE;
+}
+
+gboolean
+mm_serial_port_reopen (MMSerialPort *self,
+                       guint32 reopen_time,
+                       MMSerialReopenFn callback,
+                       gpointer user_data)
+{
+    ReopenInfo *info;
+    MMSerialPortPrivate *priv;
+    guint i;
+
+    g_return_val_if_fail (MM_IS_SERIAL_PORT (self), FALSE);
+    priv = MM_SERIAL_PORT_GET_PRIVATE (self);
+
+    if (priv->reopen_id > 0) {
+        GError *error;
+
+        error = g_error_new_literal (MM_CORE_ERROR,
+                                     MM_CORE_ERROR_IN_PROGRESS,
+                                     "Modem is already being reopened.");
+        callback (self, error, user_data);
+        g_error_free (error);
+        return FALSE;
+    }
+
+    info = g_slice_new0 (ReopenInfo);
+    info->port = self;
+    info->callback = callback;
+    info->user_data = user_data;
+
+    priv = MM_SERIAL_PORT_GET_PRIVATE (self);
+    info->initial_open_count = priv->open_count;
+
+    mm_dbg ("(%s) reopening port (%u)",
+            mm_port_get_device (MM_PORT (self)),
+            info->initial_open_count);
+
+    for (i = 0; i < info->initial_open_count; i++)
+        mm_serial_port_close (self);
+
+    if (reopen_time > 0)
+        priv->reopen_id = g_timeout_add (reopen_time, reopen_do, info);
+    else
+        priv->reopen_id = g_idle_add (reopen_do, info);
+
+    return TRUE;
 }
 
 static gboolean
@@ -1572,6 +1678,7 @@ dispose (GObject *object)
 
     mm_serial_port_close_force (MM_SERIAL_PORT (object));
 
+    serial_port_reopen_cancel (MM_SERIAL_PORT (object));
     mm_serial_port_flash_cancel (MM_SERIAL_PORT (object));
 
     G_OBJECT_CLASS (mm_serial_port_parent_class)->dispose (object);
@@ -1674,7 +1781,7 @@ mm_serial_port_class_init (MMSerialPortClass *klass)
     g_object_class_install_property
         (object_class, PROP_FLASH_OK,
          g_param_spec_boolean (MM_SERIAL_PORT_FLASH_OK,
-                               "FlaskOk",
+                               "FlashOk",
                                "Flashing the port (0 baud for a short period) "
                                "is allowed.",
                                TRUE,

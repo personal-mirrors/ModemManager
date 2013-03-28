@@ -228,14 +228,6 @@ struct _MMIfaceModem {
                                           GAsyncResult *res,
                                           GError **error);
 
-    /* Asynchronous modem initialization operation */
-    void (*modem_init) (MMIfaceModem *self,
-                        GAsyncReadyCallback callback,
-                        gpointer user_data);
-    gboolean (*modem_init_finish) (MMIfaceModem *self,
-                                   GAsyncResult *res,
-                                   GError **error);
-
     /* Asynchronous method to wait for the SIM to be ready after having
      * unlocked it. */
     void (*modem_after_sim_unlock) (MMIfaceModem *self,
@@ -405,6 +397,8 @@ void mm_iface_modem_update_subsystem_state (MMIfaceModem *self,
 void mm_iface_modem_update_state (MMIfaceModem *self,
                                   MMModemState new_state,
                                   MMModemStateChangeReason reason);
+void mm_iface_modem_update_failed_state (MMIfaceModem *self,
+                                         MMModemStateFailedReason failed_reason);
 
 /* Allow reporting new access tech */
 void mm_iface_modem_update_access_technologies (MMIfaceModem *self,

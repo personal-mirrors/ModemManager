@@ -115,6 +115,14 @@ handle_activate_auth_ready (MMBaseModem *self,
         return;
     }
 
+    /* If we're already activated, nothing to do */
+    if (mm_gdbus_modem_cdma_get_activation_state (ctx->skeleton) == MM_MODEM_CDMA_ACTIVATION_STATE_ACTIVATED) {
+        mm_dbg ("Modem is already activated");
+        mm_gdbus_modem_cdma_complete_activate (ctx->skeleton, ctx->invocation);
+        handle_activate_context_free (ctx);
+        return;
+    }
+
     /* If activating OTA is not implemented, report an error */
     if (!MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate ||
         !MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate_finish) {
@@ -242,7 +250,7 @@ handle_activate_manual_ready (MMIfaceModemCdma *self,
     if (!MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate_manual_finish (self, res,&error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
     else
-        mm_gdbus_modem_cdma_complete_activate (ctx->skeleton, ctx->invocation);
+        mm_gdbus_modem_cdma_complete_activate_manual (ctx->skeleton, ctx->invocation);
 
     handle_activate_manual_context_free (ctx);
 }
@@ -261,9 +269,17 @@ handle_activate_manual_auth_ready (MMBaseModem *self,
         return;
     }
 
+    /* If we're already activated, nothing to do */
+    if (mm_gdbus_modem_cdma_get_activation_state (ctx->skeleton) == MM_MODEM_CDMA_ACTIVATION_STATE_ACTIVATED) {
+        mm_dbg ("Modem is already activated");
+        mm_gdbus_modem_cdma_complete_activate_manual (ctx->skeleton, ctx->invocation);
+        handle_activate_manual_context_free (ctx);
+        return;
+    }
+
     /* If activating OTA is not implemented, report an error */
-    if (!MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate ||
-        !MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate_finish) {
+    if (!MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate_manual ||
+        !MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate_manual_finish) {
         g_dbus_method_invocation_return_error (ctx->invocation,
                                                MM_CORE_ERROR,
                                                MM_CORE_ERROR_UNSUPPORTED,
@@ -1181,6 +1197,55 @@ periodic_registration_check_enable (MMIfaceModemCdma *self)
 
 /*****************************************************************************/
 
+static GVariant *
+build_empty_dictionary (void)
+{
+    GVariantBuilder builder;
+
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{sv}"));
+    return g_variant_builder_end (&builder);
+}
+
+void
+mm_iface_modem_cdma_update_activation_state (MMIfaceModemCdma *self,
+                                             MMModemCdmaActivationState activation_state,
+                                             const GError *activation_error)
+{
+    MmGdbusModemCdma *skeleton = NULL;
+    MMCdmaActivationError error = MM_CDMA_ACTIVATION_ERROR_NONE;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_CDMA_DBUS_SKELETON, &skeleton,
+                  NULL);
+    if (!skeleton)
+        return;
+
+    if (activation_error) {
+        mm_dbg ("Activation failed: %s", activation_error->message);
+        if (activation_error->domain == MM_CDMA_ACTIVATION_ERROR)
+            error = activation_error->code;
+        else {
+            mm_warn ("Error given is not an activation error");
+            error = MM_CDMA_ACTIVATION_ERROR_UNKNOWN;
+        }
+    }
+
+    /* Flush current change before signaling the state change,
+     * so that clients get the proper state already in the
+     * state-changed callback */
+    mm_gdbus_modem_cdma_set_activation_state (skeleton, activation_state);
+    g_dbus_interface_skeleton_flush (G_DBUS_INTERFACE_SKELETON (skeleton));
+    /* We don't know what changed, so just return an empty dictionary for now */
+    mm_gdbus_modem_cdma_emit_activation_state_changed (skeleton,
+                                                       activation_state,
+                                                       error,
+                                                       build_empty_dictionary ());
+
+    g_object_unref (skeleton);
+}
+
+/*****************************************************************************/
+
 typedef struct _DisablingContext DisablingContext;
 static void interface_disabling_step (DisablingContext *ctx);
 
@@ -1539,6 +1604,7 @@ typedef enum {
     INITIALIZATION_STEP_FIRST,
     INITIALIZATION_STEP_MEID,
     INITIALIZATION_STEP_ESN,
+    INITIALIZATION_STEP_ACTIVATION_STATE,
     INITIALIZATION_STEP_LAST
 } InitializationStep;
 
@@ -1603,6 +1669,27 @@ STR_REPLY_READY_FN (meid, "MEID")
 STR_REPLY_READY_FN (esn, "ESN")
 
 static void
+load_activation_state_ready (MMIfaceModemCdma *self,
+                             GAsyncResult *res,
+                             InitializationContext *ctx)
+{
+    GError *error = NULL;
+    MMModemCdmaActivationState state;
+
+    state = MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->load_activation_state_finish (self, res, &error);
+    mm_gdbus_modem_cdma_set_activation_state (ctx->skeleton, state);
+
+    if (error) {
+        mm_warn ("couldn't load activation state: '%s'", error->message);
+        g_error_free (error);
+    }
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_initialization_step (ctx);
+}
+
+static void
 interface_initialization_step (InitializationContext *ctx)
 {
     /* Don't run new steps if we're cancelled */
@@ -1640,6 +1727,22 @@ interface_initialization_step (InitializationContext *ctx)
             MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->load_esn (
                 ctx->self,
                 (GAsyncReadyCallback)load_esn_ready,
+                ctx);
+            return;
+        }
+        /* Fall down to next step */
+        ctx->step++;
+
+    case INITIALIZATION_STEP_ACTIVATION_STATE:
+        /* Initial activation state is meant to be loaded only once during the
+         * whole lifetime of the modem. Therefore, if we already have it loaded,
+         * don't try to load it again. */
+        if (mm_gdbus_modem_cdma_get_activation_state (ctx->skeleton) == MM_MODEM_CDMA_ACTIVATION_STATE_UNKNOWN &&
+            MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->load_activation_state &&
+            MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->load_activation_state_finish) {
+            MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->load_activation_state (
+                ctx->self,
+                (GAsyncReadyCallback)load_activation_state_ready,
                 ctx);
             return;
         }
@@ -1700,6 +1803,7 @@ mm_iface_modem_cdma_initialize (MMIfaceModemCdma *self,
         mm_gdbus_modem_cdma_set_esn (skeleton, NULL);
         mm_gdbus_modem_cdma_set_sid (skeleton, MM_MODEM_CDMA_SID_UNKNOWN);
         mm_gdbus_modem_cdma_set_nid (skeleton, MM_MODEM_CDMA_NID_UNKNOWN);
+        mm_gdbus_modem_cdma_set_activation_state (skeleton, MM_MODEM_CDMA_ACTIVATION_STATE_UNKNOWN);
 
         /* Bind our Registration State properties */
         g_object_bind_property (self, MM_IFACE_MODEM_CDMA_CDMA1X_REGISTRATION_STATE,

@@ -103,50 +103,130 @@ modem_load_supported_modes (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Modem initialization (Modem interface) */
+/* Initializing the modem (during first enabling) */
 
-static gboolean
-modem_init_finish (MMIfaceModem *self,
-                   GAsyncResult *res,
-                   GError **error)
+typedef struct {
+    GSimpleAsyncResult *result;
+    MMBroadbandModemNokia *self;
+    guint retries;
+} EnablingModemInitContext;
+
+static void
+enabling_modem_init_context_complete_and_free (EnablingModemInitContext *ctx)
 {
-    return !mm_base_modem_at_sequence_finish (MM_BASE_MODEM (self), res, NULL, error);
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
+    g_object_unref (ctx->self);
+    g_slice_free (EnablingModemInitContext, ctx);
 }
 
-static const MMBaseModemAtCommand modem_init_sequence[] = {
+static gboolean
+enabling_modem_init_finish (MMBroadbandModem *self,
+                            GAsyncResult *res,
+                            GError **error)
+
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void retry_atz (EnablingModemInitContext *ctx);
+
+static void
+atz_ready (MMBaseModem *self,
+           GAsyncResult *res,
+           EnablingModemInitContext *ctx)
+{
+    GError *error = NULL;
+
+    /* One retry less */
+    ctx->retries--;
+
+    if (!mm_base_modem_at_command_full_finish (self, res, &error)) {
+        /* Consumed all retries... */
+        if (ctx->retries == 0) {
+            g_simple_async_result_take_error (ctx->result, error);
+            enabling_modem_init_context_complete_and_free (ctx);
+            return;
+        }
+
+        /* Retry... */
+        g_error_free (error);
+        retry_atz (ctx);
+        return;
+    }
+
+    /* Good! */
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    enabling_modem_init_context_complete_and_free (ctx);
+}
+
+static void
+retry_atz (EnablingModemInitContext *ctx)
+{
+    mm_base_modem_at_command_full (MM_BASE_MODEM (ctx->self),
+                                   mm_base_modem_peek_port_primary (MM_BASE_MODEM (ctx->self)),
+                                   "Z",
+                                   6,
+                                   FALSE,
+                                   FALSE,
+                                   NULL, /* cancellable */
+                                   (GAsyncReadyCallback)atz_ready,
+                                   ctx);
+}
+
+static void
+enabling_modem_init (MMBroadbandModem *self,
+                     GAsyncReadyCallback callback,
+                     gpointer user_data)
+{
+    EnablingModemInitContext *ctx;
+
+    ctx = g_slice_new0 (EnablingModemInitContext);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             enabling_modem_init);
+    ctx->self = g_object_ref (self);
+
     /* Send the init command twice; some devices (Nokia N900) appear to take a
      * few commands before responding correctly.  Instead of penalizing them for
      * being stupid the first time by failing to enable the device, just
-     * try again.
-     *
-     * TODO: only send init command 2nd time if 1st time failed?
-     *
-     * Also, when initializing a Nokia phone, first enable the echo,
-     * and then disable it, so that we get it properly disabled.
-     */
-    { "Z E1 E0 V1", 3, FALSE, NULL },
-    { "Z E1 E0 V1", 3, FALSE, mm_base_modem_response_processor_no_result_continue },
+     * try again. */
+    ctx->retries = 2;
+    retry_atz (ctx);
+}
 
-    /* Setup errors */
-    { "+CMEE=1", 3, FALSE, NULL },
+/*****************************************************************************/
+/* Setup ports (Broadband modem class) */
 
-    /* Additional OPTIONAL initialization */
-    { "X4 &C1",  3, FALSE, NULL },
-
-    { NULL }
+static const gchar *primary_init_sequence[] = {
+    /* When initializing a Nokia port, first enable the echo,
+     * and then disable it, so that we get it properly disabled. */
+    "E1 E0",
+    /* Get word responses */
+    "V1",
+    /* Extended numeric codes */
+    "+CMEE=1",
+    /* Report all call status */
+    "X4",
+    /* Assert DCD when carrier detected */
+    "&C1",
+    NULL
 };
 
 static void
-modem_init (MMIfaceModem *self,
-            GAsyncReadyCallback callback,
-            gpointer user_data)
+setup_ports (MMBroadbandModem *self)
 {
-    mm_base_modem_at_sequence (MM_BASE_MODEM (self),
-                               modem_init_sequence,
-                               NULL,  /* response_processor_context */
-                               NULL,  /* response_processor_context_free */
-                               callback,
-                               user_data);
+    MMAtSerialPort *primary;
+
+    /* Call parent's setup ports first always */
+    MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_nokia_parent_class)->setup_ports (self);
+
+    primary = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
+
+    g_object_set (primary,
+                  MM_AT_SERIAL_PORT_INIT_SEQUENCE, primary_init_sequence,
+                  NULL);
 }
 
 /*****************************************************************************/
@@ -183,10 +263,6 @@ iface_modem_messaging_init (MMIfaceModemMessaging *iface)
 static void
 iface_modem_init (MMIfaceModem *iface)
 {
-    /* Setup custom modem init */
-    iface->modem_init = modem_init;
-    iface->modem_init_finish = modem_init_finish;
-
     /* Create Nokia-specific SIM*/
     iface->create_sim = create_sim;
     iface->create_sim_finish = create_sim_finish;
@@ -214,4 +290,9 @@ iface_modem_init (MMIfaceModem *iface)
 static void
 mm_broadband_modem_nokia_class_init (MMBroadbandModemNokiaClass *klass)
 {
+    MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
+
+    broadband_modem_class->setup_ports = setup_ports;
+    broadband_modem_class->enabling_modem_init = enabling_modem_init;
+    broadband_modem_class->enabling_modem_init_finish = enabling_modem_init_finish;
 }

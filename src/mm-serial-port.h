@@ -43,6 +43,10 @@
 typedef struct _MMSerialPort MMSerialPort;
 typedef struct _MMSerialPortClass MMSerialPortClass;
 
+typedef void (*MMSerialReopenFn)       (MMSerialPort *port,
+                                        GError *error,
+                                        gpointer user_data);
+
 typedef void (*MMSerialFlashFn)        (MMSerialPort *port,
                                         GError *error,
                                         gpointer user_data);
@@ -87,10 +91,14 @@ struct _MMSerialPortClass {
                                    GCallback callback,
                                    gpointer callback_data);
 
-    /* Called to configure the serial port after it's opened.  On error, should
+    /* Called to configure the serial port fd after it's opened.  On error, should
      * return FALSE and set 'error' as appropriate.
      */
     gboolean (*config_fd)         (MMSerialPort *self, int fd, GError **error);
+
+    /* Called to configure the serial port after it's opened. Errors, if any,
+     * should get ignored. */
+    void     (*config)            (MMSerialPort *self);
 
     void (*debug_log)             (MMSerialPort *self,
                                    const char *prefix,
@@ -117,6 +125,11 @@ gboolean mm_serial_port_open              (MMSerialPort *self,
                                            GError  **error);
 
 void     mm_serial_port_close             (MMSerialPort *self);
+
+gboolean mm_serial_port_reopen            (MMSerialPort *self,
+                                           guint32 reopen_time,
+                                           MMSerialReopenFn callback,
+                                           gpointer user_data);
 
 gboolean mm_serial_port_flash             (MMSerialPort *self,
                                            guint32 flash_time,

@@ -1107,20 +1107,19 @@ update_registration_state (MMIfaceModem3gpp *self,
     g_assert (ctx);
 
     if (ctx->deferred_update_id != 0) {
-        if (deferrable) {
-            /* If there is already a deferred 'registration loss' state update and the new update
-             * is not a registered state, update the deferred state update without extending the
-             * timeout. */
-            if (new_state != MM_MODEM_3GPP_REGISTRATION_STATE_HOME &&
-                new_state != MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
-                mm_info ("Modem %s: 3GPP Registration state changed (%s -> %s), update deferred",
-                         g_dbus_object_get_object_path (G_DBUS_OBJECT (self)),
-                         mm_modem_3gpp_registration_state_get_string (old_state),
-                         mm_modem_3gpp_registration_state_get_string (new_state));
+        /* If there is already a deferred 'registration loss' state update and the new update
+         * is not a registered state, update the deferred state update without extending the
+         * timeout. */
+        if (deferrable &&
+            new_state != MM_MODEM_3GPP_REGISTRATION_STATE_HOME &&
+            new_state != MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
+            mm_info ("Modem %s: 3GPP Registration state changed (%s -> %s), update deferred",
+                     g_dbus_object_get_object_path (G_DBUS_OBJECT (self)),
+                     mm_modem_3gpp_registration_state_get_string (old_state),
+                     mm_modem_3gpp_registration_state_get_string (new_state));
 
-                ctx->deferred_new_state = new_state;
-                return;
-            }
+            ctx->deferred_new_state = new_state;
+            return;
         }
 
         /* Otherwise, cancel any deferred registration state update */
@@ -1153,11 +1152,11 @@ update_registration_state (MMIfaceModem3gpp *self,
         return;
     }
 
-    if ((old_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
+    if (deferrable &&
+        (old_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
          old_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) &&
         (new_state == MM_MODEM_3GPP_REGISTRATION_STATE_SEARCHING ||
-         new_state == MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN) &&
-        deferrable) {
+         new_state == MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN)) {
         mm_info ("Modem %s: 3GPP Registration state changed (%s -> %s), update deferred",
                  g_dbus_object_get_object_path (G_DBUS_OBJECT (self)),
                  mm_modem_3gpp_registration_state_get_string (old_state),

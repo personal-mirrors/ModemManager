@@ -107,6 +107,7 @@ typedef struct _PortsContext PortsContext;
 struct _MMBroadbandModemPrivate {
     /* Broadband modem specific implementation */
     PortsContext *enabled_ports_ctx;
+    gboolean modem_init_run;
 
     /*<--- Modem interface --->*/
     /* Properties */
@@ -279,37 +280,7 @@ modem_create_sim_finish (MMIfaceModem *self,
                             GAsyncResult *res,
                             GError **error)
 {
-    MMSim *sim;
-
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
-        return NULL;
-
-    sim = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
-    return (sim ? g_object_ref (sim) : NULL);
-}
-
-static void
-modem_create_sim_ready (GObject *source,
-                        GAsyncResult *res,
-                        GSimpleAsyncResult *simple)
-{
-    MMSim *sim;
-    GError *error = NULL;
-
-    sim = mm_sim_new_finish (res, &error);
-    if (!sim)
-        g_simple_async_result_take_error (simple, error);
-    else {
-        mm_dbg ("New SIM created at DBus path '%s'",
-                mm_sim_get_path (sim));
-        g_simple_async_result_set_op_res_gpointer (
-            simple,
-            sim,
-            (GDestroyNotify)g_object_unref);
-    }
-
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+    return mm_sim_new_finish (res, error);
 }
 
 static void
@@ -317,27 +288,11 @@ modem_create_sim (MMIfaceModem *self,
                   GAsyncReadyCallback callback,
                   gpointer user_data)
 {
-    GSimpleAsyncResult *result;
-
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        modem_create_sim);
-
-    /* CDMA-only modems don't need this */
-    if (mm_iface_modem_is_cdma_only (self)) {
-        mm_dbg ("Skipping SIM creation in CDMA-only modem...");
-        g_simple_async_result_set_op_res_gpointer (result, NULL, NULL);
-        g_simple_async_result_complete_in_idle (result);
-        g_object_unref (result);
-        return;
-    }
-
     /* New generic SIM */
     mm_sim_new (MM_BASE_MODEM (self),
                 NULL, /* cancellable */
-                (GAsyncReadyCallback)modem_create_sim_ready,
-                result);
+                callback,
+                user_data);
 }
 
 /*****************************************************************************/
@@ -749,16 +704,29 @@ modem_load_equipment_identifier_finish (MMIfaceModem *self,
                                         GError **error)
 {
     GVariant *result;
-    gchar *equip_id = NULL, *tmp;
+    gchar *equip_id = NULL, *esn = NULL, *meid = NULL, *imei = NULL;
 
     result = mm_base_modem_at_sequence_finish (MM_BASE_MODEM (self), res, NULL, error);
     if (result) {
         equip_id = sanitize_info_reply (result, "GSN:");
-        /* Some CDMA devices prefix the ESN with "0x" */
-        if (strncmp (equip_id, "0x", 2) == 0 && strlen (equip_id) == 10) {
-            tmp = g_strdup (equip_id + 2);
+
+        /* Modems put all sorts of things into the GSN response; sanitize it */
+        if (mm_parse_gsn (equip_id, &imei, &meid, &esn)) {
             g_free (equip_id);
-            equip_id = tmp;
+
+            if (imei)
+                equip_id = g_strdup (imei);
+            else if (meid)
+                equip_id = g_strdup (meid);
+            else if (esn)
+                equip_id = g_strdup (esn);
+            g_free (esn);
+            g_free (meid);
+            g_free (imei);
+
+            g_assert (equip_id);
+        } else {
+            /* Leave whatever the modem returned alone */
         }
         mm_dbg ("loaded equipment identifier: %s", equip_id);
     }
@@ -940,9 +908,30 @@ mdn_qcdm_ready (MMQcdmSerialPort *port,
     }
 
     if (qcdm_result_get_string (result, QCDM_CMD_NV_GET_MDN_ITEM_MDN, &numbers[0]) >= 0) {
-        g_simple_async_result_set_op_res_gpointer (ctx->result,
-                                                   g_strdupv ((gchar **) numbers),
-                                                   NULL);
+        gboolean valid = TRUE;
+        const char *p = numbers[0];
+
+        /* Returned NV item data is read directly out of NV memory on the card,
+         * so minimally verify it.
+         */
+        if (strlen (numbers[0]) < 6 || strlen (numbers[0]) > 15)
+            valid = FALSE;
+
+        /* MDN is always decimal digits; allow + for good measure */
+        while (p && *p && valid)
+            valid = g_ascii_isdigit (*p++) || (*p == '+');
+
+        if (valid) {
+            g_simple_async_result_set_op_res_gpointer (ctx->result,
+                                                       g_strdupv ((gchar **) numbers),
+                                                       NULL);
+        } else {
+            g_simple_async_result_set_error (ctx->result,
+                                             MM_CORE_ERROR,
+                                             MM_CORE_ERROR_FAILED,
+                                             "%s",
+                                             "MDN from NV memory appears invalid");
+        }
     } else {
         g_simple_async_result_set_error (ctx->result,
                                          MM_CORE_ERROR,
@@ -2912,109 +2901,6 @@ modem_command (MMIfaceModem *self,
                               user_data);
 }
 
-
-/*****************************************************************************/
-/* Initializing the modem (Modem interface) */
-
-static gboolean
-modem_init_finish (MMIfaceModem *self,
-                   GAsyncResult *res,
-                   GError **error)
-{
-    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
-}
-
-static void
-modem_init_sequence_ready (MMBaseModem *self,
-                           GAsyncResult *res,
-                           GSimpleAsyncResult *simple)
-{
-    GError *error = NULL;
-
-    mm_base_modem_at_sequence_full_finish (MM_BASE_MODEM (self), res, NULL, &error);
-    if (error)
-        g_simple_async_result_take_error (simple, error);
-    else {
-        MMAtSerialPort *secondary;
-
-        /* Disable echo in secondary port as well, if any */
-        secondary = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
-        if (secondary)
-            /* No need to wait for the reply */
-            mm_base_modem_at_command_full (MM_BASE_MODEM (self),
-                                           secondary,
-                                           "E0",
-                                           3,
-                                           FALSE,
-                                           FALSE, /* raw */
-                                           NULL, /* cancellable */
-                                           NULL,
-                                           NULL);
-
-        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
-    }
-
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
-}
-
-static const MMBaseModemAtCommand modem_init_sequence[] = {
-    /* Init command. ITU rec v.250 (6.1.1) says:
-     *   The DTE should not include additional commands on the same command line
-     *   after the Z command because such commands may be ignored.
-     * So run ATZ alone.
-     */
-    { "Z", 6, FALSE, mm_base_modem_response_processor_no_result_continue },
-
-    /* Ensure echo is off after the init command */
-    { "E0 V1",      3, FALSE, NULL },
-
-    /* Some phones (like Blackberries) don't support +CMEE=1, so make it
-     * optional.  It completely violates 3GPP TS 27.007 (9.1) but what can we do...
-     */
-    { "+CMEE=1", 3, FALSE, NULL },
-
-    /* Additional OPTIONAL initialization */
-    { "X4 &C1",  3, FALSE, NULL },
-
-    { NULL }
-};
-
-static void
-modem_init (MMIfaceModem *self,
-            GAsyncReadyCallback callback,
-            gpointer user_data)
-{
-    MMAtSerialPort *primary;
-    GSimpleAsyncResult *result;
-
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        modem_init);
-
-    primary = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
-    if (!primary) {
-        g_simple_async_result_set_error (
-            result,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_FAILED,
-            "Need primary AT port to run modem init sequence");
-        g_simple_async_result_complete_in_idle (result);
-        g_object_unref (result);
-        return;
-    }
-
-    mm_base_modem_at_sequence_full (MM_BASE_MODEM (self),
-                                    primary,
-                                    modem_init_sequence,
-                                    NULL,  /* response_processor_context */
-                                    NULL,  /* response_processor_context_free */
-                                    NULL, /* cancellable */
-                                    (GAsyncReadyCallback)modem_init_sequence_ready,
-                                    result);
-}
-
 /*****************************************************************************/
 /* IMEI loading (3GPP interface) */
 
@@ -3023,12 +2909,15 @@ modem_3gpp_load_imei_finish (MMIfaceModem3gpp *self,
                              GAsyncResult *res,
                              GError **error)
 {
-    gchar *imei;
+    const gchar *result;
+    gchar *imei = NULL;
 
-    imei = g_strdup (mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error));
-    if (!imei)
+    result = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+    if (!result)
         return NULL;
 
+    result = mm_strip_tag (result, "+CGSN:");
+    mm_parse_gsn (result, &imei, NULL, NULL);
     mm_dbg ("loaded IMEI: %s", imei);
     return imei;
 }
@@ -3312,7 +3201,14 @@ registration_state_changed (MMAtSerialPort *port,
     else
         mm_iface_modem_3gpp_update_cs_registration_state (MM_IFACE_MODEM_3GPP (self), state);
 
-    mm_iface_modem_3gpp_update_access_technologies (MM_IFACE_MODEM_3GPP (self), act);
+    /* Only update access technologies from CREG/CGREG response if the modem
+     * doesn't have custom commands for access technology loading, otherwise
+     * we fight with the custom commands.  Plus CREG/CGREG access technologies
+     * don't have fine-grained distinction between HSxPA or GPRS/EDGE, etc.
+     */
+    if (MM_IFACE_MODEM_GET_INTERFACE (self)->load_access_technologies == modem_load_access_technologies)
+        mm_iface_modem_3gpp_update_access_technologies (MM_IFACE_MODEM_3GPP (self), act);
+
     mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, cell_id);
 }
 
@@ -3485,6 +3381,7 @@ modem_3gpp_register_in_network (MMIfaceModem3gpp *self,
                                    cancellable,
                                    callback,
                                    user_data);
+    g_free (command);
 }
 
 /*****************************************************************************/
@@ -4172,7 +4069,7 @@ modem_3gpp_ussd_cancel (MMIfaceModem3gppUssd *self,
 
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               "+CUSD=2",
-                              3,
+                              10,
                               TRUE,
                               (GAsyncReadyCallback)cancel_command_ready,
                               result);
@@ -4201,7 +4098,7 @@ modem_3gpp_ussd_send_context_complete_and_free (Modem3gppUssdSendContext *ctx)
     }
     g_object_unref (ctx->self);
     g_free (ctx->command);
-    g_free (ctx);
+    g_slice_free (Modem3gppUssdSendContext, ctx);
 }
 
 static const gchar *
@@ -4220,20 +4117,36 @@ modem_3gpp_ussd_send_finish (MMIfaceModem3gppUssd *self,
 
 static void modem_3gpp_ussd_context_step (Modem3gppUssdSendContext *ctx);
 
+static void cusd_process_string (MMBroadbandModem *self,
+                                 const gchar *str);
+
 static void
 ussd_send_command_ready (MMBroadbandModem *self,
                          GAsyncResult *res,
                          Modem3gppUssdSendContext *ctx)
 {
     GError *error = NULL;
+    const gchar *reply;
 
-    mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
+    g_assert (ctx->result == NULL);
+
+    reply = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
     if (error) {
         /* Some immediate error happened when sending the USSD request */
         mm_dbg ("Error sending USSD request: '%s'", error->message);
         g_error_free (error);
 
-        modem_3gpp_ussd_context_step (ctx);
+        if (self->priv->pending_ussd_action) {
+            /* Recover result */
+            ctx->result = self->priv->pending_ussd_action;
+            self->priv->pending_ussd_action = NULL;
+            modem_3gpp_ussd_context_step (ctx);
+            return;
+        }
+
+        /* So the USSD action was completed already... */
+        mm_dbg ("USSD action already completed via URCs");
+        modem_3gpp_ussd_send_context_complete_and_free (ctx);
         return;
     }
 
@@ -4248,13 +4161,13 @@ ussd_send_command_ready (MMBroadbandModem *self,
         ctx->self->priv->use_unencoded_ussd = FALSE;
     }
 
-    /* Cache the action, as it will be completed via URCs.
-     * There shouldn't be any previous action pending. */
-    g_warn_if_fail (self->priv->pending_ussd_action == NULL);
-    self->priv->pending_ussd_action = ctx->result;
+    if (!self->priv->pending_ussd_action)
+        mm_dbg ("USSD operation finished already via URCs");
+    else if (reply && reply[0]) {
+        reply = mm_strip_tag (reply, "+CUSD:");
+        cusd_process_string (ctx->self, reply);
+    }
 
-    /* Reset result so that it doesn't get completed */
-    ctx->result = NULL;
     modem_3gpp_ussd_send_context_complete_and_free (ctx);
 }
 
@@ -4272,10 +4185,10 @@ modem_3gpp_ussd_context_send_encoded (Modem3gppUssdSendContext *ctx)
                                                &scheme,
                                                &error);
     if (!encoded) {
-        g_simple_async_result_take_error (ctx->result, error);
-        modem_3gpp_ussd_send_context_complete_and_free (ctx);
         mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (ctx->self),
                                                MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE);
+        g_simple_async_result_take_error (ctx->result, error);
+        modem_3gpp_ussd_send_context_complete_and_free (ctx);
         return;
     }
 
@@ -4285,9 +4198,15 @@ modem_3gpp_ussd_context_send_encoded (Modem3gppUssdSendContext *ctx)
     at_command = g_strdup_printf ("+CUSD=1,\"%s\",%d", encoded, scheme);
     g_free (encoded);
 
+    /* Cache the action, as it may be completed via URCs.
+     * There shouldn't be any previous action pending. */
+    g_warn_if_fail (ctx->self->priv->pending_ussd_action == NULL);
+    ctx->self->priv->pending_ussd_action = ctx->result;
+    ctx->result = NULL;
+
     mm_base_modem_at_command (MM_BASE_MODEM (ctx->self),
                               at_command,
-                              3,
+                              10,
                               FALSE,
                               (GAsyncReadyCallback)ussd_send_command_ready,
                               ctx);
@@ -4305,9 +4224,16 @@ modem_3gpp_ussd_context_send_unencoded (Modem3gppUssdSendContext *ctx)
     at_command = g_strdup_printf ("+CUSD=1,\"%s\",%d",
                                   ctx->command,
                                   MM_MODEM_GSM_USSD_SCHEME_7BIT);
+
+    /* Cache the action, as it may be completed via URCs.
+     * There shouldn't be any previous action pending. */
+    g_warn_if_fail (ctx->self->priv->pending_ussd_action == NULL);
+    ctx->self->priv->pending_ussd_action = ctx->result;
+    ctx->result = NULL;
+
     mm_base_modem_at_command (MM_BASE_MODEM (ctx->self),
                               at_command,
-                              3,
+                              10,
                               FALSE,
                               (GAsyncReadyCallback)ussd_send_command_ready,
                               ctx);
@@ -4319,14 +4245,13 @@ modem_3gpp_ussd_context_step (Modem3gppUssdSendContext *ctx)
 {
     if (ctx->encoded_used &&
         ctx->unencoded_used) {
+        mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (ctx->self),
+                                               MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE);
         g_simple_async_result_set_error (ctx->result,
                                          MM_CORE_ERROR,
                                          MM_CORE_ERROR_FAILED,
                                          "Sending USSD command failed");
         modem_3gpp_ussd_send_context_complete_and_free (ctx);
-
-        mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (ctx->self),
-                                               MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE);
         return;
     }
 
@@ -4355,21 +4280,21 @@ modem_3gpp_ussd_send (MMIfaceModem3gppUssd *self,
 {
     Modem3gppUssdSendContext *ctx;
 
-    ctx = g_new0 (Modem3gppUssdSendContext, 1);
+    ctx = g_slice_new0 (Modem3gppUssdSendContext);
     /* We're going to steal the string result in finish() so we must have a
      * callback specified. */
     g_assert (callback != NULL);
+    ctx->self = g_object_ref (self);
+    ctx->command = g_strdup (command);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
                                              callback,
                                              user_data,
                                              modem_3gpp_ussd_send);
-    ctx->self = g_object_ref (self);
-    ctx->command = g_strdup (command);
-
-    modem_3gpp_ussd_context_step (ctx);
 
     mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
                                            MM_MODEM_3GPP_USSD_SESSION_STATE_ACTIVE);
+
+    modem_3gpp_ussd_context_step (ctx);
 }
 
 /*****************************************************************************/
@@ -4429,9 +4354,8 @@ decode_ussd_response (MMBroadbandModem *self,
                       const gchar *reply,
                       GError **error)
 {
-    gchar **items, **iter, *p;
-    gchar *str = NULL;
-    gint encoding = -1;
+    gchar *p;
+    gchar *str;
     gchar *decoded;
 
     /* Look for the first ',' */
@@ -4445,49 +4369,37 @@ decode_ussd_response (MMBroadbandModem *self,
         return NULL;
     }
 
-    items = g_strsplit_set (p + 1, " ,", -1);
-    for (iter = items; iter && *iter; iter++) {
-        if (*iter[0] == '\0')
-            continue;
-        if (str == NULL)
-            str = *iter;
-        else if (encoding == -1) {
-            encoding = atoi (*iter);
-            mm_dbg ("USSD data coding scheme %d", encoding);
-            break;  /* All done */
-        }
+    /* Assume the string is the next field, and strip quotes. While doing this,
+     * we also skip any other additional field we may have afterwards */
+    if (p[1] == '"') {
+        str = g_strdup (&p[2]);
+        p = strchr (str, '"');
+        if (p)
+            *p = '\0';
+    } else {
+        str = g_strdup (&p[1]);
+        p = strchr (str, ',');
+        if (p)
+            *p = '\0';
     }
 
-    if (!str) {
-        g_set_error (error,
-                     MM_CORE_ERROR,
-                     MM_CORE_ERROR_FAILED,
-                     "Cannot decode USSD response (%s): not enough fields",
-                     reply);
-        return NULL;
-    }
+    /* If reply doesn't seem to be hex; just return itself... */
+    if (!mm_utils_ishexstr (str))
+        decoded = g_strdup (str);
+    else
+        decoded = mm_iface_modem_3gpp_ussd_decode (MM_IFACE_MODEM_3GPP_USSD (self), str, error);
 
-    /* Strip quotes */
-    if (str[0] == '"')
-        str++;
-    p = strchr (str, '"');
-    if (p)
-        *p = '\0';
+    g_free (str);
 
-    decoded = mm_iface_modem_3gpp_ussd_decode (MM_IFACE_MODEM_3GPP_USSD (self), str, error);
-    g_strfreev (items);
     return decoded;
 }
 
 static void
-cusd_received (MMAtSerialPort *port,
-               GMatchInfo *info,
-               MMBroadbandModem *self)
+cusd_process_string (MMBroadbandModem *self,
+                     const gchar *str)
 {
-    gchar *str;
     MMModem3gppUssdSessionState ussd_state = MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE;
 
-    str = g_match_info_fetch (info, 1);
     if (!str || !isdigit (*str)) {
         if (self->priv->pending_ussd_action)
             g_simple_async_result_set_error (self->priv->pending_ussd_action,
@@ -4598,7 +4510,18 @@ cusd_received (MMAtSerialPort *port,
         g_object_unref (self->priv->pending_ussd_action);
         self->priv->pending_ussd_action = NULL;
     }
+}
 
+static void
+cusd_received (MMAtSerialPort *port,
+               GMatchInfo *info,
+               MMBroadbandModem *self)
+{
+    gchar *str;
+
+    mm_dbg ("Unsolicited USSD URC received");
+    str = g_match_info_fetch (info, 1);
+    cusd_process_string (self, str);
     g_free (str);
 }
 
@@ -5205,8 +5128,8 @@ cmgf_set_ready (MMBroadbandModem *self,
         g_error_free (error);
         self->priv->modem_messaging_sms_pdu_mode = FALSE;
     } else
-        mm_info ("Successfully set preferred SMS mode: '%s'",
-                 self->priv->modem_messaging_sms_pdu_mode ? "PDU" : "text");
+        mm_dbg ("Successfully set preferred SMS mode: '%s'",
+                self->priv->modem_messaging_sms_pdu_mode ? "PDU" : "text");
 
     g_simple_async_result_set_op_res_gboolean (simple, TRUE);
     g_simple_async_result_complete (simple);
@@ -5942,12 +5865,15 @@ modem_cdma_load_esn_finish (MMIfaceModemCdma *self,
                             GAsyncResult *res,
                             GError **error)
 {
-    gchar *esn;
+    const gchar *result;
+    gchar *esn = NULL;
 
-    esn = g_strdup (mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error));
-    if (!esn)
+    result = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+    if (!result)
         return NULL;
 
+    result = mm_strip_tag (result, "+GSN:");
+    mm_parse_gsn (result, NULL, NULL, &esn);
     mm_dbg ("loaded ESN: %s", esn);
     return esn;
 }
@@ -5958,6 +5884,42 @@ modem_cdma_load_esn (MMIfaceModemCdma *self,
                      gpointer user_data)
 {
     mm_dbg ("loading ESN...");
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+GSN",
+                              3,
+                              TRUE,
+                              callback,
+                              user_data);
+}
+
+/*****************************************************************************/
+/* MEID loading (CDMA interface) */
+
+static gchar *
+modem_cdma_load_meid_finish (MMIfaceModemCdma *self,
+                             GAsyncResult *res,
+                             GError **error)
+{
+    const gchar *result;
+    gchar *meid = NULL;
+
+    result = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+    if (!result)
+        return NULL;
+
+    result = mm_strip_tag (result, "+GSN:");
+    mm_parse_gsn (result, NULL, &meid, NULL);
+    mm_dbg ("loaded MEID: %s", meid);
+    return meid;
+}
+
+static void
+modem_cdma_load_meid (MMIfaceModemCdma *self,
+                      GAsyncReadyCallback callback,
+                      gpointer user_data)
+{
+    /* Some devices return both the MEID and the ESN in the +GSN response */
+    mm_dbg ("loading MEID...");
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               "+GSN",
                               3,
@@ -7191,6 +7153,26 @@ enable_location_gathering (MMIfaceModemLocation *self,
 
 /*****************************************************************************/
 
+static const gchar *primary_init_sequence[] = {
+    /* Ensure echo is off */
+    "E0",
+    /* Get word responses */
+    "V1",
+    /* Extended numeric codes */
+    "+CMEE=1",
+    /* Report all call status */
+    "X4",
+    /* Assert DCD when carrier detected */
+    "&C1",
+    NULL
+};
+
+static const gchar *secondary_init_sequence[] = {
+    /* Ensure echo is off */
+    "E0",
+    NULL
+};
+
 static void
 setup_ports (MMBroadbandModem *self)
 {
@@ -7201,6 +7183,16 @@ setup_ports (MMBroadbandModem *self)
 
     ports[0] = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
     ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
+
+    if (ports[0])
+        g_object_set (ports[0],
+                      MM_AT_SERIAL_PORT_INIT_SEQUENCE, primary_init_sequence,
+                      NULL);
+
+    if (ports[1])
+        g_object_set (ports[1],
+                      MM_AT_SERIAL_PORT_INIT_SEQUENCE, secondary_init_sequence,
+                      NULL);
 
     /* Cleanup all unsolicited message handlers in all AT ports */
 
@@ -7434,12 +7426,45 @@ disabling_stopped (MMBroadbandModem *self,
 }
 
 /*****************************************************************************/
+/* Initializing the modem (during first enabling) */
+
+static gboolean
+enabling_modem_init_finish (MMBroadbandModem *self,
+                            GAsyncResult *res,
+                            GError **error)
+{
+    return !!mm_base_modem_at_command_full_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+enabling_modem_init (MMBroadbandModem *self,
+                     GAsyncReadyCallback callback,
+                     gpointer user_data)
+{
+    /* Init command. ITU rec v.250 (6.1.1) says:
+     *   The DTE should not include additional commands on the same command line
+     *   after the Z command because such commands may be ignored.
+     * So run ATZ alone.
+     */
+    mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                   mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)),
+                                   "Z",
+                                   6,
+                                   FALSE,
+                                   FALSE,
+                                   NULL, /* cancellable */
+                                   callback,
+                                   user_data);
+}
+
+/*****************************************************************************/
 /* Enabling started */
 
 typedef struct {
     MMBroadbandModem *self;
     GSimpleAsyncResult *result;
     PortsContext *ports;
+    gboolean modem_init_required;
 } EnablingStartedContext;
 
 static void
@@ -7449,7 +7474,7 @@ enabling_started_context_complete_and_free (EnablingStartedContext *ctx)
     ports_context_unref (ctx->ports);
     g_object_unref (ctx->result);
     g_object_unref (ctx->self);
-    g_free (ctx);
+    g_slice_free (EnablingStartedContext, ctx);
 }
 
 static gboolean
@@ -7461,8 +7486,79 @@ enabling_started_finish (MMBroadbandModem *self,
 }
 
 static gboolean
+enabling_after_modem_init_timeout (EnablingStartedContext *ctx)
+{
+    /* Reset init sequence enabled flags and run them explicitly */
+    g_object_set (ctx->ports->primary,
+                  MM_AT_SERIAL_PORT_INIT_SEQUENCE_ENABLED, TRUE,
+                  NULL);
+    mm_at_serial_port_run_init_sequence (ctx->ports->primary);
+    if (ctx->ports->secondary) {
+        g_object_set (ctx->ports->secondary,
+                      MM_AT_SERIAL_PORT_INIT_SEQUENCE_ENABLED, TRUE,
+                      NULL);
+        mm_at_serial_port_run_init_sequence (ctx->ports->secondary);
+    }
+
+    /* Store enabled ports context and complete */
+    ctx->self->priv->enabled_ports_ctx = ports_context_ref (ctx->ports);
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    enabling_started_context_complete_and_free (ctx);
+    return FALSE;
+}
+
+static void
+enabling_modem_init_ready (MMBroadbandModem *self,
+                           GAsyncResult *res,
+                           EnablingStartedContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!MM_BROADBAND_MODEM_GET_CLASS (ctx->self)->enabling_modem_init_finish (self, res, &error)) {
+        g_simple_async_result_take_error (ctx->result, error);
+        enabling_started_context_complete_and_free (ctx);
+        return;
+    }
+
+    /* Specify that the modem init was run once */
+    ctx->self->priv->modem_init_run = TRUE;
+
+    /* After the modem init sequence, give a 500ms period for the modem to settle */
+    mm_dbg ("Giving some time to settle the modem...");
+    g_timeout_add (500, (GSourceFunc)enabling_after_modem_init_timeout, ctx);
+}
+
+static void
+enabling_flash_done (MMSerialPort *port,
+                     GError *error,
+                     EnablingStartedContext *ctx)
+{
+    if (error) {
+        g_prefix_error (&error, "Primary port flashing failed: ");
+        g_simple_async_result_set_from_error (ctx->result, error);
+        enabling_started_context_complete_and_free (ctx);
+        return;
+    }
+
+
+    if (ctx->modem_init_required) {
+        mm_dbg ("Running modem initialization sequence...");
+        MM_BROADBAND_MODEM_GET_CLASS (ctx->self)->enabling_modem_init (ctx->self,
+                                                                       (GAsyncReadyCallback)enabling_modem_init_ready,
+                                                                       ctx);
+        return;
+    }
+
+    /* Store enabled ports context and complete */
+    ctx->self->priv->enabled_ports_ctx = ports_context_ref (ctx->ports);
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    enabling_started_context_complete_and_free (ctx);
+}
+
+static gboolean
 open_ports_enabling (MMBroadbandModem *self,
                      PortsContext *ctx,
+                     gboolean modem_init_required,
                      GError **error)
 {
     /* Open primary */
@@ -7475,6 +7571,13 @@ open_ports_enabling (MMBroadbandModem *self,
         return FALSE;
     }
 
+    /* If we'll need to run modem initialization, disable port init sequence */
+    if (modem_init_required)
+        g_object_set (ctx->primary,
+                      MM_AT_SERIAL_PORT_INIT_SEQUENCE_ENABLED, FALSE,
+                      NULL);
+
+
     if (!mm_serial_port_open (MM_SERIAL_PORT (ctx->primary), error)) {
         g_prefix_error (error, "Couldn't open primary port: ");
         return FALSE;
@@ -7485,6 +7588,11 @@ open_ports_enabling (MMBroadbandModem *self,
     /* Open secondary (optional) */
     ctx->secondary = mm_base_modem_get_port_secondary (MM_BASE_MODEM (self));
     if (ctx->secondary) {
+        /* If we'll need to run modem initialization, disable port init sequence */
+        if (modem_init_required)
+            g_object_set (ctx->secondary,
+                          MM_AT_SERIAL_PORT_INIT_SEQUENCE_ENABLED, FALSE,
+                          NULL);
         if (!mm_serial_port_open (MM_SERIAL_PORT (ctx->secondary), error)) {
             g_prefix_error (error, "Couldn't open secondary port: ");
             return FALSE;
@@ -7506,22 +7614,6 @@ open_ports_enabling (MMBroadbandModem *self,
 }
 
 static void
-enabling_flash_done (MMSerialPort *port,
-                     GError *error,
-                     EnablingStartedContext *ctx)
-{
-    if (error) {
-        g_prefix_error (&error, "Primary port flashing failed: ");
-        g_simple_async_result_set_from_error (ctx->result, error);
-    } else {
-        ctx->self->priv->enabled_ports_ctx = ports_context_ref (ctx->ports);
-        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-    }
-
-    enabling_started_context_complete_and_free (ctx);
-}
-
-static void
 enabling_started (MMBroadbandModem *self,
                   GAsyncReadyCallback callback,
                   gpointer user_data)
@@ -7529,7 +7621,7 @@ enabling_started (MMBroadbandModem *self,
     GError *error = NULL;
     EnablingStartedContext *ctx;
 
-    ctx = g_new0 (EnablingStartedContext, 1);
+    ctx = g_slice_new0 (EnablingStartedContext);
     ctx->self = g_object_ref (self);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
                                              callback,
@@ -7538,8 +7630,22 @@ enabling_started (MMBroadbandModem *self,
     ctx->ports = g_new0 (PortsContext, 1);
     ctx->ports->ref_count = 1;
 
+    /* Skip modem initialization if the device was hotplugged OR if we already
+     * did it (i.e. don't reinitialize if the modem got disabled and enabled
+     * again) */
+    if (ctx->self->priv->modem_init_run)
+        mm_dbg ("Skipping modem initialization: not first enabling");
+    else if (mm_base_modem_get_hotplugged (MM_BASE_MODEM (ctx->self))) {
+        ctx->self->priv->modem_init_run = TRUE;
+        mm_dbg ("Skipping modem initialization: device hotplugged");
+    } else if (!MM_BROADBAND_MODEM_GET_CLASS (ctx->self)->enabling_modem_init ||
+               !MM_BROADBAND_MODEM_GET_CLASS (ctx->self)->enabling_modem_init_finish)
+        mm_dbg ("Skipping modem initialization: not required");
+    else
+        ctx->modem_init_required = TRUE;
+
     /* Enabling */
-    if (!open_ports_enabling (self, ctx->ports, &error)) {
+    if (!open_ports_enabling (self, ctx->ports, ctx->modem_init_required, &error)) {
         g_prefix_error (&error, "Couldn't open ports during modem enabling: ");
         g_simple_async_result_take_error (ctx->result, error);
         enabling_started_context_complete_and_free (ctx);
@@ -7547,7 +7653,7 @@ enabling_started (MMBroadbandModem *self,
     }
 
     /* Ports were correctly opened, now flash the primary port */
-    mm_dbg ("Flashing primary port before enabling...");
+    mm_dbg ("Flashing primary AT port before enabling...");
     mm_serial_port_flash (MM_SERIAL_PORT (ctx->ports->primary),
                           100,
                           FALSE,
@@ -7604,8 +7710,6 @@ disabling_context_complete_and_free (DisablingContext *ctx)
                                      MM_MODEM_STATE_CHANGE_REASON_USER_REQUESTED);
     else if (ctx->previous_state != MM_MODEM_STATE_DISABLED) {
         /* Fallback to previous state */
-        mm_info ("Falling back to previous state '%s'",
-                 mm_modem_state_get_string (ctx->previous_state));
         mm_iface_modem_update_state (MM_IFACE_MODEM (ctx->self),
                                      ctx->previous_state,
                                      MM_MODEM_STATE_CHANGE_REASON_UNKNOWN);
@@ -7718,7 +7822,6 @@ disabling_wait_for_final_state_ready (MMIfaceModem *self,
          * Note that we do consider here UNKNOWN and FAILED status on purpose,
          * as the MMManager will try to disable every modem before removing
          * it. */
-        mm_info ("Modem is already fully disabled...");
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
         disabling_context_complete_and_free (ctx);
         return;
@@ -7745,7 +7848,6 @@ disabling_step (DisablingContext *ctx)
 
     switch (ctx->step) {
     case DISABLING_STEP_FIRST:
-        mm_info ("Modem disabling...");
         /* Fall down to next step */
         ctx->step++;
 
@@ -7865,7 +7967,6 @@ disabling_step (DisablingContext *ctx)
         ctx->step++;
 
     case DISABLING_STEP_LAST:
-        mm_info ("Modem fully disabled...");
         ctx->disabled = TRUE;
         /* All disabled without errors! */
         g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (ctx->result), TRUE);
@@ -7935,8 +8036,6 @@ enabling_context_complete_and_free (EnablingContext *ctx)
                                      MM_MODEM_STATE_CHANGE_REASON_USER_REQUESTED);
     else if (ctx->previous_state != MM_MODEM_STATE_ENABLED) {
         /* Fallback to previous state */
-        mm_info ("Falling back to previous state '%s'",
-                 mm_modem_state_get_string (ctx->previous_state));
         mm_iface_modem_update_state (MM_IFACE_MODEM (ctx->self),
                                      ctx->previous_state,
                                      MM_MODEM_STATE_CHANGE_REASON_UNKNOWN);
@@ -8042,7 +8141,6 @@ enabling_wait_for_final_state_ready (MMIfaceModem *self,
 
     if (ctx->previous_state >= MM_MODEM_STATE_ENABLED) {
         /* Just return success, don't relaunch enabling */
-        mm_info ("Modem is already fully enabled...");
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
         enabling_context_complete_and_free (ctx);
         return;
@@ -8067,7 +8165,6 @@ enabling_step (EnablingContext *ctx)
 
     switch (ctx->step) {
     case ENABLING_STEP_FIRST:
-        mm_info ("Modem enabling...");
         /* Fall down to next step */
         ctx->step++;
 
@@ -8187,7 +8284,6 @@ enabling_step (EnablingContext *ctx)
         ctx->step++;
 
     case ENABLING_STEP_LAST:
-        mm_info ("Modem fully enabled...");
         ctx->enabled = TRUE;
         /* All enabled without errors! */
         g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (ctx->result), TRUE);
@@ -8390,13 +8486,26 @@ iface_modem_initialize_ready (MMBroadbandModem *self,
     /* If the modem interface fails to get initialized, we will move the modem
      * to a FAILED state. Note that in this case we still export the interface. */
     if (!mm_iface_modem_initialize_finish (MM_IFACE_MODEM (self), result, &error)) {
+        MMModemStateFailedReason failed_reason = MM_MODEM_STATE_FAILED_REASON_UNKNOWN;
+
         /* Report the new FAILED state */
         mm_warn ("Modem couldn't be initialized: %s", error->message);
+
+        if (g_error_matches (error,
+                             MM_MOBILE_EQUIPMENT_ERROR,
+                             MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED))
+            failed_reason = MM_MODEM_STATE_FAILED_REASON_SIM_MISSING;
+        else if (g_error_matches (error,
+                                  MM_MOBILE_EQUIPMENT_ERROR,
+                                  MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE) ||
+                 g_error_matches (error,
+                                  MM_MOBILE_EQUIPMENT_ERROR,
+                                  MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG))
+            failed_reason = MM_MODEM_STATE_FAILED_REASON_SIM_MISSING;
+
         g_error_free (error);
 
-        mm_iface_modem_update_state (MM_IFACE_MODEM (self),
-                                     MM_MODEM_STATE_FAILED,
-                                     MM_MODEM_STATE_CHANGE_REASON_UNKNOWN);
+        mm_iface_modem_update_failed_state (MM_IFACE_MODEM (self), failed_reason);
 
         /* Jump to the firmware step. We allow firmware switching even in failed
          * state */
@@ -8441,9 +8550,8 @@ iface_modem_initialize_ready (MMBroadbandModem *self,
                 g_error_free (error);                                   \
                                                                         \
                 /* Report the new FAILED state */                       \
-                mm_iface_modem_update_state (MM_IFACE_MODEM (self),     \
-                                             MM_MODEM_STATE_FAILED,     \
-                                             MM_MODEM_STATE_CHANGE_REASON_UNKNOWN); \
+                mm_iface_modem_update_failed_state (MM_IFACE_MODEM (self), \
+                                                    MM_MODEM_STATE_FAILED_REASON_UNKNOWN); \
                                                                         \
                 /* Just jump to the last step */                        \
                 ctx->step = INITIALIZE_STEP_LAST;                       \
@@ -8483,7 +8591,6 @@ initialize_step (InitializeContext *ctx)
 
     switch (ctx->step) {
     case INITIALIZE_STEP_FIRST:
-        mm_info ("Modem initializing...");
         /* Fall down to next step */
         ctx->step++;
 
@@ -8641,8 +8748,6 @@ initialize_step (InitializeContext *ctx)
             initialize_context_complete_and_free (ctx);
             return;
         }
-
-        mm_info ("Modem fully initialized");
 
         /* All initialized without errors!
          * Set as disabled (a.k.a. initialized) */
@@ -9092,8 +9197,6 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_power_state_finish = load_power_state_finish;
 
     /* Enabling steps */
-    iface->modem_init = modem_init;
-    iface->modem_init_finish = modem_init_finish;
     iface->modem_power_up = modem_power_up;
     iface->modem_power_up_finish = modem_power_up_finish;
     iface->setup_flow_control = modem_setup_flow_control;
@@ -9191,6 +9294,8 @@ iface_modem_cdma_init (MMIfaceModemCdma *iface)
     /* Initialization steps */
     iface->load_esn = modem_cdma_load_esn;
     iface->load_esn_finish = modem_cdma_load_esn_finish;
+    iface->load_meid = modem_cdma_load_meid;
+    iface->load_meid_finish = modem_cdma_load_meid_finish;
 
     /* Registration check steps */
     iface->setup_registration_checks = modem_cdma_setup_registration_checks;
@@ -9284,6 +9389,8 @@ mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
     klass->initialization_stopped = initialization_stopped;
     klass->enabling_started = enabling_started;
     klass->enabling_started_finish = enabling_started_finish;
+    klass->enabling_modem_init = enabling_modem_init;
+    klass->enabling_modem_init_finish = enabling_modem_init_finish;
     klass->disabling_stopped = disabling_stopped;
 
     g_object_class_override_property (object_class,

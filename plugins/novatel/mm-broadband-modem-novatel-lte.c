@@ -43,118 +43,6 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemNovatelLte, mm_broadband_modem_novatel_l
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init));
 
 /*****************************************************************************/
-/* Initializing the modem (Modem interface) */
-
-static gboolean
-modem_init_finish (MMIfaceModem *self,
-                   GAsyncResult *res,
-                   GError **error)
-{
-    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
-}
-
-static void
-modem_init_sequence_ready (MMBaseModem *self,
-                           GAsyncResult *res,
-                           GSimpleAsyncResult *simple)
-{
-    GError *error = NULL;
-
-    mm_base_modem_at_sequence_full_finish (MM_BASE_MODEM (self), res, NULL, &error);
-    if (error)
-        g_simple_async_result_take_error (simple, error);
-    else {
-        MMAtSerialPort *secondary;
-
-        /* Disable echo in secondary port as well, if any */
-        secondary = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
-        if (secondary)
-            /* No need to wait for the reply */
-            mm_base_modem_at_command_full (MM_BASE_MODEM (self),
-                                           secondary,
-                                           "E0",
-                                           3,
-                                           FALSE,
-                                           FALSE, /* raw */
-                                           NULL, /* cancellable */
-                                           NULL,
-                                           NULL);
-
-        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
-    }
-
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
-}
-
-static const MMBaseModemAtCommand modem_init_sequence[] = {
-    /* Init command. ITU rec v.250 (6.1.1) says:
-     *   The DTE should not include additional commands on the same command line
-     *   after the Z command because such commands may be ignored.
-     * So run ATZ alone.
-     */
-    { "Z",       6, FALSE, mm_base_modem_response_processor_no_result_continue },
-
-    /* Ensure echo is off after the init command */
-    { "E0 V1",   3, FALSE, NULL },
-
-    /* Some phones (like Blackberries) don't support +CMEE=1, so make it
-     * optional.  It completely violates 3GPP TS 27.007 (9.1) but what can we do...
-     */
-    { "+CMEE=1", 3, FALSE, NULL },
-
-    /* Additional OPTIONAL initialization */
-    { "X4 &C1",  3, FALSE, NULL },
-
-    /* Temporarily force the modem into LTE only mode to prevent it from falling
-     * back to 3G.
-     * TODO(benchan): Remove this constraint
-     */
-    { "$NWPREFMODE=30", 6, FALSE, mm_base_modem_response_processor_continue_on_error },
-
-    { NULL }
-};
-
-static void
-modem_init (MMIfaceModem *self,
-            GAsyncReadyCallback callback,
-            gpointer user_data)
-{
-    MMAtSerialPort *primary;
-    GSimpleAsyncResult *result;
-    guint init_sequence_index;
-
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        modem_init);
-
-    primary = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
-    if (!primary) {
-        g_simple_async_result_set_error (
-            result,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_FAILED,
-            "Need primary AT port to run modem init sequence");
-        g_simple_async_result_complete_in_idle (result);
-        g_object_unref (result);
-        return;
-    }
-
-    /* Skip ATZ if the device was hotplugged. */
-    init_sequence_index = mm_base_modem_get_hotplugged (MM_BASE_MODEM (self)) ? 1 : 0;
-
-    mm_base_modem_at_sequence_full (MM_BASE_MODEM (self),
-                                    primary,
-                                    &modem_init_sequence[init_sequence_index],
-                                    NULL,  /* response_processor_context */
-                                    NULL,  /* response_processor_context_free */
-                                    NULL, /* cancellable */
-                                    (GAsyncReadyCallback)modem_init_sequence_ready,
-                                    result);
-}
-
-/*****************************************************************************/
 /* Modem power down (Modem interface) */
 
 static gboolean
@@ -785,6 +673,49 @@ scan_networks (MMIfaceModem3gpp *self,
 }
 
 /*****************************************************************************/
+/* Initializing the modem (during first enabling) */
+
+static const MMBaseModemAtCommand modem_init_sequence[] = {
+    /* Init command. ITU rec v.250 (6.1.1) says:
+     *   The DTE should not include additional commands on the same command line
+     *   after the Z command because such commands may be ignored.
+     * So run ATZ alone.
+     */
+    { "Z",       6, FALSE, mm_base_modem_response_processor_no_result_continue },
+
+    /* Temporarily force the modem into LTE only mode to prevent it from falling
+     * back to 3G.
+     * TODO(benchan): Remove this constraint
+     */
+    { "$NWPREFMODE=30", 6, FALSE, mm_base_modem_response_processor_continue_on_error },
+
+    { NULL }
+};
+
+static gboolean
+enabling_modem_init_finish (MMBroadbandModem *self,
+                            GAsyncResult *res,
+                            GError **error)
+{
+    return !!mm_base_modem_at_command_full_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+enabling_modem_init (MMBroadbandModem *self,
+                     GAsyncReadyCallback callback,
+                     gpointer user_data)
+{
+    mm_base_modem_at_sequence_full (MM_BASE_MODEM (self),
+                                    mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)),
+                                    modem_init_sequence,
+                                    NULL,  /* response_processor_context */
+                                    NULL,  /* response_processor_context_free */
+                                    NULL,  /* cancellable */
+                                    callback,
+                                    user_data);
+}
+
+/*****************************************************************************/
 
 MMBroadbandModemNovatelLte *
 mm_broadband_modem_novatel_lte_new (const gchar *device,
@@ -815,8 +746,6 @@ mm_broadband_modem_novatel_lte_init (MMBroadbandModemNovatelLte *self)
 static void
 iface_modem_init (MMIfaceModem *iface)
 {
-    iface->modem_init = modem_init;
-    iface->modem_init_finish = modem_init_finish;
     iface->modem_power_down = modem_power_down;
     iface->modem_power_down_finish = modem_power_down_finish;
     iface->create_bearer = modem_create_bearer;
@@ -850,4 +779,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
 static void
 mm_broadband_modem_novatel_lte_class_init (MMBroadbandModemNovatelLteClass *klass)
 {
+    MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
+
+    broadband_modem_class->enabling_modem_init = enabling_modem_init;
+    broadband_modem_class->enabling_modem_init_finish = enabling_modem_init_finish;
 }

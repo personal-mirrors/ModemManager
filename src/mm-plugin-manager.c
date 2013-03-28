@@ -57,6 +57,7 @@ typedef struct {
     MMPluginManager *self;
     MMDevice *device;
     GSimpleAsyncResult *result;
+    GTimer *timer;
     guint timeout_id;
     gulong grabbed_id;
     gulong released_id;
@@ -100,6 +101,11 @@ static void
 find_device_support_context_complete_and_free (FindDeviceSupportContext *ctx)
 {
     g_assert (ctx->timeout_id == 0);
+
+    mm_dbg ("(Plugin Manager) [%s] device support check finished in '%lf' seconds",
+            mm_device_get_path (ctx->device),
+            g_timer_elapsed (ctx->timer, NULL));
+    g_timer_destroy (ctx->timer);
 
     /* Set async operation result */
     if (!mm_device_peek_plugin (ctx->device)) {
@@ -226,8 +232,10 @@ port_probe_context_finished (PortProbeContext *port_probe_ctx)
     }
     /* If we didn't use the minimum probing time, wait for it to finish */
     else if (ctx->timeout_id > 0) {
-        mm_dbg ("(Plugin Manager) '%s' port probe finished, last one in device, but minimum probing time not consumed yet",
-                g_udev_device_get_name (port_probe_ctx->port));
+        mm_dbg ("(Plugin Manager) '%s' port probe finished, last one in device, "
+                "but minimum probing time not consumed yet ('%lf' seconds elapsed)",
+                g_udev_device_get_name (port_probe_ctx->port),
+                g_timer_elapsed (ctx->timer, NULL));
     } else {
         mm_dbg ("(Plugin Manager) '%s' port probe finished, last one in device",
                 g_udev_device_get_name (port_probe_ctx->port));
@@ -272,6 +280,10 @@ suggest_port_probe_result (FindDeviceSupportContext *ctx,
             /* If we got a task deferred until a suggestion comes,
              * complete it */
             if (port_probe_ctx->defer_until_suggested) {
+                /* Reset the defer until suggested flag; we consider this
+                 * cancelled probe completed now. */
+                port_probe_ctx->defer_until_suggested = FALSE;
+
                 if (suggested_plugin) {
                     mm_dbg ("(Plugin Manager) (%s) [%s] deferred task completed, got suggested plugin",
                             mm_plugin_get_name (suggested_plugin),
@@ -497,13 +509,13 @@ build_plugins_list (MMPluginManager *self,
     if (self->priv->generic)
         list = g_list_append (list, g_object_ref (self->priv->generic));
 
-    mm_info ("(Plugin Manager) [%s] Found '%u' plugins to try...",
-             g_udev_device_get_name (port),
-             g_list_length (list));
+    mm_dbg ("(Plugin Manager) [%s] Found '%u' plugins to try...",
+            g_udev_device_get_name (port),
+            g_list_length (list));
     for (l = list; l; l = g_list_next (l)) {
-        mm_info ("(Plugin Manager) [%s]   Will try with plugin '%s'",
-                 g_udev_device_get_name (port),
-                 mm_plugin_get_name (MM_PLUGIN (l->data)));
+        mm_dbg ("(Plugin Manager) [%s]   Will try with plugin '%s'",
+                g_udev_device_get_name (port),
+                mm_plugin_get_name (MM_PLUGIN (l->data)));
     }
 
     return list;
@@ -561,8 +573,29 @@ min_probing_timeout_cb (FindDeviceSupportContext *ctx)
 
     /* If there are no running probes around, we're free to finish */
     if (ctx->running_probes == NULL) {
-        mm_dbg ("(Plugin Manager) Minimum probing time consumed and no more ports to probe");
+        mm_dbg ("(Plugin Manager) [%s] Minimum probing time consumed and no more ports to probe",
+                mm_device_get_path (ctx->device));
         find_device_support_context_complete_and_free (ctx);
+    } else {
+        GList *l;
+        gboolean not_deferred = FALSE;
+
+        mm_dbg ("(Plugin Manager) [%s] Minimum probing time consumed",
+                mm_device_get_path (ctx->device));
+
+        /* If all we got were probes with 'deferred_until_suggested', just cancel
+         * the probing. May happen e.g. with just 'net' ports */
+        for (l = ctx->running_probes; l; l = g_list_next (l)) {
+            PortProbeContext *port_probe_ctx = l->data;
+
+            if (!port_probe_ctx->defer_until_suggested) {
+                not_deferred = TRUE;
+                break;
+            }
+        }
+
+        if (!not_deferred)
+            suggest_port_probe_result (ctx, NULL, NULL);
     }
 
     return FALSE;
@@ -575,6 +608,9 @@ mm_plugin_manager_find_device_support (MMPluginManager *self,
                                        gpointer user_data)
 {
     FindDeviceSupportContext *ctx;
+
+    mm_dbg ("(Plugin Manager) [%s] Checking device support...",
+            mm_device_get_path (device));
 
     ctx = g_slice_new0 (FindDeviceSupportContext);
     ctx->self = g_object_ref (self);
@@ -599,6 +635,7 @@ mm_plugin_manager_find_device_support (MMPluginManager *self,
      * bring up ports. Given that we launch this only when the first port of the
      * device has been exposed in udev, this timeout effectively means that we
      * leave up to 2s to the remaining ports to appear. */
+    ctx->timer = g_timer_new ();
     ctx->timeout_id = g_timeout_add_seconds (MIN_PROBING_TIME_SECS,
                                              (GSourceFunc)min_probing_timeout_cb,
                                              ctx);
@@ -711,7 +748,7 @@ load_plugins (MMPluginManager *self,
         if (!plugin)
             continue;
 
-        mm_info ("Loaded plugin '%s'", mm_plugin_get_name (plugin));
+        mm_dbg ("Loaded plugin '%s'", mm_plugin_get_name (plugin));
 
         if (g_str_equal (mm_plugin_get_name (plugin), MM_PLUGIN_GENERIC_NAME))
             /* Generic plugin */
@@ -735,8 +772,8 @@ load_plugins (MMPluginManager *self,
         goto out;
     }
 
-    mm_info ("Successfully loaded %u plugins",
-             g_list_length (self->priv->plugins) + !!self->priv->generic);
+    mm_dbg ("Successfully loaded %u plugins",
+            g_list_length (self->priv->plugins) + !!self->priv->generic);
 
 out:
     if (dir)
