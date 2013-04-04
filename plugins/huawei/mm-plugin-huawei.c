@@ -235,10 +235,7 @@ huawei_custom_init_step (HuaweiCustomInitContext *ctx)
     if (g_cancellable_is_cancelled (ctx->cancellable)) {
         mm_dbg ("(Huawei) no need to keep on running custom init in (%s)",
                 mm_port_get_device (MM_PORT (ctx->port)));
-        g_simple_async_result_set_error (ctx->result,
-                                         MM_CORE_ERROR,
-                                         MM_CORE_ERROR_CANCELLED,
-                                         "Custom initialization cancelled");
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
         huawei_custom_init_context_complete_and_free (ctx);
         return;
     }
@@ -506,6 +503,7 @@ mm_plugin_create (void)
                       MM_PLUGIN_ALLOWED_VENDOR_IDS, vendor_ids,
                       MM_PLUGIN_ALLOWED_AT,         TRUE,
                       MM_PLUGIN_ALLOWED_QCDM,       TRUE,
+                      MM_PLUGIN_ALLOWED_QMI,        TRUE,
                       MM_PLUGIN_CUSTOM_INIT,        &custom_init,
                       NULL));
 }

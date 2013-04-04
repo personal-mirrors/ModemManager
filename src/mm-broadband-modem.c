@@ -87,6 +87,7 @@ enum {
     PROP_MODEM_3GPP_CS_NETWORK_SUPPORTED,
     PROP_MODEM_3GPP_PS_NETWORK_SUPPORTED,
     PROP_MODEM_3GPP_EPS_NETWORK_SUPPORTED,
+    PROP_MODEM_3GPP_IGNORED_FACILITY_LOCKS,
     PROP_MODEM_CDMA_CDMA1X_REGISTRATION_STATE,
     PROP_MODEM_CDMA_EVDO_REGISTRATION_STATE,
     PROP_MODEM_CDMA_CDMA1X_NETWORK_SUPPORTED,
@@ -134,6 +135,7 @@ struct _MMBroadbandModemPrivate {
     gboolean modem_3gpp_eps_network_supported;
     /* Implementation helpers */
     GPtrArray *modem_3gpp_registration_regex;
+    MMModem3gppFacility modem_3gpp_ignored_facility_locks;
 
     /*<--- Modem 3GPP USSD interface --->*/
     /* Properties */
@@ -993,7 +995,6 @@ modem_load_own_numbers (MMIfaceModem *self,
     OwnNumbersContext *ctx;
     GError *error = NULL;
 
-    mm_dbg ("loading signal quality...");
     ctx = g_new0 (OwnNumbersContext, 1);
     ctx->self = g_object_ref (self);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
@@ -3054,6 +3055,17 @@ clck_test_ready (MMBaseModem *self,
         return;
     }
 
+    /* Ignore facility locks specified by the plugins */
+    if (MM_BROADBAND_MODEM (self)->priv->modem_3gpp_ignored_facility_locks) {
+        gchar *str;
+
+        str = mm_modem_3gpp_facility_build_string_from_mask (MM_BROADBAND_MODEM (self)->priv->modem_3gpp_ignored_facility_locks);
+        mm_dbg ("Ignoring facility locks: '%s'", str);
+        g_free (str);
+
+        ctx->facilities &= ~MM_BROADBAND_MODEM (self)->priv->modem_3gpp_ignored_facility_locks;
+    }
+
     /* Go on... */
     get_next_facility_lock_status (ctx);
 }
@@ -3206,7 +3218,8 @@ registration_state_changed (MMAtSerialPort *port,
      * we fight with the custom commands.  Plus CREG/CGREG access technologies
      * don't have fine-grained distinction between HSxPA or GPRS/EDGE, etc.
      */
-    if (MM_IFACE_MODEM_GET_INTERFACE (self)->load_access_technologies == modem_load_access_technologies)
+    if (MM_IFACE_MODEM_GET_INTERFACE (self)->load_access_technologies == modem_load_access_technologies ||
+        MM_IFACE_MODEM_GET_INTERFACE (self)->load_access_technologies == NULL)
         mm_iface_modem_3gpp_update_access_technologies (MM_IFACE_MODEM_3GPP (self), act);
 
     mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, cell_id);
@@ -5516,17 +5529,17 @@ cnmi_response_processor (MMBaseModem *self,
     return TRUE;
 }
 
-/*
- * Many devices based on Qualcomm chipsets don't support a <ds> value
- * of '1', despite saying they do in the AT+CNMI=? response.  But they
- * do accept '2'.  Since we're not doing much with delivery status
- * reports yet, if we get a CME 303 (not supported) error when setting
- * the message indication parameters via CNMI, fall back to the
- * Qualcomm-compatible CNMI parameters.
- */
 static const MMBaseModemAtCommand cnmi_sequence[] = {
-    { "+CNMI=2,1,2,1,0", 3, TRUE, cnmi_response_processor },
-    { "+CNMI=2,1,2,2,0", 3, TRUE, cnmi_response_processor },
+    { "+CNMI=2,1,2,1,0", 3, FALSE, cnmi_response_processor },
+
+    /* Many Qualcomm-based devices don't support <ds> of '1', despite
+     * reporting they support it in the +CNMI=? response.  But they do
+     * accept '2'.
+     */
+    { "+CNMI=2,1,2,2,0", 3, FALSE, cnmi_response_processor },
+
+    /* Last resort: turn off delivery status reports altogether */
+    { "+CNMI=2,1,2,0,0", 3, FALSE, cnmi_response_processor },
     { NULL }
 };
 
@@ -5734,6 +5747,8 @@ sms_pdu_part_list_ready (MMBroadbandModem *self,
 {
     const gchar *response;
     GError *error = NULL;
+    GList *info_list;
+    GList *l;
 
     /* Always always always unlock mem1 storage. Warned you've been. */
     mm_broadband_modem_unlock_sms_storages (self, TRUE, FALSE);
@@ -5745,45 +5760,32 @@ sms_pdu_part_list_ready (MMBroadbandModem *self,
         return;
     }
 
-    while (*response) {
+    info_list = mm_3gpp_parse_pdu_cmgl_response (response, &error);
+    if (error) {
+        g_simple_async_result_take_error (ctx->result, error);
+        list_parts_context_complete_and_free (ctx);
+        return;
+    }
+
+    for (l = info_list; l; l = g_list_next (l)) {
+        MM3gppPduInfo *info = l->data;
         MMSmsPart *part;
-        gint idx;
-        gint status;
-        gint tpdu_len;
-        gchar pdu[SMS_MAX_PDU_LEN + 1];
-        gint offset;
-        gint rv;
 
-        rv = sscanf (response,
-                     "+CMGL: %d,%d,,%d %" G_STRINGIFY (SMS_MAX_PDU_LEN) "s %n",
-                     &idx, &status, &tpdu_len, pdu, &offset);
-        if (4 != rv) {
-            g_simple_async_result_set_error (ctx->result,
-                                             MM_CORE_ERROR,
-                                             MM_CORE_ERROR_INVALID_ARGS,
-                                             "Couldn't parse SMS list response: "
-                                             "only %d fields parsed",
-                                             rv);
-            list_parts_context_complete_and_free (ctx);
-            return;
-        }
-
-        /* Will try to keep on the loop */
-        response += offset;
-
-        part = mm_sms_part_new_from_pdu (idx, pdu, &error);
+        part = mm_sms_part_new_from_pdu (info->index, info->pdu, &error);
         if (part) {
-            mm_dbg ("Correctly parsed PDU (%d)", idx);
+            mm_dbg ("Correctly parsed PDU (%d)", info->index);
             mm_iface_modem_messaging_take_part (MM_IFACE_MODEM_MESSAGING (self),
                                                 part,
-                                                sms_state_from_index (status),
+                                                sms_state_from_index (info->status),
                                                 ctx->list_storage);
         } else {
             /* Don't treat the error as critical */
-            mm_dbg ("Error parsing PDU (%d): %s", idx, error->message);
+            mm_dbg ("Error parsing PDU (%d): %s", info->index, error->message);
             g_clear_error (&error);
         }
     }
+
+    mm_3gpp_pdu_info_list_free (info_list);
 
     /* We consider all done */
     g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
@@ -8960,6 +8962,9 @@ set_property (GObject *object,
     case PROP_MODEM_3GPP_EPS_NETWORK_SUPPORTED:
         self->priv->modem_3gpp_eps_network_supported = g_value_get_boolean (value);
         break;
+    case PROP_MODEM_3GPP_IGNORED_FACILITY_LOCKS:
+        self->priv->modem_3gpp_ignored_facility_locks = g_value_get_flags (value);
+        break;
     case PROP_MODEM_CDMA_CDMA1X_REGISTRATION_STATE:
         self->priv->modem_cdma_cdma1x_registration_state = g_value_get_enum (value);
         break;
@@ -9049,6 +9054,9 @@ get_property (GObject *object,
     case PROP_MODEM_3GPP_EPS_NETWORK_SUPPORTED:
         g_value_set_boolean (value, self->priv->modem_3gpp_eps_network_supported);
         break;
+    case PROP_MODEM_3GPP_IGNORED_FACILITY_LOCKS:
+        g_value_set_flags (value, self->priv->modem_3gpp_ignored_facility_locks);
+        break;
     case PROP_MODEM_CDMA_CDMA1X_REGISTRATION_STATE:
         g_value_set_enum (value, self->priv->modem_cdma_cdma1x_registration_state);
         break;
@@ -9093,6 +9101,7 @@ mm_broadband_modem_init (MMBroadbandModem *self)
     self->priv->modem_3gpp_cs_network_supported = TRUE;
     self->priv->modem_3gpp_ps_network_supported = TRUE;
     self->priv->modem_3gpp_eps_network_supported = FALSE;
+    self->priv->modem_3gpp_ignored_facility_locks = MM_MODEM_3GPP_FACILITY_NONE;
     self->priv->modem_cdma_cdma1x_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
     self->priv->modem_cdma_evdo_registration_state = MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN;
     self->priv->modem_cdma_cdma1x_network_supported = TRUE;
@@ -9456,6 +9465,10 @@ mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
     g_object_class_override_property (object_class,
                                       PROP_MODEM_3GPP_EPS_NETWORK_SUPPORTED,
                                       MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED);
+
+    g_object_class_override_property (object_class,
+                                      PROP_MODEM_3GPP_IGNORED_FACILITY_LOCKS,
+                                      MM_IFACE_MODEM_3GPP_IGNORED_FACILITY_LOCKS);
 
     g_object_class_override_property (object_class,
                                       PROP_MODEM_CDMA_CDMA1X_REGISTRATION_STATE,

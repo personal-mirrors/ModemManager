@@ -76,10 +76,12 @@ struct _MMPluginPrivate {
     gboolean at;
     gboolean single_at;
     gboolean qcdm;
+    gboolean qmi;
     gboolean icera_probe;
     MMPortProbeAtCommand *custom_at_probe;
     guint64 send_delay;
     gboolean remove_echo;
+    gboolean send_lf;
 
     /* Probing setup and/or post-probing filter.
      * Plugins may use this method to decide whether they support a given
@@ -103,6 +105,7 @@ enum {
     PROP_ALLOWED_AT,
     PROP_ALLOWED_SINGLE_AT,
     PROP_ALLOWED_QCDM,
+    PROP_ALLOWED_QMI,
     PROP_ICERA_PROBE,
     PROP_ALLOWED_ICERA,
     PROP_FORBIDDEN_ICERA,
@@ -110,6 +113,7 @@ enum {
     PROP_CUSTOM_INIT,
     PROP_SEND_DELAY,
     PROP_REMOVE_ECHO,
+    PROP_SEND_LF,
     LAST_PROP
 };
 
@@ -703,10 +707,18 @@ mm_plugin_supports_port (MMPlugin *self,
             probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_ICERA);
     } else {
         /* cdc-wdm ports... */
-        probe_run_flags = MM_PORT_PROBE_QMI;
+        probe_run_flags = self->priv->qmi ? MM_PORT_PROBE_QMI : MM_PORT_PROBE_NONE;
     }
 
-    g_assert (probe_run_flags != MM_PORT_PROBE_NONE);
+    /* If no explicit probing was required, just request to grab it without probing anything.
+     * This may happen, e.g. with cdc-wdm ports which do not need QMI probing. */
+    if (probe_run_flags == MM_PORT_PROBE_NONE) {
+        g_simple_async_result_set_op_res_gpointer (async_result,
+                                                   GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_DEFER_UNTIL_SUGGESTED),
+                                                   NULL);
+        g_simple_async_result_complete_in_idle (async_result);
+        goto out;
+    }
 
     /* If a modem is already available and the plugin says that only one AT port is
      * expected, check if we alredy got the single AT port. And if so, we know this
@@ -743,6 +755,7 @@ mm_plugin_supports_port (MMPlugin *self,
                        ctx->flags,
                        self->priv->send_delay,
                        self->priv->remove_echo,
+                       self->priv->send_lf,
                        self->priv->custom_at_probe,
                        self->priv->custom_init,
                        (GAsyncReadyCallback)port_probe_run_ready,
@@ -878,6 +891,7 @@ mm_plugin_init (MMPlugin *self)
     /* Defaults */
     self->priv->send_delay = 100000;
     self->priv->remove_echo = TRUE;
+    self->priv->send_lf = FALSE;
 }
 
 static void
@@ -945,6 +959,10 @@ set_property (GObject *object,
         /* Construct only */
         self->priv->qcdm = g_value_get_boolean (value);
         break;
+    case PROP_ALLOWED_QMI:
+        /* Construct only */
+        self->priv->qmi = g_value_get_boolean (value);
+        break;
     case PROP_ICERA_PROBE:
         /* Construct only */
         self->priv->icera_probe = g_value_get_boolean (value);
@@ -972,6 +990,10 @@ set_property (GObject *object,
     case PROP_REMOVE_ECHO:
         /* Construct only */
         self->priv->remove_echo = g_value_get_boolean (value);
+        break;
+    case PROP_SEND_LF:
+        /* Construct only */
+        self->priv->send_lf = g_value_get_boolean (value);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1027,6 +1049,9 @@ get_property (GObject *object,
     case PROP_ALLOWED_QCDM:
         g_value_set_boolean (value, self->priv->qcdm);
         break;
+    case PROP_ALLOWED_QMI:
+        g_value_set_boolean (value, self->priv->qmi);
+        break;
     case PROP_ALLOWED_UDEV_TAGS:
         g_value_set_boxed (value, self->priv->udev_tags);
         break;
@@ -1050,6 +1075,9 @@ get_property (GObject *object,
         break;
     case PROP_REMOVE_ECHO:
         g_value_set_boolean (value, self->priv->remove_echo);
+        break;
+    case PROP_SEND_LF:
+        g_value_set_boolean (value, self->priv->send_lf);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1219,6 +1247,14 @@ mm_plugin_class_init (MMPluginClass *klass)
                                G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 
     g_object_class_install_property
+        (object_class, PROP_ALLOWED_QMI,
+         g_param_spec_boolean (MM_PLUGIN_ALLOWED_QMI,
+                               "Allowed QMI",
+                               "Whether QMI ports are allowed in this plugin",
+                               FALSE,
+                               G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+    g_object_class_install_property
         (object_class, PROP_ICERA_PROBE,
          g_param_spec_boolean (MM_PLUGIN_ICERA_PROBE,
                                "Icera probe",
@@ -1276,5 +1312,13 @@ mm_plugin_class_init (MMPluginClass *klass)
                                "Remove echo",
                                "Remove echo out of the AT responses",
                                TRUE,
+                               G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+    g_object_class_install_property
+        (object_class, PROP_SEND_LF,
+         g_param_spec_boolean (MM_PLUGIN_SEND_LF,
+                               "Send LF",
+                               "Send line-feed at the end of each AT command sent",
+                               FALSE,
                                G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 }

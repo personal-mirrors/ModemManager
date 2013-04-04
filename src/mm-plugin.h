@@ -52,6 +52,7 @@
 #define MM_PLUGIN_ALLOWED_AT                "allowed-at"
 #define MM_PLUGIN_ALLOWED_SINGLE_AT         "allowed-single-at"
 #define MM_PLUGIN_ALLOWED_QCDM              "allowed-qcdm"
+#define MM_PLUGIN_ALLOWED_QMI               "allowed-qmi"
 #define MM_PLUGIN_ICERA_PROBE               "icera-probe"
 #define MM_PLUGIN_ALLOWED_ICERA             "allowed-icera"
 #define MM_PLUGIN_FORBIDDEN_ICERA           "forbidden-icera"
@@ -59,6 +60,7 @@
 #define MM_PLUGIN_CUSTOM_AT_PROBE           "custom-at-probe"
 #define MM_PLUGIN_SEND_DELAY                "send-delay"
 #define MM_PLUGIN_REMOVE_ECHO               "remove-echo"
+#define MM_PLUGIN_SEND_LF                   "send-lf"
 
 typedef enum {
     MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED = 0x0,

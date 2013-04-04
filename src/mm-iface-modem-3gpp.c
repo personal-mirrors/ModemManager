@@ -963,6 +963,10 @@ mm_iface_modem_3gpp_update_access_technologies (MMIfaceModem3gpp *self,
                                                 MMModemAccessTechnology access_tech)
 {
     MMModem3gppRegistrationState state;
+    RegistrationStateContext *ctx;
+
+    ctx = get_registration_state_context (self);
+    g_assert (ctx);
 
     g_object_get (self,
                   MM_IFACE_MODEM_3GPP_REGISTRATION_STATE, &state,
@@ -971,7 +975,8 @@ mm_iface_modem_3gpp_update_access_technologies (MMIfaceModem3gpp *self,
     /* Even if registration state didn't change, report access technology,
      * but only if something valid to report */
     if (state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
-        state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING ||
+        ctx->reloading_operator) {
         if (access_tech != MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN)
             mm_iface_modem_update_access_technologies (MM_IFACE_MODEM (self),
                                                        access_tech,
@@ -2147,6 +2152,15 @@ iface_modem_3gpp_init (gpointer g_iface)
                                "Whether the modem works in the EPS network",
                                FALSE,
                                G_PARAM_READWRITE));
+
+    g_object_interface_install_property
+        (g_iface,
+         g_param_spec_flags (MM_IFACE_MODEM_3GPP_IGNORED_FACILITY_LOCKS,
+                             "Ignored locks",
+                             "Ignored facility locks",
+                             MM_TYPE_MODEM_3GPP_FACILITY,
+                             MM_MODEM_3GPP_FACILITY_NONE,
+                             G_PARAM_READWRITE));
 
     initialized = TRUE;
 }

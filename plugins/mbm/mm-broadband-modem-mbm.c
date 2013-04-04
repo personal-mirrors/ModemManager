@@ -37,6 +37,7 @@
 #include "mm-modem-helpers.h"
 #include "mm-broadband-modem-mbm.h"
 #include "mm-broadband-bearer-mbm.h"
+#include "mm-sim-mbm.h"
 #include "mm-base-modem-at.h"
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-3gpp.h"
@@ -68,6 +69,7 @@ struct _MMBroadbandModemMbmPrivate {
     GRegex *emrdy_regex;
     GRegex *pacsp_regex;
     GRegex *estksmenu_regex;
+    GRegex *estksms_regex;
     GRegex *emwi_regex;
     GRegex *erinfo_regex;
 
@@ -128,6 +130,29 @@ modem_create_bearer (MMIfaceModem *self,
                                  NULL, /* cancellable */
                                  (GAsyncReadyCallback)broadband_bearer_mbm_new_ready,
                                  result);
+}
+
+/*****************************************************************************/
+/* Create SIM (Modem interface) */
+
+static MMSim *
+create_sim_finish (MMIfaceModem *self,
+                   GAsyncResult *res,
+                   GError **error)
+{
+    return mm_sim_mbm_new_finish (res, error);
+}
+
+static void
+create_sim (MMIfaceModem *self,
+            GAsyncReadyCallback callback,
+            gpointer user_data)
+{
+    /* New MBM SIM */
+    mm_sim_mbm_new (MM_BASE_MODEM (self),
+                    NULL, /* cancellable */
+                    callback,
+                    user_data);
 }
 
 /*****************************************************************************/
@@ -1132,6 +1157,11 @@ setup_ports (MMBroadbandModem *_self)
 
         mm_at_serial_port_add_unsolicited_msg_handler (
             ports[i],
+            self->priv->estksms_regex,
+            NULL, NULL, NULL);
+
+        mm_at_serial_port_add_unsolicited_msg_handler (
+            ports[i],
             self->priv->emwi_regex,
             NULL, NULL, NULL);
     }
@@ -1177,6 +1207,8 @@ mm_broadband_modem_mbm_init (MMBroadbandModemMbm *self)
                                            G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     self->priv->estksmenu_regex = g_regex_new ("\\R\\*ESTKSMENU:.*\\R",
                                                G_REGEX_RAW | G_REGEX_OPTIMIZE | G_REGEX_MULTILINE | G_REGEX_NEWLINE_CRLF, G_REGEX_MATCH_NEWLINE_CRLF, NULL);
+    self->priv->estksms_regex = g_regex_new ("\\r\\n\\*ESTKSMS:.*\\r\\n",
+                                             G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     self->priv->emwi_regex = g_regex_new ("\\r\\n\\*EMWI: (\\d),(\\d).*\\r\\n",
                                           G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     self->priv->erinfo_regex = g_regex_new ("\\r\\n\\*ERINFO:\\s*(\\d),(\\d),(\\d).*\\r\\n",
@@ -1195,6 +1227,7 @@ finalize (GObject *object)
     g_regex_unref (self->priv->emrdy_regex);
     g_regex_unref (self->priv->pacsp_regex);
     g_regex_unref (self->priv->estksmenu_regex);
+    g_regex_unref (self->priv->estksms_regex);
     g_regex_unref (self->priv->emwi_regex);
     g_regex_unref (self->priv->erinfo_regex);
 
@@ -1206,6 +1239,8 @@ iface_modem_init (MMIfaceModem *iface)
 {
     iface->create_bearer = modem_create_bearer;
     iface->create_bearer_finish = modem_create_bearer_finish;
+    iface->create_sim = create_sim;
+    iface->create_sim_finish = create_sim_finish;
     iface->modem_after_sim_unlock = modem_after_sim_unlock;
     iface->modem_after_sim_unlock_finish = modem_after_sim_unlock_finish;
     iface->load_allowed_modes = load_allowed_modes;
