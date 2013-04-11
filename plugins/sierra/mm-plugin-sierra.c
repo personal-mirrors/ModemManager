@@ -80,6 +80,19 @@ gcap_ready (MMAtSerialPort *port,
             SierraCustomInitContext *ctx)
 {
     if (error) {
+        /* If consumed all tries and the last error was a timeout, assume the
+         * port is not AT */
+        if (ctx->retries == 0 &&
+            g_error_matches (error, MM_SERIAL_ERROR, MM_SERIAL_ERROR_RESPONSE_TIMEOUT)) {
+            mm_port_probe_set_result_at (ctx->probe, FALSE);
+        }
+        /* If reported a hard parse error, this port is definitely not an AT
+         * port, skip trying. */
+        else if (g_error_matches (error, MM_SERIAL_ERROR, MM_SERIAL_ERROR_PARSE_FAILED)) {
+            mm_port_probe_set_result_at (ctx->probe, FALSE);
+            ctx->retries = 0;
+        }
+
         /* Just retry... */
         sierra_custom_init_step (ctx);
         return;

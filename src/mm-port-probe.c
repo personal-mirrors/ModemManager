@@ -280,10 +280,9 @@ port_probe_run_task_free (PortProbeRunTask *task)
     if (task->source_id)
         g_source_remove (task->source_id);
 
-    if (task->buffer_full_id)
-        g_source_remove (task->buffer_full_id);
-
     if (task->serial) {
+        if (task->buffer_full_id)
+            g_signal_handler_disconnect (task->serial, task->buffer_full_id);
         if (mm_serial_port_is_open (task->serial))
             mm_serial_port_close (task->serial);
         g_object_unref (task->serial);
@@ -584,7 +583,6 @@ static const gchar *non_at_strings[] = {
     "os_logids.h",
     /* Sierra CnS port */
     "NETWORK SERVICE CHANGE",
-    "/SRC/AMSS",
     NULL
 };
 
@@ -597,15 +595,16 @@ static gboolean
 is_non_at_response (const guint8 *data, gsize len)
 {
     const gchar **iter;
-    size_t iter_len;
-    int i;
+    gsize iter_len;
+    gsize i;
 
     /* Some devices (observed on a ZTE branded "QUALCOMM INCORPORATED" model
      * "154") spew NULLs from some ports.
      */
-    if (   (len >= sizeof (zerobuf))
-        && (memcmp (data, zerobuf, sizeof (zerobuf)) == 0))
-        return TRUE;
+    for (i = 0; (len >= sizeof (zerobuf)) && (i < len - sizeof (zerobuf)); i++) {
+        if (!memcmp (&data[i], zerobuf, sizeof (zerobuf)))
+            return TRUE;
+    }
 
     /* Check for a well-known non-AT response.  There are some ports (eg many
      * Icera-based chipsets, Qualcomm Gobi devices before their firmware is
@@ -711,16 +710,6 @@ serial_probe_at_parse_response (MMAtSerialPort *port,
                 g_udev_device_get_subsystem (self->priv->port),
                 g_udev_device_get_name (self->priv->port));
         task->at_result_processor (self, NULL);
-        serial_probe_schedule (self);
-        return;
-    }
-
-    /* Early-abort AT probing if we get a response that indicates this is
-     * certainly not an AT-capable port.
-     */
-    if (response && is_non_at_response ((const guint8 *) response->str, response->len)) {
-        task->at_result_processor (self, NULL);
-        mm_port_probe_set_result_at (self, FALSE);
         serial_probe_schedule (self);
         return;
     }
@@ -954,6 +943,23 @@ serial_buffer_full (MMSerialPort *serial,
 }
 
 static gboolean
+serial_parser_filter_cb (gpointer filter,
+                         gpointer user_data,
+                         GString *response,
+                         GError **error)
+{
+    if (is_non_at_response ((const guint8 *) response->str, response->len)) {
+        g_set_error (error,
+                     MM_SERIAL_ERROR,
+                     MM_SERIAL_ERROR_PARSE_FAILED,
+                     "Not an AT response");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean
 serial_open_at (MMPortProbe *self)
 {
     PortProbeRunTask *task = self->priv->task;
@@ -967,6 +973,8 @@ serial_open_at (MMPortProbe *self)
 
     /* Create AT serial port if not done before */
     if (!task->serial) {
+        gpointer parser;
+
         task->serial = MM_SERIAL_PORT (mm_at_serial_port_new (g_udev_device_get_name (self->priv->port)));
         if (!task->serial) {
             port_probe_run_task_complete (
@@ -988,9 +996,13 @@ serial_open_at (MMPortProbe *self)
                       MM_SERIAL_PORT_SPEW_CONTROL,   TRUE,
                       NULL);
 
+        parser = mm_serial_parser_v1_new ();
+        mm_serial_parser_v1_add_filter (parser,
+                                        serial_parser_filter_cb,
+                                        NULL);
         mm_at_serial_port_set_response_parser (MM_AT_SERIAL_PORT (task->serial),
                                                mm_serial_parser_v1_parse,
-                                               mm_serial_parser_v1_new (),
+                                               parser,
                                                mm_serial_parser_v1_destroy);
     }
 
