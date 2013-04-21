@@ -2598,40 +2598,51 @@ load_unlock_required_ready (MMIfaceModem *self,
         if (error->domain == MM_SERIAL_ERROR ||
             g_error_matches (error,
                              MM_CORE_ERROR,
-                             MM_CORE_ERROR_CANCELLED) ||
-            g_error_matches (error,
-                             MM_MOBILE_EQUIPMENT_ERROR,
-                             MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED) ||
-            g_error_matches (error,
-                             MM_MOBILE_EQUIPMENT_ERROR,
-                             MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE) ||
-            g_error_matches (error,
-                             MM_MOBILE_EQUIPMENT_ERROR,
-                             MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG)) {
+                             MM_CORE_ERROR_CANCELLED)) {
             ctx->saved_error = error;
             ctx->step = UPDATE_LOCK_INFO_CONTEXT_STEP_LAST;
             update_lock_info_context_step (ctx);
             return;
+        } else if (g_error_matches (error,
+                                    MM_MOBILE_EQUIPMENT_ERROR,
+                                    MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED) ||
+                   g_error_matches (error,
+                                    MM_MOBILE_EQUIPMENT_ERROR,
+                                    MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE) ||
+                   g_error_matches (error,
+                                    MM_MOBILE_EQUIPMENT_ERROR,
+                                    MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG)) {
+            if (mm_iface_modem_is_cdma (self)) {
+                /* For mixed 3GPP+3GPP2 devices, skip SIM errors */
+                mm_dbg ("Skipping SIM error in 3GPP2-capable device, assuming no lock is needed");
+                g_error_free (error);
+                ctx->lock = MM_MODEM_LOCK_NONE;
+            } else {
+                /* SIM errors are only critical in 3GPP-only devices */
+                ctx->saved_error = error;
+                ctx->step = UPDATE_LOCK_INFO_CONTEXT_STEP_LAST;
+                update_lock_info_context_step (ctx);
+                return;
+            }
+        } else {
+            mm_dbg ("Couldn't check if unlock required: '%s'", error->message);
+            g_error_free (error);
+
+            /* Retry up to 6 times */
+            if (mm_gdbus_modem_get_unlock_required (ctx->skeleton) != MM_MODEM_LOCK_NONE &&
+                ++ctx->pin_check_tries < 6) {
+                mm_dbg ("Retrying (%u) unlock required check", ctx->pin_check_tries);
+                if (ctx->pin_check_timeout_id)
+                    g_source_remove (ctx->pin_check_timeout_id);
+                ctx->pin_check_timeout_id = g_timeout_add_seconds (2,
+                                                                   (GSourceFunc)load_unlock_required_again,
+                                                                   ctx);
+                return;
+            }
+
+            /* If reached max retries and still reporting error, set UNKNOWN */
+            ctx->lock = MM_MODEM_LOCK_UNKNOWN;
         }
-
-        mm_dbg ("Couldn't check if unlock required: '%s'", error->message);
-        g_error_free (error);
-
-        /* Retry up to 6 times */
-        if (mm_gdbus_modem_get_unlock_required (ctx->skeleton) != MM_MODEM_LOCK_NONE &&
-            ++ctx->pin_check_tries < 6) {
-            mm_dbg ("Retrying (%u) unlock required check", ctx->pin_check_tries);
-            if (ctx->pin_check_timeout_id)
-                g_source_remove (ctx->pin_check_timeout_id);
-            ctx->pin_check_timeout_id = g_timeout_add_seconds (
-                2,
-                (GSourceFunc)load_unlock_required_again,
-                ctx);
-            return;
-        }
-
-        /* If reached max retries and still reporting error, set UNKNOWN */
-        ctx->lock = MM_MODEM_LOCK_UNKNOWN;
     }
 
     /* Go on to next step */
@@ -2694,10 +2705,12 @@ update_lock_info_context_step (UpdateLockInfoContext *ctx)
 
     case UPDATE_LOCK_INFO_CONTEXT_STEP_AFTER_UNLOCK:
         /* If we get that no lock is required, run the after SIM unlock step
-         * in order to wait for the SIM to get ready */
-        if (ctx->lock == MM_MODEM_LOCK_NONE ||
-            ctx->lock == MM_MODEM_LOCK_SIM_PIN2 ||
-            ctx->lock == MM_MODEM_LOCK_SIM_PUK2) {
+         * in order to wait for the SIM to get ready.  Skip waiting on
+         * CDMA-only modems where we don't support a SIM. */
+        if (!mm_iface_modem_is_cdma_only (ctx->self) &&
+            (ctx->lock == MM_MODEM_LOCK_NONE ||
+             ctx->lock == MM_MODEM_LOCK_SIM_PIN2 ||
+             ctx->lock == MM_MODEM_LOCK_SIM_PUK2)) {
             if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->modem_after_sim_unlock != NULL &&
                 MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->modem_after_sim_unlock_finish != NULL) {
                 mm_dbg ("SIM is ready, running after SIM unlock step...");
@@ -3499,7 +3512,7 @@ initialization_context_complete_and_free_if_cancelled (InitializationContext *ct
     }
 
 #undef UINT_REPLY_READY_FN
-#define UINT_REPLY_READY_FN(NAME,DISPLAY,FATAL)                         \
+#define UINT_REPLY_READY_FN(NAME,DISPLAY)                               \
     static void                                                         \
     load_##NAME##_ready (MMIfaceModem *self,                            \
                          GAsyncResult *res,                             \
@@ -3512,27 +3525,97 @@ initialization_context_complete_and_free_if_cancelled (InitializationContext *ct
             MM_IFACE_MODEM_GET_INTERFACE (self)->load_##NAME##_finish (self, res, &error)); \
                                                                         \
         if (error) {                                                    \
-            if (FATAL) {                                                \
-                g_propagate_error (&ctx->fatal_error, error);           \
-                g_prefix_error (&ctx->fatal_error, "couldn't load %s: ", DISPLAY); \
-                /* Jump to the last step */                             \
-                ctx->step = INITIALIZATION_STEP_LAST;                   \
-            } else {                                                    \
-                mm_warn ("couldn't load %s: '%s'", DISPLAY, error->message); \
-                g_error_free (error);                                   \
-                /* Go on to next step */                                \
-                ctx->step++;                                            \
-            }                                                           \
-        } else {                                                        \
-            /* Go on to next step */                                    \
-            ctx->step++;                                                \
+            mm_warn ("couldn't load %s: '%s'", DISPLAY, error->message); \
+            g_error_free (error);                                       \
         }                                                               \
                                                                         \
+        /* Go on to next step */                                        \
+        ctx->step++;                                                    \
         interface_initialization_step (ctx);                            \
     }
 
-UINT_REPLY_READY_FN (current_capabilities, "Current Capabilities", TRUE)
-UINT_REPLY_READY_FN (modem_capabilities, "Modem Capabilities", FALSE)
+static void
+current_capabilities_load_unlock_required_ready (MMIfaceModem *self,
+                                                 GAsyncResult *res,
+                                                 InitializationContext *ctx)
+{
+    GError *error = NULL;
+
+    MM_IFACE_MODEM_GET_INTERFACE (self)->load_unlock_required_finish (self, res, &error);
+    if (error) {
+        /* These SIM errors indicate that there is NO valid SIM available. So,
+         * remove all 3GPP caps from the current capabilities */
+        if (g_error_matches (error,
+                             MM_MOBILE_EQUIPMENT_ERROR,
+                             MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED) ||
+            g_error_matches (error,
+                             MM_MOBILE_EQUIPMENT_ERROR,
+                             MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE) ||
+            g_error_matches (error,
+                             MM_MOBILE_EQUIPMENT_ERROR,
+                             MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG)) {
+            MMModemCapability caps;
+
+            mm_dbg ("Multimode device without SIM, no 3GPP capabilities");
+            caps = mm_gdbus_modem_get_current_capabilities (ctx->skeleton);
+            caps &= ~MM_MODEM_CAPABILITY_GSM_UMTS;
+            caps &= ~MM_MODEM_CAPABILITY_LTE;
+
+            /* CDMA-EVDO must still be around */
+            g_assert (caps & MM_MODEM_CAPABILITY_CDMA_EVDO);
+            mm_gdbus_modem_set_current_capabilities (ctx->skeleton, caps);
+        }
+
+        g_error_free (error);
+    }
+
+    /* Keep on */
+    ctx->step++;
+    interface_initialization_step (ctx);
+}
+
+static void
+load_current_capabilities_ready (MMIfaceModem *self,
+                                 GAsyncResult *res,
+                                 InitializationContext *ctx)
+{
+    MMModemCapability caps;
+    GError *error = NULL;
+
+    caps = MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_capabilities_finish (self, res, &error);
+    if (error) {
+        g_propagate_error (&ctx->fatal_error, error);
+        g_prefix_error (&ctx->fatal_error, "couldn't load current capabilities: ");
+        /* Jump to the last step */
+        ctx->step = INITIALIZATION_STEP_LAST;
+        interface_initialization_step (ctx);
+        return;
+    }
+
+    /* Update current caps right away, even if we may fix them during the
+     * multimode device check. No big deal in updating them twice, as we're not
+     * exposed in DBus yet. */
+    mm_gdbus_modem_set_current_capabilities (ctx->skeleton, caps);
+
+    /* If the device is a multimode device (3GPP+3GPP2) check whether we have a
+     * SIM or not. */
+    if (caps & MM_MODEM_CAPABILITY_CDMA_EVDO &&
+        (caps & MM_MODEM_CAPABILITY_GSM_UMTS || caps & MM_MODEM_CAPABILITY_LTE) &&
+        MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_unlock_required &&
+        MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_unlock_required_finish) {
+        mm_dbg ("Checking if multimode device has a SIM...");
+        MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_unlock_required (
+            ctx->self,
+            (GAsyncReadyCallback)current_capabilities_load_unlock_required_ready,
+            ctx);
+        return;
+    }
+
+    ctx->step++;
+    interface_initialization_step (ctx);
+}
+
+UINT_REPLY_READY_FN (modem_capabilities, "Modem Capabilities")
 STR_REPLY_READY_FN (manufacturer, "Manufacturer")
 STR_REPLY_READY_FN (model, "Model")
 STR_REPLY_READY_FN (revision, "Revision")
@@ -3614,7 +3697,7 @@ load_supported_bands_ready (MMIfaceModem *self,
     interface_initialization_step (ctx);
 }
 
-UINT_REPLY_READY_FN (power_state, "Power State", FALSE)
+UINT_REPLY_READY_FN (power_state, "Power State")
 
 static void
 modem_update_lock_info_ready (MMIfaceModem *self,
@@ -3728,15 +3811,17 @@ interface_initialization_step (InitializationContext *ctx)
         }
         /* Load primary port if not done before */
         if (!mm_gdbus_modem_get_primary_port (ctx->skeleton)) {
-            MMPort *primary;
+            MMPort *primary = NULL;
 
 #if defined WITH_QMI
             primary = MM_PORT (mm_base_modem_peek_port_qmi (MM_BASE_MODEM (ctx->self)));
+#endif
+#if defined WITH_MBIM
+            if (!primary)
+                primary = MM_PORT (mm_base_modem_peek_port_mbim (MM_BASE_MODEM (ctx->self)));
+#endif
             if (!primary)
                 primary = MM_PORT (mm_base_modem_peek_port_primary (MM_BASE_MODEM (ctx->self)));
-#else
-            primary = MM_PORT (mm_base_modem_peek_port_primary (MM_BASE_MODEM (ctx->self)));
-#endif
 
             g_assert (primary != NULL);
             mm_gdbus_modem_set_primary_port (ctx->skeleton, mm_port_get_device (primary));

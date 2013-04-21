@@ -40,6 +40,14 @@ libmodem_helpers_la_SOURCES += \
 libmodem_helpers_la_CPPFLAGS += $(QMI_CFLAGS)
 endif
 
+# Additional MBIM support in libmodem-helpers
+if WITH_MBIM
+libmodem_helpers_la_SOURCES += \
+	mm-modem-helpers-mbim.c \
+	mm-modem-helpers-mbim.h
+libmodem_helpers_la_CPPFLAGS += $(MBIM_CFLAGS)
+endif
+
 # libserial specific enum types
 SERIAL_ENUMS = \
 	$(srcdir)/mm-port.h \
@@ -83,12 +91,20 @@ libserial_la_SOURCES = \
 	mm-gps-serial-port.c \
 	mm-gps-serial-port.h
 
-# Additional QMI support in libmodem-helpers
+# Additional QMI support in libserial
 if WITH_QMI
 libserial_la_SOURCES += \
 	mm-qmi-port.c \
 	mm-qmi-port.h
 libserial_la_CPPFLAGS += $(QMI_CFLAGS)
+endif
+
+# Additional MBIM support in libserial
+if WITH_MBIM
+libserial_la_SOURCES += \
+	mm-mbim-port.c \
+	mm-mbim-port.h
+libserial_la_CPPFLAGS += $(MBIM_CFLAGS)
 endif
 
 # Daemon specific enum types
@@ -239,6 +255,18 @@ ModemManager_CPPFLAGS += $(QMI_CFLAGS)
 ModemManager_LDADD += $(QMI_LIBS)
 endif
 
+# Additional MBIM support in ModemManager
+if WITH_MBIM
+ModemManager_SOURCES += \
+	mm-sim-mbim.h \
+	mm-sim-mbim.c \
+	mm-bearer-mbim.h \
+	mm-bearer-mbim.c \
+	mm-broadband-modem-mbim.h \
+	mm-broadband-modem-mbim.c
+ModemManager_CPPFLAGS += $(MBIM_CFLAGS)
+ModemManager_LDADD += $(MBIM_LIBS)
+endif
 
 EXTRA_DIST = \
 	$(udevrules_DATA) \
