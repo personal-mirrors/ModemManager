@@ -502,7 +502,15 @@ capabilities_sequence_ready (MMBaseModem *self,
 
     result = mm_base_modem_at_sequence_finish (self, res, NULL, &error);
     if (!result) {
-        g_simple_async_result_take_error (ctx->result, error);
+        if (error)
+            g_simple_async_result_take_error (ctx->result, error);
+        else {
+            g_simple_async_result_set_error (ctx->result,
+                                             MM_CORE_ERROR,
+                                             MM_CORE_ERROR_FAILED,
+                                             "%s",
+                                             "Failed to determine modem capabilities.");
+        }
         load_capabilities_context_complete_and_free (ctx);
         return;
     }
@@ -1643,11 +1651,10 @@ normalize_ciev_cind_signal_quality (guint quality,
                                     guint min,
                                     guint max)
 {
-    if (!max &&
-        quality >= 0) {
+    if (!max) {
         /* If we didn't get a max, assume it was 5. Note that we do allow
          * 0, meaning no signal at all. */
-        return (quality * 20);
+        return (quality <= 5) ? (quality * 20) : 100;
     }
 
     if (quality >= min &&
