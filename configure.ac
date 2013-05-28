@@ -24,26 +24,6 @@ LT_INIT
 dnl
 dnl Documentation
 dnl
-
-AC_ARG_WITH(docs, AS_HELP_STRING([--with-docs], [Build ModemManager documentation]))
-AM_CONDITIONAL(WITH_DOCS, test "x$with_docs" = "xyes")
-case $with_docs in
-    yes)
-        # Check for dia if we are building gtk_doc
-        AC_PATH_PROG(DIA, dia)
-        AC_SUBST(DIA)
-
-        if test -z "$DIA"; then
-           AC_MSG_ERROR([Could not find Dia tool required to build documentation.])
-        fi
-
-        enable_gtk_doc=yes
-        ;;
-    *)
-        with_docs=no
-        ;;
-esac
-
 GTK_DOC_CHECK(1.0)
 
 dnl
@@ -176,7 +156,7 @@ dnl
 AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support]), [], [with_mbim=auto])
 if (test "${with_mbim}" != "no"); then
     PKG_CHECK_MODULES(MBIM,
-                      [mbim-glib],
+                      [mbim-glib >= 1.0.0],
                       [have_libmbim_glib=yes],
                       [have_libmbim_glib=no])
     AC_SUBST(MBIM_CFLAGS)
@@ -298,7 +278,7 @@ echo "
 
     PPP-enabled tests:       ${have_pppd_headers}
     PolicyKit support:       ${with_polkit}
-    Documentation:           ${with_docs}
+    Documentation:           ${enable_gtk_doc}
     MBIM support:            ${with_mbim}
     QMI support:             ${with_qmi}
     Newest QMI commands:     ${with_newest_qmi_commands}
