@@ -38,10 +38,12 @@ static void iface_modem_init      (MMIfaceModem *iface);
 static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
 static void iface_modem_messaging_init (MMIfaceModemMessaging *iface);
 
+static MMIfaceModem *iface_modem_parent;
+
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemCinterion, mm_broadband_modem_cinterion, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init));
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init))
 
 struct _MMBroadbandModemCinterionPrivate {
     /* Flag to know if we should try AT^SIND or not to get psinfo */
@@ -514,10 +516,84 @@ load_access_technologies (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* ALLOWED MODES */
+/* Load supported modes (Modem interface) */
+
+static GArray *
+load_supported_modes_finish (MMIfaceModem *self,
+                             GAsyncResult *res,
+                             GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return NULL;
+
+    return g_array_ref (g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static void
+parent_load_supported_modes_ready (MMIfaceModem *self,
+                                   GAsyncResult *res,
+                                   GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+    GArray *all;
+    GArray *combinations;
+    GArray *filtered;
+    MMModemModeCombination mode;
+
+    all = iface_modem_parent->load_supported_modes_finish (self, res, &error);
+    if (!all) {
+        g_simple_async_result_take_error (simple, error);
+        g_simple_async_result_complete (simple);
+        g_object_unref (simple);
+        return;
+    }
+
+    /* Build list of combinations */
+    combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 3);
+
+    /* 2G only */
+    mode.allowed = MM_MODEM_MODE_2G;
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+    /* 3G only */
+    mode.allowed = MM_MODEM_MODE_3G;
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+    /* 2G and 3G */
+    mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+
+    /* Filter out those unsupported modes */
+    filtered = mm_filter_supported_modes (all, combinations);
+    g_array_unref (all);
+    g_array_unref (combinations);
+
+    g_simple_async_result_set_op_res_gpointer (simple, filtered, (GDestroyNotify) g_array_unref);
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+load_supported_modes (MMIfaceModem *self,
+                      GAsyncReadyCallback callback,
+                      gpointer user_data)
+{
+    /* Run parent's loading */
+    iface_modem_parent->load_supported_modes (
+        MM_IFACE_MODEM (self),
+        (GAsyncReadyCallback)parent_load_supported_modes_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                   callback,
+                                   user_data,
+                                   load_supported_modes));
+}
+
+/*****************************************************************************/
+/* Set current modes (Modem interface) */
 
 static gboolean
-set_allowed_modes_finish (MMIfaceModem *self,
+set_current_modes_finish (MMIfaceModem *self,
                           GAsyncResult *res,
                           GError **error)
 {
@@ -542,7 +618,7 @@ allowed_access_technology_update_ready (MMBroadbandModemCinterion *self,
 }
 
 static void
-set_allowed_modes (MMIfaceModem *self,
+set_current_modes (MMIfaceModem *self,
                    MMModemMode allowed,
                    MMModemMode preferred,
                    GAsyncReadyCallback callback,
@@ -553,7 +629,7 @@ set_allowed_modes (MMIfaceModem *self,
     result = g_simple_async_result_new (G_OBJECT (self),
                                         callback,
                                         user_data,
-                                        set_allowed_modes);
+                                        set_current_modes);
 
     /* For dual 2G/3G devices... */
     if (mm_iface_modem_is_2g (self) &&
@@ -570,11 +646,9 @@ set_allowed_modes (MMIfaceModem *self,
          *   which is based on the quality of the connection.
          */
         cmd = g_string_new ("+COPS=,,,");
-        if (allowed == MM_MODEM_MODE_3G &&
-            preferred == MM_MODEM_MODE_NONE) {
+        if (allowed == MM_MODEM_MODE_3G) {
             g_string_append (cmd, "2");
-        } else if (allowed == MM_MODEM_MODE_2G &&
-                   preferred == MM_MODEM_MODE_NONE) {
+        } else if (allowed == MM_MODEM_MODE_2G) {
             g_string_append (cmd, "0");
         } else {
             gchar *allowed_str;
@@ -879,12 +953,12 @@ load_current_bands (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* SET BANDS */
+/* Set current bands (Modem interface) */
 
 static gboolean
-set_bands_finish (MMIfaceModem *self,
-                  GAsyncResult *res,
-                  GError **error)
+set_current_bands_finish (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          GError **error)
 {
     return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
@@ -1074,10 +1148,10 @@ set_bands_2g (MMIfaceModem *self,
 }
 
 static void
-set_bands (MMIfaceModem *self,
-           GArray *bands_array,
-           GAsyncReadyCallback callback,
-           gpointer user_data)
+set_current_bands (MMIfaceModem *self,
+                   GArray *bands_array,
+                   GAsyncReadyCallback callback,
+                   gpointer user_data)
 {
     GSimpleAsyncResult *result;
 
@@ -1090,7 +1164,7 @@ set_bands (MMIfaceModem *self,
     result = g_simple_async_result_new (G_OBJECT (self),
                                         callback,
                                         user_data,
-                                        set_bands);
+                                        set_current_bands);
 
     if (mm_iface_modem_is_3g (self))
         set_bands_3g (self, bands_array, result);
@@ -1191,14 +1265,18 @@ finalize (GObject *object)
 static void
 iface_modem_init (MMIfaceModem *iface)
 {
-    iface->set_allowed_modes = set_allowed_modes;
-    iface->set_allowed_modes_finish = set_allowed_modes_finish;
+    iface_modem_parent = g_type_interface_peek_parent (iface);
+
+    iface->load_supported_modes = load_supported_modes;
+    iface->load_supported_modes_finish = load_supported_modes_finish;
+    iface->set_current_modes = set_current_modes;
+    iface->set_current_modes_finish = set_current_modes_finish;
     iface->load_supported_bands = load_supported_bands;
     iface->load_supported_bands_finish = load_supported_bands_finish;
     iface->load_current_bands = load_current_bands;
     iface->load_current_bands_finish = load_current_bands_finish;
-    iface->set_bands = set_bands;
-    iface->set_bands_finish = set_bands_finish;
+    iface->set_current_bands = set_current_bands;
+    iface->set_current_bands_finish = set_current_bands_finish;
     iface->load_access_technologies = load_access_technologies;
     iface->load_access_technologies_finish = load_access_technologies_finish;
     iface->setup_flow_control = setup_flow_control;

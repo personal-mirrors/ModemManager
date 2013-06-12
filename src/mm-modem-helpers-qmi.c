@@ -42,6 +42,29 @@ mm_modem_capability_from_qmi_radio_interface (QmiDmsRadioInterface network)
 
 /*****************************************************************************/
 
+MMModemMode
+mm_modem_mode_from_qmi_radio_interface (QmiDmsRadioInterface network)
+{
+    switch (network) {
+    case QMI_DMS_RADIO_INTERFACE_CDMA20001X:
+        return MM_MODEM_MODE_2G;
+    case QMI_DMS_RADIO_INTERFACE_EVDO:
+        return MM_MODEM_MODE_3G;
+    case QMI_DMS_RADIO_INTERFACE_GSM:
+        return MM_MODEM_MODE_2G;
+    case QMI_DMS_RADIO_INTERFACE_UMTS:
+        return MM_MODEM_MODE_3G;
+    case QMI_DMS_RADIO_INTERFACE_LTE:
+        return MM_MODEM_MODE_4G;
+    default:
+        mm_warn ("Unhandled QMI radio interface (%u)",
+                 (guint)network);
+        return MM_MODEM_MODE_NONE;
+    }
+}
+
+/*****************************************************************************/
+
 /* pin1 TRUE for PIN1, FALSE for PIN2 */
 MMModemLock
 mm_modem_lock_from_qmi_uim_pin_status (QmiDmsUimPinStatus status,
@@ -878,6 +901,27 @@ mm_modem_capability_from_qmi_rat_mode_preference (QmiNasRatModePreference qmi)
     return caps;
 }
 
+QmiNasRatModePreference
+mm_modem_capability_to_qmi_rat_mode_preference (MMModemCapability caps)
+{
+    QmiNasRatModePreference qmi = 0;
+
+    if (caps & MM_MODEM_CAPABILITY_CDMA_EVDO) {
+        qmi |= QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1X;
+        qmi |= QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1XEVDO;
+    }
+
+    if (caps & MM_MODEM_CAPABILITY_GSM_UMTS) {
+        qmi |= QMI_NAS_RAT_MODE_PREFERENCE_GSM;
+        qmi |= QMI_NAS_RAT_MODE_PREFERENCE_UMTS;
+    }
+
+    if (caps & MM_MODEM_CAPABILITY_LTE)
+        qmi |= QMI_NAS_RAT_MODE_PREFERENCE_LTE;
+
+    return qmi;
+}
+
 /*****************************************************************************/
 
 MMModemCapability
@@ -906,6 +950,34 @@ mm_modem_capability_from_qmi_radio_technology_preference (QmiNasRadioTechnologyP
     /* FIXME: LTE Advanced? */
 
     return caps;
+}
+
+QmiNasRadioTechnologyPreference
+mm_modem_capability_to_qmi_radio_technology_preference (MMModemCapability caps)
+{
+    QmiNasRatModePreference qmi = 0;
+
+    /* It is not expected to have a modem supporting 3GPP and 3GPP2 at the same
+     * time but not supporting SSP. */
+    g_warn_if_fail (caps & MM_MODEM_CAPABILITY_GSM_UMTS &&
+                    caps & MM_MODEM_CAPABILITY_CDMA_EVDO);
+
+    if (caps & MM_MODEM_CAPABILITY_GSM_UMTS) {
+        qmi |= QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP;
+        qmi |= QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AMPS_OR_GSM;
+        qmi |= QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_CDMA_OR_WCDMA;
+    }
+
+    if (caps & MM_MODEM_CAPABILITY_CDMA_EVDO) {
+        qmi |= QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP2;
+        qmi |= QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_CDMA_OR_WCDMA;
+        qmi |= QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_HDR;
+    }
+
+    if (caps & MM_MODEM_CAPABILITY_LTE)
+        qmi |= QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_LTE;
+
+    return qmi;
 }
 
 /*****************************************************************************/
@@ -1153,8 +1225,6 @@ mm_modem_capability_from_qmi_capabilities_context (MMQmiCapabilitiesContext *ctx
 {
     MMModemCapability tmp = MM_MODEM_CAPABILITY_NONE;
     gchar *nas_ssp_mode_preference_str;
-    gchar *nas_ssp_band_preference_str;
-    gchar *nas_ssp_lte_band_preference_str;
     gchar *nas_tp_str;
     gchar *dms_capabilities_str;
     gchar *tmp_str;
@@ -1163,12 +1233,6 @@ mm_modem_capability_from_qmi_capabilities_context (MMQmiCapabilitiesContext *ctx
      * and if not available it falls back to using Band Preference TLVs */
     if (ctx->nas_ssp_mode_preference_mask)
         tmp = mm_modem_capability_from_qmi_rat_mode_preference (ctx->nas_ssp_mode_preference_mask);
-    else if (ctx->nas_ssp_band_preference_mask) {
-        tmp = mm_modem_capability_from_qmi_band_preference (ctx->nas_ssp_band_preference_mask);
-        /* Just the presence of the LTE band preference tells us it's LTE */
-        if (ctx->nas_ssp_lte_band_preference_mask)
-            tmp |= MM_MODEM_CAPABILITY_LTE;
-    }
 
     /* If no value retrieved from SSP, check TP. We only process TP
      * values if not 'auto'. */
@@ -1187,34 +1251,20 @@ mm_modem_capability_from_qmi_capabilities_context (MMQmiCapabilitiesContext *ctx
     else
         tmp &= ctx->dms_capabilities;
 
-    /* Modems which have 'LTE' capability reported by DMS will always have it
-     * reported in 'current capabilities', even if it may not be currently
-     * allowed (i.e. not selected in 'allowed-modes') */
-    if (ctx->dms_capabilities & MM_MODEM_CAPABILITY_LTE)
-        tmp |= MM_MODEM_CAPABILITY_LTE;
-
     /* Log about the logic applied */
     nas_ssp_mode_preference_str = qmi_nas_rat_mode_preference_build_string_from_mask (ctx->nas_ssp_mode_preference_mask);
-    nas_ssp_band_preference_str = qmi_nas_band_preference_build_string_from_mask (ctx->nas_ssp_band_preference_mask);
-    nas_ssp_lte_band_preference_str = qmi_nas_lte_band_preference_build_string_from_mask (ctx->nas_ssp_band_preference_mask);
     nas_tp_str = qmi_nas_radio_technology_preference_build_string_from_mask (ctx->nas_tp_mask);
     dms_capabilities_str = mm_modem_capability_build_string_from_mask (ctx->dms_capabilities);
     tmp_str = mm_modem_capability_build_string_from_mask (tmp);
     mm_dbg ("Current capabilities built: '%s'\n"
             "  SSP mode preference: '%s'\n"
-            "  SSP band preference: '%s'\n"
-            "  SSP LTE band preference: '%s'\n"
             "  TP: '%s'\n"
             "  DMS Capabilities: '%s'",
             tmp_str,
             nas_ssp_mode_preference_str ? nas_ssp_mode_preference_str : "unknown",
-            nas_ssp_band_preference_str ? nas_ssp_band_preference_str : "unknown",
-            nas_ssp_lte_band_preference_str ? nas_ssp_lte_band_preference_str : "unknown",
             nas_tp_str ? nas_tp_str : "unknown",
             dms_capabilities_str);
     g_free (nas_ssp_mode_preference_str);
-    g_free (nas_ssp_band_preference_str);
-    g_free (nas_ssp_lte_band_preference_str);
     g_free (nas_tp_str);
     g_free (dms_capabilities_str);
     g_free (tmp_str);

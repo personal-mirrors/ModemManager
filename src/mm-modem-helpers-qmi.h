@@ -26,6 +26,8 @@
 
 MMModemCapability mm_modem_capability_from_qmi_radio_interface (QmiDmsRadioInterface network);
 
+MMModemMode mm_modem_mode_from_qmi_radio_interface (QmiDmsRadioInterface network);
+
 MMModemLock mm_modem_lock_from_qmi_uim_pin_status (QmiDmsUimPinStatus status,
                                                        gboolean pin1);
 
@@ -53,8 +55,10 @@ QmiNasRatModePreference mm_modem_mode_to_qmi_rat_mode_preference (MMModemMode mo
                                                                   gboolean is_3gpp);
 
 MMModemCapability mm_modem_capability_from_qmi_rat_mode_preference (QmiNasRatModePreference qmi);
+QmiNasRatModePreference mm_modem_capability_to_qmi_rat_mode_preference (MMModemCapability caps);
 
 MMModemCapability mm_modem_capability_from_qmi_radio_technology_preference (QmiNasRadioTechnologyPreference qmi);
+QmiNasRadioTechnologyPreference mm_modem_capability_to_qmi_radio_technology_preference (MMModemCapability caps);
 
 MMModemCapability mm_modem_capability_from_qmi_band_preference (QmiNasBandPreference qmi);
 
@@ -96,8 +100,6 @@ QmiWdsAuthentication mm_bearer_allowed_auth_to_qmi_authentication (MMBearerAllow
 typedef struct {
     /* NAS System Selection Preference */
     QmiNasRatModePreference nas_ssp_mode_preference_mask;
-    QmiNasBandPreference    nas_ssp_band_preference_mask;
-    QmiNasLteBandPreference nas_ssp_lte_band_preference_mask;
     /* NAS Technology Preference */
     QmiNasRadioTechnologyPreference nas_tp_mask;
     /* DMS Capabilities */

@@ -42,13 +42,13 @@ typedef struct _MMIfaceModem MMIfaceModem;
 struct _MMIfaceModem {
     GTypeInterface g_iface;
 
-    /* Loading of the ModemCapabilities property */
-    void (*load_modem_capabilities) (MMIfaceModem *self,
-                                     GAsyncReadyCallback callback,
-                                     gpointer user_data);
-    MMModemCapability (*load_modem_capabilities_finish) (MMIfaceModem *self,
-                                                         GAsyncResult *res,
-                                                         GError **error);
+    /* Loading of the SupportedCapabilities property */
+    void (*load_supported_capabilities) (MMIfaceModem *self,
+                                         GAsyncReadyCallback callback,
+                                         gpointer user_data);
+    GArray * (*load_supported_capabilities_finish) (MMIfaceModem *self,
+                                                    GAsyncResult *res,
+                                                    GError **error);
 
     /* Loading of the CurrentCapabilities property */
     void (*load_current_capabilities) (MMIfaceModem *self,
@@ -126,15 +126,15 @@ struct _MMIfaceModem {
     void (*load_supported_modes) (MMIfaceModem *self,
                                   GAsyncReadyCallback callback,
                                   gpointer user_data);
-    MMModemMode (*load_supported_modes_finish) (MMIfaceModem *self,
-                                                GAsyncResult *res,
-                                                GError **error);
+    GArray * (*load_supported_modes_finish) (MMIfaceModem *self,
+                                             GAsyncResult *res,
+                                             GError **error);
 
-    /* Loading of the AllowedModes and PreferredMode properties */
-    void (*load_allowed_modes) (MMIfaceModem *self,
+    /* Loading of the Modes property */
+    void (*load_current_modes) (MMIfaceModem *self,
                                 GAsyncReadyCallback callback,
                                 gpointer user_data);
-    gboolean (*load_allowed_modes_finish) (MMIfaceModem *self,
+    gboolean (*load_current_modes_finish) (MMIfaceModem *self,
                                            GAsyncResult *res,
                                            MMModemMode *allowed,
                                            MMModemMode *preferred,
@@ -155,6 +155,14 @@ struct _MMIfaceModem {
     GArray * (*load_current_bands_finish) (MMIfaceModem *self,
                                            GAsyncResult *res,
                                            GError **error);
+
+    /* Loading of the SupportedIpFamilies property */
+    void (* load_supported_ip_families) (MMIfaceModem *self,
+                                         GAsyncReadyCallback callback,
+                                         gpointer user_data);
+    MMBearerIpFamily (* load_supported_ip_families_finish) (MMIfaceModem *self,
+                                                           GAsyncResult *res,
+                                                           GError **error);
 
     /* Loading of the PowerState property */
     void (* load_power_state) (MMIfaceModem *self,
@@ -209,22 +217,31 @@ struct _MMIfaceModem {
                                      GAsyncResult *res,
                                      GError **error);
 
-    /* Asynchronous allowed band setting operation */
-    void (*set_bands) (MMIfaceModem *self,
-                       GArray *bands_array,
-                       GAsyncReadyCallback callback,
-                       gpointer user_data);
-    gboolean (*set_bands_finish) (MMIfaceModem *self,
-                                  GAsyncResult *res,
-                                  GError **error);
+    /* Asynchronous capabilities setting operation */
+    void (*set_current_capabilities) (MMIfaceModem *self,
+                                      MMModemCapability,
+                                      GAsyncReadyCallback callback,
+                                      gpointer user_data);
+    gboolean (*set_current_capabilities_finish) (MMIfaceModem *self,
+                                                 GAsyncResult *res,
+                                                 GError **error);
 
-    /* Asynchronous allowed mode setting operation */
-    void (*set_allowed_modes) (MMIfaceModem *self,
+    /* Asynchronous current band setting operation */
+    void (*set_current_bands) (MMIfaceModem *self,
+                               GArray *bands_array,
+                               GAsyncReadyCallback callback,
+                               gpointer user_data);
+    gboolean (*set_current_bands_finish) (MMIfaceModem *self,
+                                          GAsyncResult *res,
+                                          GError **error);
+
+    /* Asynchronous current mode setting operation */
+    void (*set_current_modes) (MMIfaceModem *self,
                                MMModemMode modes,
                                MMModemMode preferred,
                                GAsyncReadyCallback callback,
                                gpointer user_data);
-    gboolean (*set_allowed_modes_finish) (MMIfaceModem *self,
+    gboolean (*set_current_modes_finish) (MMIfaceModem *self,
                                           GAsyncResult *res,
                                           GError **error);
 
@@ -320,13 +337,12 @@ gboolean          mm_iface_modem_is_cdma                  (MMIfaceModem *self);
 gboolean          mm_iface_modem_is_cdma_only             (MMIfaceModem *self);
 
 /* Helpers to query supported modes */
-MMModemMode mm_iface_modem_get_supported_modes (MMIfaceModem *self);
-gboolean    mm_iface_modem_is_2g               (MMIfaceModem *self);
-gboolean    mm_iface_modem_is_2g_only          (MMIfaceModem *self);
-gboolean    mm_iface_modem_is_3g               (MMIfaceModem *self);
-gboolean    mm_iface_modem_is_3g_only          (MMIfaceModem *self);
-gboolean    mm_iface_modem_is_4g               (MMIfaceModem *self);
-gboolean    mm_iface_modem_is_4g_only          (MMIfaceModem *self);
+gboolean mm_iface_modem_is_2g      (MMIfaceModem *self);
+gboolean mm_iface_modem_is_2g_only (MMIfaceModem *self);
+gboolean mm_iface_modem_is_3g      (MMIfaceModem *self);
+gboolean mm_iface_modem_is_3g_only (MMIfaceModem *self);
+gboolean mm_iface_modem_is_4g      (MMIfaceModem *self);
+gboolean mm_iface_modem_is_4g_only (MMIfaceModem *self);
 
 /* Initialize Modem interface (async) */
 void     mm_iface_modem_initialize        (MMIfaceModem *self,
@@ -410,23 +426,23 @@ void mm_iface_modem_update_signal_quality (MMIfaceModem *self,
                                            guint signal_quality);
 
 /* Allow setting allowed modes */
-void     mm_iface_modem_set_allowed_modes        (MMIfaceModem *self,
+void     mm_iface_modem_set_current_modes        (MMIfaceModem *self,
                                                   MMModemMode allowed,
                                                   MMModemMode preferred,
                                                   GAsyncReadyCallback callback,
                                                   gpointer user_data);
-gboolean mm_iface_modem_set_allowed_modes_finish (MMIfaceModem *self,
+gboolean mm_iface_modem_set_current_modes_finish (MMIfaceModem *self,
                                                   GAsyncResult *res,
                                                   GError **error);
 
 /* Allow setting bands */
-void     mm_iface_modem_set_bands        (MMIfaceModem *self,
-                                          GArray *bands_array,
-                                          GAsyncReadyCallback callback,
-                                          gpointer user_data);
-gboolean mm_iface_modem_set_bands_finish (MMIfaceModem *self,
-                                          GAsyncResult *res,
-                                          GError **error);
+void     mm_iface_modem_set_current_bands        (MMIfaceModem *self,
+                                                  GArray *bands_array,
+                                                  GAsyncReadyCallback callback,
+                                                  gpointer user_data);
+gboolean mm_iface_modem_set_current_bands_finish (MMIfaceModem *self,
+                                                  GAsyncResult *res,
+                                                  GError **error);
 
 /* Allow creating bearers */
 void     mm_iface_modem_create_bearer         (MMIfaceModem *self,

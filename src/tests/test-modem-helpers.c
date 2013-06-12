@@ -18,6 +18,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include <libmm-glib.h>
 #include "mm-modem-helpers.h"
 #include "mm-log.h"
 
@@ -1456,13 +1457,99 @@ test_cind_response_moto_v3m (void *f, gpointer d)
 }
 
 /*****************************************************************************/
-/* Test CGDCONT responses */
+/* Test CGDCONT test responses */
 
 static void
-test_cgdcont_results (const gchar *desc,
-                      const gchar *reply,
-                      MM3gppPdpContext *expected_results,
-                      guint32 expected_results_len)
+test_cgdcont_test_results (const gchar *desc,
+                           const gchar *reply,
+                           MM3gppPdpContextFormat *expected_results,
+                           guint32 expected_results_len)
+{
+    GList *l;
+    GError *error = NULL;
+    GList *results;
+
+    g_print ("\nTesting %s +CGDCONT test response...\n", desc);
+
+    results = mm_3gpp_parse_cgdcont_test_response (reply, &error);
+    g_assert (results);
+    g_assert_no_error (error);
+    g_assert_cmpuint (g_list_length (results), ==, expected_results_len);
+
+    for (l = results; l; l = g_list_next (l)) {
+        MM3gppPdpContextFormat *format = l->data;
+        gboolean found = FALSE;
+        guint i;
+
+        for (i = 0; !found && i < expected_results_len; i++) {
+            MM3gppPdpContextFormat *expected;
+
+            expected = &expected_results[i];
+            if (format->pdp_type == expected->pdp_type) {
+                found = TRUE;
+
+                g_assert_cmpuint (format->min_cid, ==, expected->min_cid);
+                g_assert_cmpuint (format->max_cid, ==, expected->max_cid);
+            }
+        }
+
+        g_assert (found == TRUE);
+    }
+
+    mm_3gpp_pdp_context_format_list_free (results);
+}
+
+static void
+test_cgdcont_test_response_single (void *f, gpointer d)
+{
+    const gchar *reply = "+CGDCONT: (1-10),\"IP\",,,(0,1),(0,1)";
+    static MM3gppPdpContextFormat expected[] = {
+        { 1, 10, MM_BEARER_IP_FAMILY_IPV4 }
+    };
+
+    test_cgdcont_test_results ("Single", reply, &expected[0], G_N_ELEMENTS (expected));
+}
+
+static void
+test_cgdcont_test_response_multiple (void *f, gpointer d)
+{
+    const gchar *reply =
+        "+CGDCONT: (1-10),\"IP\",,,(0,1),(0,1)\r\n"
+        "+CGDCONT: (1-10),\"IPV6\",,,(0,1),(0,1)\r\n"
+        "+CGDCONT: (1-10),\"IPV4V6\",,,(0,1),(0,1)\r\n";
+    static MM3gppPdpContextFormat expected[] = {
+        { 1, 10, MM_BEARER_IP_FAMILY_IPV4 },
+        { 1, 10, MM_BEARER_IP_FAMILY_IPV6 },
+        { 1, 10, MM_BEARER_IP_FAMILY_IPV4V6 }
+    };
+
+    test_cgdcont_test_results ("Multiple", reply, &expected[0], G_N_ELEMENTS (expected));
+}
+
+static void
+test_cgdcont_test_response_multiple_and_ignore (void *f, gpointer d)
+{
+    const gchar *reply =
+        "+CGDCONT: (1-16),\"IP\",,,(0-2),(0-4)\r\n"
+        "+CGDCONT: (1-16),\"PPP\",,,(0-2),(0-4)\r\n"
+        "+CGDCONT: (1-16),\"IPV6\",,,(0-2),(0-4)\r\n";
+    static MM3gppPdpContextFormat expected[] = {
+        { 1, 16, MM_BEARER_IP_FAMILY_IPV4 },
+        /* PPP is ignored */
+        { 1, 16, MM_BEARER_IP_FAMILY_IPV6 }
+    };
+
+    test_cgdcont_test_results ("Multiple and Ignore", reply, &expected[0], G_N_ELEMENTS (expected));
+}
+
+/*****************************************************************************/
+/* Test CGDCONT read responses */
+
+static void
+test_cgdcont_read_results (const gchar *desc,
+                           const gchar *reply,
+                           MM3gppPdpContext *expected_results,
+                           guint32 expected_results_len)
 {
     GList *l;
     GError *error = NULL;
@@ -1499,18 +1586,18 @@ test_cgdcont_results (const gchar *desc,
 }
 
 static void
-test_cgdcont_response_nokia (void *f, gpointer d)
+test_cgdcont_read_response_nokia (void *f, gpointer d)
 {
     const gchar *reply = "+CGDCONT: 1,\"IP\",,,0,0";
     static MM3gppPdpContext expected[] = {
         { 1, MM_BEARER_IP_FAMILY_IPV4, NULL }
     };
 
-    test_cgdcont_results ("Nokia", reply, &expected[0], G_N_ELEMENTS (expected));
+    test_cgdcont_read_results ("Nokia", reply, &expected[0], G_N_ELEMENTS (expected));
 }
 
 static void
-test_cgdcont_response_samsung (void *f, gpointer d)
+test_cgdcont_read_response_samsung (void *f, gpointer d)
 {
     const gchar *reply =
         "+CGDCONT: 1,\"IP\",\"nate.sktelecom.com\",\"\",0,0\r\n"
@@ -1522,7 +1609,7 @@ test_cgdcont_response_samsung (void *f, gpointer d)
         { 3, MM_BEARER_IP_FAMILY_IPV4, "MAXROAM.com"        }
     };
 
-    test_cgdcont_results ("Samsung", reply, &expected[0], G_N_ELEMENTS (expected));
+    test_cgdcont_read_results ("Samsung", reply, &expected[0], G_N_ELEMENTS (expected));
 }
 
 /*****************************************************************************/
@@ -1845,6 +1932,219 @@ test_cdma_parse_gsn (void *f, gpointer d)
 
 /*****************************************************************************/
 
+static gboolean
+find_mode_combination (GArray *modes,
+                       MMModemMode allowed,
+                       MMModemMode preferred)
+{
+    guint i;
+
+    for (i = 0; i < modes->len; i++) {
+        MMModemModeCombination *mode;
+
+        mode = &g_array_index (modes, MMModemModeCombination, i);
+        if (mode->allowed == allowed && mode->preferred == preferred)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static GArray *
+build_mode_all (MMModemMode all_mask)
+{
+    MMModemModeCombination all_item;
+    GArray *all;
+
+    all_item.allowed = all_mask;
+    all_item.preferred = MM_MODEM_MODE_NONE;
+    all = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 1);
+    g_array_append_val (all, all_item);
+    return all;
+}
+
+static void
+test_supported_mode_filter (void *f, gpointer d)
+{
+    MMModemModeCombination mode;
+    GArray *all;
+    GArray *combinations;
+    GArray *filtered;
+
+    /* Build array of combinations */
+    combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 5);
+
+    /* 2G only */
+    mode.allowed = MM_MODEM_MODE_2G;
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+    /* 3G only */
+    mode.allowed = MM_MODEM_MODE_3G;
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+    /* 2G and 3G */
+    mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+    /* 4G only */
+    mode.allowed = MM_MODEM_MODE_4G;
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+    /* 3G and 4G */
+    mode.allowed = (MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+    /* 2G, 3G and 4G */
+    mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+
+    /* Only 2G supported */
+    all = build_mode_all (MM_MODEM_MODE_2G);
+    filtered = mm_filter_supported_modes (all, combinations);
+    g_assert_cmpuint (filtered->len, ==, 1);
+    g_assert (find_mode_combination (filtered, MM_MODEM_MODE_2G, MM_MODEM_MODE_NONE));
+    g_array_unref (filtered);
+    g_array_unref (all);
+
+    /* Only 3G supported */
+    all = build_mode_all (MM_MODEM_MODE_3G);
+    filtered = mm_filter_supported_modes (all, combinations);
+    g_assert_cmpuint (filtered->len, ==, 1);
+    g_assert (find_mode_combination (filtered, MM_MODEM_MODE_3G, MM_MODEM_MODE_NONE));
+    g_array_unref (filtered);
+    g_array_unref (all);
+
+    /* 2G and 3G supported */
+    all = build_mode_all (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+    filtered = mm_filter_supported_modes (all, combinations);
+    g_assert_cmpuint (filtered->len, ==, 3);
+    g_assert (find_mode_combination (filtered, MM_MODEM_MODE_2G, MM_MODEM_MODE_NONE));
+    g_assert (find_mode_combination (filtered, MM_MODEM_MODE_3G, MM_MODEM_MODE_NONE));
+    g_assert (find_mode_combination (filtered, (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G), MM_MODEM_MODE_NONE));
+    g_array_unref (filtered);
+    g_array_unref (all);
+
+    /* 3G and 4G supported */
+    all = build_mode_all (MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
+    filtered = mm_filter_supported_modes (all, combinations);
+    g_assert_cmpuint (filtered->len, ==, 3);
+    g_assert (find_mode_combination (filtered, MM_MODEM_MODE_3G, MM_MODEM_MODE_NONE));
+    g_assert (find_mode_combination (filtered, MM_MODEM_MODE_4G, MM_MODEM_MODE_NONE));
+    g_assert (find_mode_combination (filtered, (MM_MODEM_MODE_3G | MM_MODEM_MODE_4G), MM_MODEM_MODE_NONE));
+    g_array_unref (filtered);
+    g_array_unref (all);
+
+    /* 2G, 3G and 4G supported */
+    all = build_mode_all (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
+    filtered = mm_filter_supported_modes (all, combinations);
+    g_assert_cmpuint (filtered->len, ==, 6);
+    g_assert (find_mode_combination (filtered, MM_MODEM_MODE_2G, MM_MODEM_MODE_NONE));
+    g_assert (find_mode_combination (filtered, MM_MODEM_MODE_3G, MM_MODEM_MODE_NONE));
+    g_assert (find_mode_combination (filtered, (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G), MM_MODEM_MODE_NONE));
+    g_assert (find_mode_combination (filtered, MM_MODEM_MODE_4G, MM_MODEM_MODE_NONE));
+    g_assert (find_mode_combination (filtered, (MM_MODEM_MODE_3G | MM_MODEM_MODE_4G), MM_MODEM_MODE_NONE));
+    g_assert (find_mode_combination (filtered, (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G), MM_MODEM_MODE_NONE));
+    g_array_unref (filtered);
+    g_array_unref (all);
+
+    g_array_unref (combinations);
+}
+
+/*****************************************************************************/
+
+static gboolean
+find_capability_combination (GArray *capabilities,
+                             MMModemCapability capability)
+{
+    guint i;
+
+    for (i = 0; i < capabilities->len; i++) {
+        MMModemCapability capability_i;
+
+        capability_i = g_array_index (capabilities, MMModemCapability, i);
+        if (capability_i == capability)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static void
+test_supported_capability_filter (void *f, gpointer d)
+{
+    MMModemCapability capability;
+    GArray *combinations;
+    GArray *filtered;
+
+    combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemCapability), 6);
+
+    /* GSM/UMTS only */
+    capability = MM_MODEM_CAPABILITY_GSM_UMTS;
+    g_array_append_val (combinations, capability);
+    /* CDMA/EVDO only */
+    capability = MM_MODEM_CAPABILITY_CDMA_EVDO;
+    g_array_append_val (combinations, capability);
+    /* GSM/UMTS and CDMA/EVDO */
+    capability = (MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_GSM_UMTS);
+    g_array_append_val (combinations, capability);
+    /* GSM/UMTS+LTE */
+    capability = (MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_LTE);
+    g_array_append_val (combinations, capability);
+    /* CDMA/EVDO+LTE */
+    capability = (MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_LTE);
+    g_array_append_val (combinations, capability);
+    /* GSM/UMTS+CDMA/EVDO+LTE */
+    capability = (MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_LTE);
+    g_array_append_val (combinations, capability);
+
+    /* Only GSM-UMTS supported */
+    filtered = mm_filter_supported_capabilities (MM_MODEM_CAPABILITY_GSM_UMTS, combinations);
+    g_assert_cmpuint (filtered->len, ==, 1);
+    g_assert (find_capability_combination (filtered, MM_MODEM_CAPABILITY_GSM_UMTS));
+    g_array_unref (filtered);
+
+    /* Only CDMA-EVDO supported */
+    filtered = mm_filter_supported_capabilities (MM_MODEM_CAPABILITY_CDMA_EVDO, combinations);
+    g_assert_cmpuint (filtered->len, ==, 1);
+    g_assert (find_capability_combination (filtered, MM_MODEM_CAPABILITY_CDMA_EVDO));
+    g_array_unref (filtered);
+
+    /* GSM-UMTS and CDMA-EVDO supported */
+    filtered = mm_filter_supported_capabilities ((MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                                  MM_MODEM_CAPABILITY_GSM_UMTS),
+                                                 combinations);
+    g_assert_cmpuint (filtered->len, ==, 3);
+    g_assert (find_capability_combination (filtered, MM_MODEM_CAPABILITY_CDMA_EVDO));
+    g_assert (find_capability_combination (filtered, MM_MODEM_CAPABILITY_GSM_UMTS));
+    g_assert (find_capability_combination (filtered, (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                                      MM_MODEM_CAPABILITY_CDMA_EVDO)));
+    g_array_unref (filtered);
+
+    /* GSM-UMTS, CDMA-EVDO and LTE supported */
+    filtered = mm_filter_supported_capabilities ((MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                                  MM_MODEM_CAPABILITY_GSM_UMTS |
+                                                  MM_MODEM_CAPABILITY_LTE),
+                                                 combinations);
+    g_assert_cmpuint (filtered->len, ==, 6);
+    g_assert (find_capability_combination (filtered, MM_MODEM_CAPABILITY_CDMA_EVDO));
+    g_assert (find_capability_combination (filtered, MM_MODEM_CAPABILITY_GSM_UMTS));
+    g_assert (find_capability_combination (filtered, (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                                      MM_MODEM_CAPABILITY_CDMA_EVDO)));
+    g_assert (find_capability_combination (filtered, (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                                      MM_MODEM_CAPABILITY_LTE)));
+    g_assert (find_capability_combination (filtered, (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                                      MM_MODEM_CAPABILITY_LTE)));
+    g_assert (find_capability_combination (filtered, (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                                      MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                                      MM_MODEM_CAPABILITY_LTE)));
+    g_array_unref (filtered);
+
+    g_array_unref (combinations);
+}
+
+/*****************************************************************************/
+
 void
 _mm_log (const char *loc,
          const char *func,
@@ -1950,8 +2250,12 @@ int main (int argc, char **argv)
 
     g_test_suite_add (suite, TESTCASE (test_cpms_response_cinterion, NULL));
 
-	g_test_suite_add (suite, TESTCASE (test_cgdcont_response_nokia, NULL));
-	g_test_suite_add (suite, TESTCASE (test_cgdcont_response_samsung, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cgdcont_test_response_single, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cgdcont_test_response_multiple, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cgdcont_test_response_multiple_and_ignore, NULL));
+
+	g_test_suite_add (suite, TESTCASE (test_cgdcont_read_response_nokia, NULL));
+	g_test_suite_add (suite, TESTCASE (test_cgdcont_read_response_samsung, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_cnum_response_generic, NULL));
     g_test_suite_add (suite, TESTCASE (test_cnum_response_generic_without_detail, NULL));
@@ -1969,6 +2273,10 @@ int main (int argc, char **argv)
     g_test_suite_add (suite, TESTCASE (test_cmgl_response_generic_multiple, NULL));
     g_test_suite_add (suite, TESTCASE (test_cmgl_response_pantech, NULL));
     g_test_suite_add (suite, TESTCASE (test_cmgl_response_pantech_multiple, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_supported_mode_filter, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_supported_capability_filter, NULL));
 
     result = g_test_run ();
 

@@ -65,6 +65,9 @@ struct _MMBroadbandModemQmiPrivate {
     gchar *meid;
     gchar *esn;
 
+    /* Cached supported radio interfaces; in order to load supported modes */
+    GArray *supported_radio_interfaces;
+
     /* Cached supported frequency bands; in order to handle ANY */
     GArray *supported_bands;
 
@@ -441,20 +444,9 @@ load_current_capabilities_get_system_selection_preference_ready (QmiClientNas *c
         mm_dbg ("Couldn't get system selection preference: %s", error->message);
         g_error_free (error);
     } else {
-        /* Get Mode Preference */
         qmi_message_nas_get_system_selection_preference_output_get_mode_preference (
             output,
             &ctx->capabilities_context.nas_ssp_mode_preference_mask,
-            NULL);
-        /* Get Band Preference */
-        qmi_message_nas_get_system_selection_preference_output_get_band_preference (
-            output,
-            &ctx->capabilities_context.nas_ssp_band_preference_mask,
-            NULL);
-        /* Get LTE Band Preference */
-        qmi_message_nas_get_system_selection_preference_output_get_lte_band_preference (
-            output,
-            &ctx->capabilities_context.nas_ssp_lte_band_preference_mask,
             NULL);
     }
 
@@ -552,32 +544,37 @@ modem_load_current_capabilities (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Modem Capabilities loading (Modem interface) */
+/* Supported capabilities loading (Modem interface) */
 
-static MMModemCapability
-modem_load_modem_capabilities_finish (MMIfaceModem *self,
-                                      GAsyncResult *res,
-                                      GError **error)
+typedef struct {
+    MMBroadbandModemQmi *self;
+    GSimpleAsyncResult *result;
+} LoadSupportedCapabilitiesContext;
+
+static void
+load_supported_capabilities_context_complete_and_free (LoadSupportedCapabilitiesContext *ctx)
 {
-    MMModemCapability caps;
-    gchar *caps_str;
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
+    g_object_unref (ctx->self);
+    g_slice_free (LoadSupportedCapabilitiesContext, ctx);
+}
 
+static GArray *
+modem_load_supported_capabilities_finish (MMIfaceModem *self,
+                                          GAsyncResult *res,
+                                          GError **error)
+{
     if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
-        return MM_MODEM_CAPABILITY_NONE;
+        return NULL;
 
-    caps = ((MMModemCapability) GPOINTER_TO_UINT (
-                g_simple_async_result_get_op_res_gpointer (
-                    G_SIMPLE_ASYNC_RESULT (res))));
-    caps_str = mm_modem_capability_build_string_from_mask (caps);
-    mm_dbg ("loaded modem capabilities: %s", caps_str);
-    g_free (caps_str);
-    return caps;
+    return g_array_ref (g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res)));
 }
 
 static void
 dms_get_capabilities_ready (QmiClientDms *client,
                             GAsyncResult *res,
-                            GSimpleAsyncResult *simple)
+                            LoadSupportedCapabilitiesContext *ctx)
 {
     QmiMessageDmsGetCapabilitiesOutput *output = NULL;
     GError *error = NULL;
@@ -585,14 +582,17 @@ dms_get_capabilities_ready (QmiClientDms *client,
     output = qmi_client_dms_get_capabilities_finish (client, res, &error);
     if (!output) {
         g_prefix_error (&error, "QMI operation failed: ");
-        g_simple_async_result_take_error (simple, error);
+        g_simple_async_result_take_error (ctx->result, error);
     } else if (!qmi_message_dms_get_capabilities_output_get_result (output, &error)) {
-        g_prefix_error (&error, "Couldn't get modem capabilities: ");
-        g_simple_async_result_take_error (simple, error);
+        g_prefix_error (&error, "Couldn't get supported capabilities: ");
+        g_simple_async_result_take_error (ctx->result, error);
     } else {
         guint i;
-        guint mask = MM_MODEM_CAPABILITY_NONE;
+        MMModemCapability mask = MM_MODEM_CAPABILITY_NONE;
+        MMModemCapability single;
         GArray *radio_interface_list;
+        GArray *supported_combinations;
+        GArray *filtered_combinations;
 
         qmi_message_dms_get_capabilities_output_get_info (
             output,
@@ -609,24 +609,60 @@ dms_get_capabilities_ready (QmiClientDms *client,
                                                                                  i));
         }
 
-        g_simple_async_result_set_op_res_gpointer (simple,
-                                                   GUINT_TO_POINTER (mask),
-                                                   NULL);
+        /* Cache supported radio interfaces */
+        if (ctx->self->priv->supported_radio_interfaces)
+            g_array_unref (ctx->self->priv->supported_radio_interfaces);
+        ctx->self->priv->supported_radio_interfaces = g_array_ref (radio_interface_list);
+
+        supported_combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemCapability), 7);
+
+        /* Add all possible supported capability combinations, we will filter
+         * them out afterwards */
+
+        /* GSM/UMTS */
+        single = MM_MODEM_CAPABILITY_GSM_UMTS;
+        g_array_append_val (supported_combinations, single);
+        /* CDMA/EVDO */
+        single = MM_MODEM_CAPABILITY_CDMA_EVDO;
+        g_array_append_val (supported_combinations, single);
+        /* LTE only */
+        single = MM_MODEM_CAPABILITY_LTE;
+        g_array_append_val (supported_combinations, single);
+        /* GSM/UMTS + CDMA/EVDO */
+        single = (MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_GSM_UMTS);
+        g_array_append_val (supported_combinations, single);
+        /* GSM/UMTS + LTE */
+        single = (MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_LTE);
+        g_array_append_val (supported_combinations, single);
+        /* CDMA/EVDO + LTE */
+        single = (MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_LTE);
+        g_array_append_val (supported_combinations, single);
+        /* GSM/UMTS + CDMA/EVDO + LTE */
+        single = (MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_LTE);
+        g_array_append_val (supported_combinations, single);
+
+        /* Now filter out based on the real capabilities of the modem */
+        filtered_combinations = mm_filter_supported_capabilities (mask,
+                                                                  supported_combinations);
+        g_array_unref (supported_combinations);
+
+        g_simple_async_result_set_op_res_gpointer (ctx->result,
+                                                   filtered_combinations,
+                                                   (GDestroyNotify) g_array_unref);
     }
 
     if (output)
         qmi_message_dms_get_capabilities_output_unref (output);
 
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+    load_supported_capabilities_context_complete_and_free (ctx);
 }
 
 static void
-modem_load_modem_capabilities (MMIfaceModem *self,
-                               GAsyncReadyCallback callback,
-                               gpointer user_data)
+modem_load_supported_capabilities (MMIfaceModem *self,
+                                   GAsyncReadyCallback callback,
+                                   gpointer user_data)
 {
-    GSimpleAsyncResult *result;
+    LoadSupportedCapabilitiesContext *ctx;
     QmiClient *client = NULL;
 
     if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
@@ -634,18 +670,246 @@ modem_load_modem_capabilities (MMIfaceModem *self,
                             callback, user_data))
         return;
 
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        modem_load_modem_capabilities);
+    ctx = g_slice_new (LoadSupportedCapabilitiesContext);
+    ctx->self = g_object_ref (self);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             modem_load_supported_capabilities);
 
-    mm_dbg ("loading modem capabilities...");
+    mm_dbg ("loading supported capabilities...");
     qmi_client_dms_get_capabilities (QMI_CLIENT_DMS (client),
                                      NULL,
                                      5,
                                      NULL,
                                      (GAsyncReadyCallback)dms_get_capabilities_ready,
-                                     result);
+                                     ctx);
+}
+
+/*****************************************************************************/
+/* Current capabilities setting (Modem interface) */
+
+typedef struct {
+    MMBroadbandModemQmi *self;
+    QmiClientNas *client;
+    GSimpleAsyncResult *result;
+    MMModemCapability capabilities;
+    gboolean run_set_system_selection_preference;
+    gboolean run_set_technology_preference;
+} SetCurrentCapabilitiesContext;
+
+static void
+set_current_capabilities_context_complete_and_free (SetCurrentCapabilitiesContext *ctx)
+{
+    g_simple_async_result_complete_in_idle (ctx->result);
+    g_object_unref (ctx->result);
+    g_object_unref (ctx->client);
+    g_object_unref (ctx->self);
+    g_slice_free (SetCurrentCapabilitiesContext, ctx);
+}
+
+static gboolean
+set_current_capabilities_finish (MMIfaceModem *self,
+                                 GAsyncResult *res,
+                                 GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+capabilities_power_cycle_ready (MMBroadbandModemQmi *self,
+                                GAsyncResult *res,
+                                SetCurrentCapabilitiesContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!power_cycle_finish (self, res, &error))
+        g_simple_async_result_take_error (ctx->result, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    set_current_capabilities_context_complete_and_free (ctx);
+}
+
+static void
+capabilities_power_cycle (SetCurrentCapabilitiesContext *ctx)
+{
+    /* Power cycle the modem */
+    power_cycle (ctx->self,
+                 (GAsyncReadyCallback)capabilities_power_cycle_ready,
+                 ctx);
+}
+
+static void set_current_capabilities_context_step (SetCurrentCapabilitiesContext *ctx);
+
+static void
+capabilities_set_technology_preference_ready (QmiClientNas *client,
+                                              GAsyncResult *res,
+                                              SetCurrentCapabilitiesContext *ctx)
+{
+    QmiMessageNasSetTechnologyPreferenceOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_nas_set_technology_preference_finish (client, res, &error);
+    if (!output) {
+        mm_dbg ("QMI operation failed: %s", error->message);
+        g_error_free (error);
+    } else if (!qmi_message_nas_set_technology_preference_output_get_result (output, &error) &&
+               !g_error_matches (error,
+                                 QMI_PROTOCOL_ERROR,
+                                 QMI_PROTOCOL_ERROR_NO_EFFECT)) {
+        mm_dbg ("Couldn't set technology preference: %s", error->message);
+        g_error_free (error);
+        qmi_message_nas_set_technology_preference_output_unref (output);
+    } else {
+        if (error)
+            g_error_free (error);
+
+        /* Good! now reboot the modem */
+        capabilities_power_cycle (ctx);
+        qmi_message_nas_set_technology_preference_output_unref (output);
+        return;
+    }
+
+    ctx->run_set_technology_preference = FALSE;
+    set_current_capabilities_context_step (ctx);
+}
+
+static void
+capabilities_set_system_selection_preference_ready (QmiClientNas *client,
+                                                    GAsyncResult *res,
+                                                    SetCurrentCapabilitiesContext *ctx)
+{
+    QmiMessageNasSetSystemSelectionPreferenceOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_nas_set_system_selection_preference_finish (client, res, &error);
+    if (!output) {
+        mm_dbg ("QMI operation failed: %s", error->message);
+        g_error_free (error);
+    } else if (!qmi_message_nas_set_system_selection_preference_output_get_result (output, &error)) {
+        mm_dbg ("Couldn't set system selection preference: %s", error->message);
+        g_error_free (error);
+        qmi_message_nas_set_system_selection_preference_output_unref (output);
+    } else {
+        /* Good! now reboot the modem */
+        capabilities_power_cycle (ctx);
+        qmi_message_nas_set_system_selection_preference_output_unref (output);
+        return;
+    }
+
+    /* Try with the deprecated command */
+    ctx->run_set_system_selection_preference = FALSE;
+    set_current_capabilities_context_step (ctx);
+}
+
+static void
+set_current_capabilities_context_step (SetCurrentCapabilitiesContext *ctx)
+{
+    if (ctx->run_set_system_selection_preference) {
+        QmiMessageNasSetSystemSelectionPreferenceInput *input;
+        QmiNasRatModePreference pref;
+
+        pref = mm_modem_capability_to_qmi_rat_mode_preference (ctx->capabilities);
+        if (!pref) {
+            gchar *str;
+
+            str = mm_modem_capability_build_string_from_mask (ctx->capabilities);
+            g_simple_async_result_set_error (ctx->result,
+                                             MM_CORE_ERROR,
+                                             MM_CORE_ERROR_FAILED,
+                                             "Unhandled capabilities setting: '%s'",
+                                             str);
+            g_free (str);
+            set_current_capabilities_context_complete_and_free (ctx);
+            return;
+        }
+
+        input = qmi_message_nas_set_system_selection_preference_input_new ();
+        qmi_message_nas_set_system_selection_preference_input_set_mode_preference (input, pref, NULL);
+        qmi_message_nas_set_system_selection_preference_input_set_change_duration (input, QMI_NAS_CHANGE_DURATION_PERMANENT, NULL);
+
+        qmi_client_nas_set_system_selection_preference (
+            ctx->client,
+            input,
+            5,
+            NULL, /* cancellable */
+            (GAsyncReadyCallback)capabilities_set_system_selection_preference_ready,
+            ctx);
+        qmi_message_nas_set_system_selection_preference_input_unref (input);
+        return;
+    }
+
+    if (ctx->run_set_technology_preference) {
+        QmiMessageNasSetTechnologyPreferenceInput *input;
+        QmiNasRadioTechnologyPreference pref;
+
+        pref = mm_modem_capability_to_qmi_radio_technology_preference (ctx->capabilities);
+        if (!pref) {
+            gchar *str;
+
+            str = mm_modem_capability_build_string_from_mask (ctx->capabilities);
+            g_simple_async_result_set_error (ctx->result,
+                                             MM_CORE_ERROR,
+                                             MM_CORE_ERROR_FAILED,
+                                             "Unhandled capabilities setting: '%s'",
+                                             str);
+            g_free (str);
+            set_current_capabilities_context_complete_and_free (ctx);
+            return;
+        }
+
+        input = qmi_message_nas_set_technology_preference_input_new ();
+        qmi_message_nas_set_technology_preference_input_set_current (input, pref, QMI_NAS_PREFERENCE_DURATION_PERMANENT, NULL);
+
+        qmi_client_nas_set_technology_preference (
+            ctx->client,
+            input,
+            5,
+            NULL, /* cancellable */
+            (GAsyncReadyCallback)capabilities_set_technology_preference_ready,
+            ctx);
+        qmi_message_nas_set_technology_preference_input_unref (input);
+        return;
+    }
+
+    g_simple_async_result_set_error (
+        ctx->result,
+        MM_CORE_ERROR,
+        MM_CORE_ERROR_UNSUPPORTED,
+        "Setting capabilities is not supported by this device");
+    set_current_capabilities_context_complete_and_free (ctx);
+}
+
+static void
+set_current_capabilities (MMIfaceModem *self,
+                          MMModemCapability capabilities,
+                          GAsyncReadyCallback callback,
+                          gpointer user_data)
+{
+    SetCurrentCapabilitiesContext *ctx;
+    QmiClient *client = NULL;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_NAS, &client,
+                            callback, user_data))
+        return;
+
+    ctx = g_slice_new0 (SetCurrentCapabilitiesContext);
+    ctx->self = g_object_ref (self);
+    ctx->client = g_object_ref (client);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             set_current_capabilities);
+    ctx->capabilities = capabilities;
+
+    /* System selection preference introduced in NAS 1.1 */
+    ctx->run_set_system_selection_preference = qmi_client_check_version (client, 1, 1);
+
+    /* Technology preference introduced in NAS 1.0, so always available */
+    ctx->run_set_technology_preference = TRUE;
+
+    set_current_capabilities_context_step (ctx);
 }
 
 /*****************************************************************************/
@@ -1610,12 +1874,12 @@ modem_load_current_bands (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Set bands (Modem interface) */
+/* Set current bands (Modem interface) */
 
 static gboolean
-set_bands_finish (MMIfaceModem *self,
-                  GAsyncResult *res,
-                  GError **error)
+set_current_bands_finish (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          GError **error)
 {
     return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
@@ -1648,10 +1912,10 @@ bands_set_system_selection_preference_ready (QmiClientNas *client,
 }
 
 static void
-set_bands (MMIfaceModem *_self,
-           GArray *bands_array,
-           GAsyncReadyCallback callback,
-           gpointer user_data)
+set_current_bands (MMIfaceModem *_self,
+                   GArray *bands_array,
+                   GAsyncReadyCallback callback,
+                   gpointer user_data)
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
     QmiMessageNasSetSystemSelectionPreferenceInput *input;
@@ -1668,7 +1932,7 @@ set_bands (MMIfaceModem *_self,
     result = g_simple_async_result_new (G_OBJECT (self),
                                         callback,
                                         user_data,
-                                        set_bands);
+                                        set_current_bands);
 
     /* Handle ANY separately */
     if (bands_array->len == 1 &&
@@ -1711,37 +1975,181 @@ set_bands (MMIfaceModem *_self,
 /*****************************************************************************/
 /* Load supported modes (Modem interface) */
 
-static MMModemMode
+static GArray *
 modem_load_supported_modes_finish (MMIfaceModem *self,
                                    GAsyncResult *res,
                                    GError **error)
 {
-    return (MMModemMode)GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
-                                              G_SIMPLE_ASYNC_RESULT (res)));
+    return g_array_ref (g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res)));
 }
 
 static void
-modem_load_supported_modes (MMIfaceModem *self,
+modem_load_supported_modes (MMIfaceModem *_self,
                             GAsyncReadyCallback callback,
                             gpointer user_data)
 {
+    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
     GSimpleAsyncResult *result;
-    MMModemMode mode;
-
-    /* For QMI-powered modems, it is safe to assume they do 2G and 3G */
-    mode = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-
-    /* Then, if the modem has LTE caps, it does 4G */
-    if (mm_iface_modem_is_3gpp_lte (MM_IFACE_MODEM (self)))
-            mode |= MM_MODEM_MODE_4G;
+    GArray *combinations;
+    MMModemModeCombination mode;
 
     result = g_simple_async_result_new (G_OBJECT (self),
                                         callback,
                                         user_data,
                                         modem_load_supported_modes);
-    g_simple_async_result_set_op_res_gpointer (result,
-                                               GUINT_TO_POINTER (mode),
-                                               NULL);
+
+    if (!self->priv->supported_radio_interfaces) {
+        g_simple_async_result_set_error (result,
+                                         MM_CORE_ERROR,
+                                         MM_CORE_ERROR_FAILED,
+                                         "Cannot load supported modes, no radio interface list");
+        g_simple_async_result_complete_in_idle (result);
+        g_object_unref (result);
+        return;
+    }
+
+    /* Build combinations
+     *
+     *    (1) If current capabilities [GSM/UMTS]:
+     *       [2G only]
+     *       [3G only]
+     *       [2G + 3G]
+     *       [2G + 3G] 2G preferred
+     *       [2G + 3G] 3G preferred
+     *
+     *     (2) If current capabilities [CDMA/EVDO]:
+     *       [2G only]
+     *       [3G only]
+     *
+     *     (3) If current capabilities [LTE]:
+     *       [4G only]
+     *
+     *     (4) If current capabilities [GSM/UMTS + CDMA/EVDO]:
+     *       [2G only]
+     *       [3G only]
+     *       [2G + 3G]
+     *       [2G + 3G] 2G preferred
+     *       [2G + 3G] 3G preferred
+     *
+     *     (5) If current capabilities [GSM/UMTS + LTE]:
+     *       [2G + 3G + 4G]
+     *
+     *     (6) If current capabilities [CDMA/EVDO + LTE]:
+     *       [2G + 3G + 4G]
+     *
+     *     (7) If current capabilities [GSM/UMTS + CDMA/EVDO + LTE]:
+     *       [2G + 3G + 4G]
+     */
+
+    combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 5);
+
+    /* LTE only, don't allow further mode switching */
+    if (mm_iface_modem_is_3gpp_lte_only (_self)) {
+        /* 4G only */
+        mode.allowed = MM_MODEM_MODE_4G;
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+    }
+    /* LTE and others, only allow to have all, no further preference */
+    else if (mm_iface_modem_is_3gpp_lte (_self)) {
+        /* 2G, 3G and 4G */
+        mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+    }
+    /* Non-LTE modem, include allowed and preferred combinations */
+    else {
+        MMModemMode mask_all;
+        guint i;
+        GArray *all;
+        GArray *filtered;
+
+
+        /* Build all, based on the supported radio interfaces */
+        mask_all = MM_MODEM_MODE_NONE;
+        for (i = 0; i < self->priv->supported_radio_interfaces->len; i++)
+            mask_all |= mm_modem_mode_from_qmi_radio_interface (g_array_index (self->priv->supported_radio_interfaces,
+                                                                               QmiDmsRadioInterface,
+                                                                               i));
+
+
+        /* 2G only */
+        mode.allowed = MM_MODEM_MODE_2G;
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+        /* 3G only */
+        mode.allowed = MM_MODEM_MODE_3G;
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+        /* 2G and 3G */
+        mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+        /* 2G and 3G, 2G preferred */
+        mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+        mode.preferred = MM_MODEM_MODE_2G;
+        g_array_append_val (combinations, mode);
+        /* 2G and 3G, 3G preferred */
+        mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+        mode.preferred = MM_MODEM_MODE_3G;
+        g_array_append_val (combinations, mode);
+
+        /* Filter out those unsupported modes */
+        mode.allowed = mask_all;
+        mode.preferred = MM_MODEM_MODE_NONE;
+        all = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 1);
+        g_array_append_val (all, mode);
+        filtered = mm_filter_supported_modes (all, combinations);
+        g_array_unref (all);
+        g_array_unref (combinations);
+        combinations = filtered;
+    }
+
+    g_simple_async_result_set_op_res_gpointer (result, combinations, (GDestroyNotify) g_array_unref);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
+}
+
+/*****************************************************************************/
+/* Load supported IP families (Modem interface) */
+
+static MMBearerIpFamily
+modem_load_supported_ip_families_finish (MMIfaceModem *self,
+                                         GAsyncResult *res,
+                                         GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return MM_BEARER_IP_FAMILY_NONE;
+
+    return (MMBearerIpFamily) GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
+                                                    G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static void
+modem_load_supported_ip_families (MMIfaceModem *self,
+                                  GAsyncReadyCallback callback,
+                                  gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        modem_load_supported_ip_families);
+
+    if (mm_iface_modem_is_cdma_only (MM_IFACE_MODEM (self)))
+        /* CDMA-only: IPv4 */
+        g_simple_async_result_set_op_res_gpointer (
+            result,
+            GUINT_TO_POINTER (MM_BEARER_IP_FAMILY_IPV4),
+            NULL);
+    else
+        /* Assume IPv4 + IPv6 supported */
+        g_simple_async_result_set_op_res_gpointer (
+            result,
+            GUINT_TO_POINTER (MM_BEARER_IP_FAMILY_IPV4 | MM_BEARER_IP_FAMILY_IPV6 | MM_BEARER_IP_FAMILY_IPV4V6),
+            NULL);
+
     g_simple_async_result_complete_in_idle (result);
     g_object_unref (result);
 }
@@ -2349,7 +2757,7 @@ modem_factory_reset (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Load allowed modes (Modem interface) */
+/* Load current modes (Modem interface) */
 
 typedef struct {
     MMBroadbandModemQmi *self;
@@ -2357,15 +2765,15 @@ typedef struct {
     GSimpleAsyncResult *result;
     gboolean run_get_system_selection_preference;
     gboolean run_get_technology_preference;
-} LoadAllowedModesContext;
+} LoadCurrentModesContext;
 
 typedef struct {
     MMModemMode allowed;
     MMModemMode preferred;
-} LoadAllowedModesResult;
+} LoadCurrentModesResult;
 
 static void
-load_allowed_modes_context_complete_and_free (LoadAllowedModesContext *ctx)
+load_current_modes_context_complete_and_free (LoadCurrentModesContext *ctx)
 {
     g_simple_async_result_complete_in_idle (ctx->result);
     g_object_unref (ctx->result);
@@ -2375,13 +2783,13 @@ load_allowed_modes_context_complete_and_free (LoadAllowedModesContext *ctx)
 }
 
 static gboolean
-load_allowed_modes_finish (MMIfaceModem *self,
+load_current_modes_finish (MMIfaceModem *self,
                            GAsyncResult *res,
                            MMModemMode *allowed,
                            MMModemMode *preferred,
                            GError **error)
 {
-    LoadAllowedModesResult *result;
+    LoadCurrentModesResult *result;
 
     if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
         return FALSE;
@@ -2392,14 +2800,14 @@ load_allowed_modes_finish (MMIfaceModem *self,
     return TRUE;
 }
 
-static void load_allowed_modes_context_step (LoadAllowedModesContext *ctx);
+static void load_current_modes_context_step (LoadCurrentModesContext *ctx);
 
 static void
 get_technology_preference_ready (QmiClientNas *client,
                                  GAsyncResult *res,
-                                 LoadAllowedModesContext *ctx)
+                                 LoadCurrentModesContext *ctx)
 {
-    LoadAllowedModesResult *result = NULL;
+    LoadCurrentModesResult *result = NULL;
     QmiMessageNasGetTechnologyPreferenceOutput *output = NULL;
     GError *error = NULL;
 
@@ -2428,7 +2836,7 @@ get_technology_preference_ready (QmiClientNas *client,
             g_free (str);
         } else {
             /* We got a valid value from here */
-            result = g_new (LoadAllowedModesResult, 1);
+            result = g_new (LoadCurrentModesResult, 1);
             result->allowed = allowed;
             result->preferred = MM_MODEM_MODE_NONE;
         }
@@ -2439,7 +2847,7 @@ get_technology_preference_ready (QmiClientNas *client,
 
     if (!result) {
         ctx->run_get_technology_preference = FALSE;
-        load_allowed_modes_context_step (ctx);
+        load_current_modes_context_step (ctx);
         return;
     }
 
@@ -2447,15 +2855,15 @@ get_technology_preference_ready (QmiClientNas *client,
         ctx->result,
         result,
         (GDestroyNotify)g_free);
-    load_allowed_modes_context_complete_and_free (ctx);
+    load_current_modes_context_complete_and_free (ctx);
 }
 
 static void
-allowed_modes_get_system_selection_preference_ready (QmiClientNas *client,
+current_modes_get_system_selection_preference_ready (QmiClientNas *client,
                                                      GAsyncResult *res,
-                                                     LoadAllowedModesContext *ctx)
+                                                     LoadCurrentModesContext *ctx)
 {
-    LoadAllowedModesResult *result = NULL;
+    LoadCurrentModesResult *result = NULL;
     QmiMessageNasGetSystemSelectionPreferenceOutput *output = NULL;
     GError *error = NULL;
     QmiNasRatModePreference mode_preference_mask = 0;
@@ -2486,7 +2894,7 @@ allowed_modes_get_system_selection_preference_ready (QmiClientNas *client,
             QmiNasGsmWcdmaAcquisitionOrderPreference gsm_or_wcdma;
 
             /* We got a valid value from here */
-            result = g_new (LoadAllowedModesResult, 1);
+            result = g_new (LoadCurrentModesResult, 1);
             result->allowed = allowed;
             result->preferred = MM_MODEM_MODE_NONE;
 
@@ -2507,7 +2915,7 @@ allowed_modes_get_system_selection_preference_ready (QmiClientNas *client,
     if (!result) {
         /* Try with the deprecated command */
         ctx->run_get_system_selection_preference = FALSE;
-        load_allowed_modes_context_step (ctx);
+        load_current_modes_context_step (ctx);
         return;
     }
 
@@ -2515,11 +2923,11 @@ allowed_modes_get_system_selection_preference_ready (QmiClientNas *client,
         ctx->result,
         result,
         (GDestroyNotify)g_free);
-    load_allowed_modes_context_complete_and_free (ctx);
+    load_current_modes_context_complete_and_free (ctx);
 }
 
 static void
-load_allowed_modes_context_step (LoadAllowedModesContext *ctx)
+load_current_modes_context_step (LoadCurrentModesContext *ctx)
 {
     if (ctx->run_get_system_selection_preference) {
         qmi_client_nas_get_system_selection_preference (
@@ -2527,7 +2935,7 @@ load_allowed_modes_context_step (LoadAllowedModesContext *ctx)
             NULL, /* no input */
             5,
             NULL, /* cancellable */
-            (GAsyncReadyCallback)allowed_modes_get_system_selection_preference_ready,
+            (GAsyncReadyCallback)current_modes_get_system_selection_preference_ready,
             ctx);
         return;
     }
@@ -2547,16 +2955,16 @@ load_allowed_modes_context_step (LoadAllowedModesContext *ctx)
         ctx->result,
         MM_CORE_ERROR,
         MM_CORE_ERROR_UNSUPPORTED,
-        "Loading allowed modes is not supported by this device");
-    load_allowed_modes_context_complete_and_free (ctx);
+        "Loading current modes is not supported by this device");
+    load_current_modes_context_complete_and_free (ctx);
 }
 
 static void
-load_allowed_modes (MMIfaceModem *self,
+load_current_modes (MMIfaceModem *self,
                     GAsyncReadyCallback callback,
                     gpointer user_data)
 {
-    LoadAllowedModesContext *ctx;
+    LoadCurrentModesContext *ctx;
     QmiClient *client = NULL;
 
     if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
@@ -2564,13 +2972,13 @@ load_allowed_modes (MMIfaceModem *self,
                             callback, user_data))
         return;
 
-    ctx = g_new0 (LoadAllowedModesContext, 1);
+    ctx = g_new0 (LoadCurrentModesContext, 1);
     ctx->self = g_object_ref (self);
     ctx->client = g_object_ref (client);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
                                              callback,
                                              user_data,
-                                             load_allowed_modes);
+                                             load_current_modes);
 
     /* System selection preference introduced in NAS 1.1 */
     ctx->run_get_system_selection_preference = qmi_client_check_version (client, 1, 1);
@@ -2578,7 +2986,7 @@ load_allowed_modes (MMIfaceModem *self,
     /* Technology preference introduced in NAS 1.0, so always available */
     ctx->run_get_technology_preference = TRUE;
 
-    load_allowed_modes_context_step (ctx);
+    load_current_modes_context_step (ctx);
 }
 
 /*****************************************************************************/
@@ -2592,32 +3000,32 @@ typedef struct {
     MMModemMode preferred;
     gboolean run_set_system_selection_preference;
     gboolean run_set_technology_preference;
-} SetAllowedModesContext;
+} SetCurrentModesContext;
 
 static void
-set_allowed_modes_context_complete_and_free (SetAllowedModesContext *ctx)
+set_current_modes_context_complete_and_free (SetCurrentModesContext *ctx)
 {
     g_simple_async_result_complete_in_idle (ctx->result);
     g_object_unref (ctx->result);
     g_object_unref (ctx->client);
     g_object_unref (ctx->self);
-    g_free (ctx);
+    g_slice_free (SetCurrentModesContext, ctx);
 }
 
 static gboolean
-set_allowed_modes_finish (MMIfaceModem *self,
+set_current_modes_finish (MMIfaceModem *self,
                           GAsyncResult *res,
                           GError **error)
 {
     return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
 
-static void set_allowed_modes_context_step (SetAllowedModesContext *ctx);
+static void set_current_modes_context_step (SetCurrentModesContext *ctx);
 
 static void
 set_technology_preference_ready (QmiClientNas *client,
                                  GAsyncResult *res,
-                                 SetAllowedModesContext *ctx)
+                                 SetCurrentModesContext *ctx)
 {
     QmiMessageNasSetTechnologyPreferenceOutput *output = NULL;
     GError *error = NULL;
@@ -2637,19 +3045,19 @@ set_technology_preference_ready (QmiClientNas *client,
         if (error)
             g_error_free (error);
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        set_allowed_modes_context_complete_and_free (ctx);
+        set_current_modes_context_complete_and_free (ctx);
         qmi_message_nas_set_technology_preference_output_unref (output);
         return;
     }
 
     ctx->run_set_technology_preference = FALSE;
-    set_allowed_modes_context_step (ctx);
+    set_current_modes_context_step (ctx);
 }
 
 static void
 allowed_modes_set_system_selection_preference_ready (QmiClientNas *client,
                                                      GAsyncResult *res,
-                                                     SetAllowedModesContext *ctx)
+                                                     SetCurrentModesContext *ctx)
 {
     QmiMessageNasSetSystemSelectionPreferenceOutput *output = NULL;
     GError *error = NULL;
@@ -2665,18 +3073,18 @@ allowed_modes_set_system_selection_preference_ready (QmiClientNas *client,
     } else {
         /* Good! TODO: do we really need to wait for the indication? */
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        set_allowed_modes_context_complete_and_free (ctx);
+        set_current_modes_context_complete_and_free (ctx);
         qmi_message_nas_set_system_selection_preference_output_unref (output);
         return;
     }
 
     /* Try with the deprecated command */
     ctx->run_set_system_selection_preference = FALSE;
-    set_allowed_modes_context_step (ctx);
+    set_current_modes_context_step (ctx);
 }
 
 static void
-set_allowed_modes_context_step (SetAllowedModesContext *ctx)
+set_current_modes_context_step (SetCurrentModesContext *ctx)
 {
     if (ctx->run_set_system_selection_preference) {
         QmiMessageNasSetSystemSelectionPreferenceInput *input;
@@ -2695,7 +3103,7 @@ set_allowed_modes_context_step (SetAllowedModesContext *ctx)
                                              "Unhandled allowed mode setting: '%s'",
                                              str);
             g_free (str);
-            set_allowed_modes_context_complete_and_free (ctx);
+            set_current_modes_context_complete_and_free (ctx);
             return;
         }
 
@@ -2734,7 +3142,7 @@ set_allowed_modes_context_step (SetAllowedModesContext *ctx)
                                              MM_CORE_ERROR,
                                              MM_CORE_ERROR_FAILED,
                                              "Cannot set specific preferred mode");
-            set_allowed_modes_context_complete_and_free (ctx);
+            set_current_modes_context_complete_and_free (ctx);
             return;
         }
 
@@ -2750,7 +3158,7 @@ set_allowed_modes_context_step (SetAllowedModesContext *ctx)
                                              "Unhandled allowed mode setting: '%s'",
                                              str);
             g_free (str);
-            set_allowed_modes_context_complete_and_free (ctx);
+            set_current_modes_context_complete_and_free (ctx);
             return;
         }
 
@@ -2773,17 +3181,17 @@ set_allowed_modes_context_step (SetAllowedModesContext *ctx)
         MM_CORE_ERROR,
         MM_CORE_ERROR_UNSUPPORTED,
         "Setting allowed modes is not supported by this device");
-    set_allowed_modes_context_complete_and_free (ctx);
+    set_current_modes_context_complete_and_free (ctx);
 }
 
 static void
-set_allowed_modes (MMIfaceModem *self,
+set_current_modes (MMIfaceModem *self,
                    MMModemMode allowed,
                    MMModemMode preferred,
                    GAsyncReadyCallback callback,
                    gpointer user_data)
 {
-    SetAllowedModesContext *ctx;
+    SetCurrentModesContext *ctx;
     QmiClient *client = NULL;
 
     if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
@@ -2791,15 +3199,27 @@ set_allowed_modes (MMIfaceModem *self,
                             callback, user_data))
         return;
 
-    ctx = g_new0 (SetAllowedModesContext, 1);
+    ctx = g_slice_new0 (SetCurrentModesContext);
     ctx->self = g_object_ref (self);
     ctx->client = g_object_ref (client);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
                                              callback,
                                              user_data,
-                                             set_allowed_modes);
-    ctx->allowed = allowed;
-    ctx->preferred = preferred;
+                                             set_current_modes);
+
+    if (allowed == MM_MODEM_MODE_ANY && ctx->preferred == MM_MODEM_MODE_NONE) {
+        ctx->allowed = MM_MODEM_MODE_NONE;
+        if (mm_iface_modem_is_2g (self))
+            ctx->allowed |= MM_MODEM_MODE_2G;
+        if (mm_iface_modem_is_3g (self))
+            ctx->allowed |= MM_MODEM_MODE_3G;
+        if (mm_iface_modem_is_4g (self))
+            ctx->allowed |= MM_MODEM_MODE_4G;
+        ctx->preferred = MM_MODEM_MODE_NONE;
+    } else {
+        ctx->allowed = allowed;
+        ctx->preferred = preferred;
+    }
 
     /* System selection preference introduced in NAS 1.1 */
     ctx->run_set_system_selection_preference = qmi_client_check_version (client, 1, 1);
@@ -2807,7 +3227,7 @@ set_allowed_modes (MMIfaceModem *self,
     /* Technology preference introduced in NAS 1.0, so always available */
     ctx->run_set_technology_preference = TRUE;
 
-    set_allowed_modes_context_step (ctx);
+    set_current_modes_context_step (ctx);
 }
 
 /*****************************************************************************/
@@ -8030,6 +8450,8 @@ finalize (GObject *object)
     g_free (self->priv->current_operator_description);
     if (self->priv->supported_bands)
         g_array_unref (self->priv->supported_bands);
+    if (self->priv->supported_radio_interfaces)
+        g_array_unref (self->priv->supported_radio_interfaces);
 
     G_OBJECT_CLASS (mm_broadband_modem_qmi_parent_class)->finalize (object);
 }
@@ -8053,8 +8475,10 @@ iface_modem_init (MMIfaceModem *iface)
     /* Initialization steps */
     iface->load_current_capabilities = modem_load_current_capabilities;
     iface->load_current_capabilities_finish = modem_load_current_capabilities_finish;
-    iface->load_modem_capabilities = modem_load_modem_capabilities;
-    iface->load_modem_capabilities_finish = modem_load_modem_capabilities_finish;
+    iface->load_supported_capabilities = modem_load_supported_capabilities;
+    iface->load_supported_capabilities_finish = modem_load_supported_capabilities_finish;
+    iface->set_current_capabilities = set_current_capabilities;
+    iface->set_current_capabilities_finish = set_current_capabilities_finish;
     iface->load_manufacturer = modem_load_manufacturer;
     iface->load_manufacturer_finish = modem_load_manufacturer_finish;
     iface->load_model = modem_load_model;
@@ -8077,6 +8501,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_supported_modes_finish = modem_load_supported_modes_finish;
     iface->load_power_state = load_power_state;
     iface->load_power_state_finish = load_power_state_finish;
+    iface->load_supported_ip_families = modem_load_supported_ip_families;
+    iface->load_supported_ip_families_finish = modem_load_supported_ip_families_finish;
 
     /* Enabling/disabling */
     iface->modem_power_up = modem_power_up;
@@ -8091,16 +8517,16 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_supported_charsets_finish = NULL;
     iface->setup_charset = NULL;
     iface->setup_charset_finish = NULL;
-    iface->load_allowed_modes = load_allowed_modes;
-    iface->load_allowed_modes_finish = load_allowed_modes_finish;
-    iface->set_allowed_modes = set_allowed_modes;
-    iface->set_allowed_modes_finish = set_allowed_modes_finish;
+    iface->load_current_modes = load_current_modes;
+    iface->load_current_modes_finish = load_current_modes_finish;
+    iface->set_current_modes = set_current_modes;
+    iface->set_current_modes_finish = set_current_modes_finish;
     iface->load_signal_quality = load_signal_quality;
     iface->load_signal_quality_finish = load_signal_quality_finish;
     iface->load_current_bands = modem_load_current_bands;
     iface->load_current_bands_finish = modem_load_current_bands_finish;
-    iface->set_bands = set_bands;
-    iface->set_bands_finish = set_bands_finish;
+    iface->set_current_bands = set_current_bands;
+    iface->set_current_bands_finish = set_current_bands_finish;
 
     /* Don't try to load access technologies, as we would be using parent's
      * generic method (QCDM based). Access technologies are already reported via

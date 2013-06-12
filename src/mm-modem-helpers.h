@@ -73,6 +73,12 @@ gchar *mm_new_iso8601_time (guint year,
                             gboolean have_offset,
                             gint offset_minutes);
 
+GArray *mm_filter_supported_modes (const GArray *all,
+                                   const GArray *supported_combinations);
+
+GArray *mm_filter_supported_capabilities (MMModemCapability all,
+                                          const GArray *supported_combinations);
+
 /*****************************************************************************/
 /* 3GPP specific helpers and utilities */
 /*****************************************************************************/
@@ -97,6 +103,16 @@ typedef struct {
 void mm_3gpp_network_info_list_free (GList *info_list);
 GList *mm_3gpp_parse_cops_test_response (const gchar *reply,
                                          GError **error);
+
+/* AT+CGDCONT=? (PDP context format) test parser */
+typedef struct {
+    guint min_cid;
+    guint max_cid;
+    MMBearerIpFamily pdp_type;
+} MM3gppPdpContextFormat;
+void mm_3gpp_pdp_context_format_list_free (GList *pdp_format_list);
+GList *mm_3gpp_parse_cgdcont_test_response (const gchar *reply,
+                                            GError **error);
 
 /* AT+CGDCONT? (PDP context query) response parser */
 typedef struct {

@@ -168,10 +168,14 @@ detailed_connect_context_new (MMBroadbandBearer *self,
                                              detailed_connect_context_new);
 
     ctx->ip_family = mm_bearer_properties_get_ip_type (mm_bearer_peek_config (MM_BEARER (self)));
-    if (ctx->ip_family == MM_BEARER_IP_FAMILY_UNKNOWN) {
+    if (ctx->ip_family == MM_BEARER_IP_FAMILY_NONE ||
+        ctx->ip_family == MM_BEARER_IP_FAMILY_ANY) {
+        gchar *default_family;
+
         ctx->ip_family = mm_bearer_get_default_ip_family (MM_BEARER (self));
-        mm_dbg ("No specific IP family requested, defaulting to %s",
-                mm_bearer_ip_family_get_string (ctx->ip_family));
+        default_family = mm_bearer_ip_family_build_string_from_mask (ctx->ip_family);
+        mm_dbg ("No specific IP family requested, defaulting to %s", default_family);
+        g_free (default_family);
     }
 
     /* NOTE:
@@ -789,10 +793,15 @@ find_cid_ready (MMBaseModem *modem,
 
     pdp_type = mm_3gpp_get_pdp_type_from_ip_family (ctx->ip_family);
     if (!pdp_type) {
+        gchar * str;
+
+        str = mm_bearer_ip_family_build_string_from_mask (ctx->ip_family);
         g_simple_async_result_set_error (ctx->result,
                                          MM_CORE_ERROR,
                                          MM_CORE_ERROR_INVALID_ARGS,
-                                         "Invalid PDP type requested");
+                                         "Unsupported IP type requested: '%s'",
+                                         str);
+        g_free (str);
         detailed_connect_context_complete_and_free (ctx);
         return;
     }
@@ -834,9 +843,8 @@ parse_cid_range (MMBaseModem *modem,
                  GError **result_error)
 {
     GError *inner_error = NULL;
-    GRegex *r;
-    GMatchInfo *match_info;
-    guint cid = 0;
+    GList *formats, *l;
+    guint cid;
 
     /* If cancelled, set result error */
     if (detailed_connect_context_set_error_if_cancelled (ctx, result_error))
@@ -849,53 +857,30 @@ parse_cid_range (MMBaseModem *modem,
         return TRUE;
     }
 
-    if (!g_str_has_prefix (response, "+CGDCONT:")) {
-        mm_dbg ("Unexpected +CGDCONT response: '%s'", response);
+    formats = mm_3gpp_parse_cgdcont_test_response (response, &inner_error);
+    if (inner_error) {
+        mm_dbg ("Error parsing +CGDCONT test response: '%s'", inner_error->message);
         mm_dbg ("Defaulting to CID=1");
+        g_error_free (inner_error);
         *result = g_variant_new_uint32 (1);
         return TRUE;
     }
 
-    r = g_regex_new ("\\+CGDCONT:\\s*\\((\\d+)-(\\d+)\\),\\(?\"(\\S+)\"",
-                     G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW,
-                     0, &inner_error);
-    if (r) {
-        g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
-        cid = 0;
-        while (!inner_error &&
-               cid == 0 &&
-               g_match_info_matches (match_info)) {
-            gchar *pdp_type;
+    cid = 0;
+    for (l = formats; l; l = g_list_next (l)) {
+        MM3gppPdpContextFormat *format = l->data;
 
-            pdp_type = g_match_info_fetch (match_info, 3);
-
-            if (mm_3gpp_get_ip_family_from_pdp_type (pdp_type) == ctx->ip_family) {
-                gchar *max_cid_range_str;
-                guint max_cid_range;
-
-                max_cid_range_str = g_match_info_fetch (match_info, 2);
-                max_cid_range = (guint)atoi (max_cid_range_str);
-
-                if (ctx->max_cid < max_cid_range)
-                    cid = ctx->max_cid + 1;
-                else
-                    cid = ctx->max_cid;
-
-                g_free (max_cid_range_str);
-            }
-
-            g_free (pdp_type);
-            g_match_info_next (match_info, &inner_error);
+        /* Found exact PDP type? */
+        if (format->pdp_type == ctx->ip_family) {
+            if (ctx->max_cid < format->max_cid)
+                cid = ctx->max_cid + 1;
+            else
+                cid = ctx->max_cid;
+            break;
         }
-
-        g_match_info_free (match_info);
-        g_regex_unref (r);
     }
 
-    if (inner_error) {
-        mm_dbg ("Unexpected error matching +CGDCONT response: '%s'", inner_error->message);
-        g_error_free (inner_error);
-    }
+    mm_3gpp_pdp_context_format_list_free (formats);
 
     if (cid == 0) {
         mm_dbg ("Defaulting to CID=1");
@@ -952,11 +937,14 @@ parse_pdp_list (MMBaseModem *modem,
     mm_dbg ("Found '%u' PDP contexts", g_list_length (pdp_list));
     for (l = pdp_list; l; l = g_list_next (l)) {
         MM3gppPdpContext *pdp = l->data;
+        gchar *ip_family_str;
 
+        ip_family_str = mm_bearer_ip_family_build_string_from_mask (pdp->pdp_type);
         mm_dbg ("  PDP context [cid=%u] [type='%s'] [apn='%s']",
                 pdp->cid,
-                mm_bearer_ip_family_get_string (pdp->pdp_type),
+                ip_family_str,
                 pdp->apn ? pdp->apn : "");
+        g_free (ip_family_str);
     }
 
     /* Look for the exact PDP context we want */
@@ -973,13 +961,16 @@ parse_pdp_list (MMBaseModem *modem,
                 const gchar *apn;
 
                 apn = mm_bearer_properties_get_apn (mm_bearer_peek_config (MM_BEARER (ctx->self)));
-                if (apn &&
-                    g_str_equal (pdp->apn, apn)) {
+                if (apn && g_str_equal (pdp->apn, apn)) {
+                    gchar *ip_family_str;
+
                     /* Found a PDP context with the same CID and PDP type, we'll use it. */
+                    ip_family_str = mm_bearer_ip_family_build_string_from_mask (pdp->pdp_type);
                     mm_dbg ("Found PDP context with CID %u and PDP type %s for APN '%s'",
-                            pdp->cid, mm_bearer_ip_family_get_string (pdp->pdp_type), pdp->apn);
+                            pdp->cid, ip_family_str, pdp->apn);
                     cid = pdp->cid;
                     ctx->use_existing_cid = TRUE;
+                    g_free (ip_family_str);
                     /* In this case, stop searching */
                     break;
                 }
@@ -1131,6 +1122,7 @@ connect (MMBearer *self,
     MMBaseModem *modem = NULL;
     MMAtSerialPort *primary;
     ConnectContext *ctx;
+    const gchar *apn;
 
     /* Don't try to connect if already connected */
     if (MM_BROADBAND_BEARER (self)->priv->port) {
@@ -1177,6 +1169,54 @@ connect (MMBearer *self,
         return;
     }
 
+    /* Default bearer connection logic
+     *
+     * 1) 3GPP-only modem:
+     *     1a) If no APN given, error.
+     *     1b) If APN given, run 3GPP connection logic.
+     *     1c) If APN given, but empty (""), run 3GPP connection logic and try
+     *         to use default subscription APN.
+     *
+     * 2) 3GPP2-only modem:
+     *     2a) If no APN given, run CDMA connection logic.
+     *     2b) If APN given, error.
+     *
+     * 3) 3GPP and 3GPP2 modem:
+     *     3a) If no APN given, run CDMA connection logic.
+     *     3b) If APN given, run 3GPP connection logic.
+     *     1c) If APN given, but empty (""), run 3GPP connection logic and try
+     *         to use default subscription APN.
+     */
+
+    /* Check whether we have an APN */
+    apn = mm_bearer_properties_get_apn (mm_bearer_peek_config (MM_BEARER (self)));
+
+    /* Is this a 3GPP only modem and no APN was given? If so, error */
+    if (mm_iface_modem_is_3gpp_only (MM_IFACE_MODEM (modem)) && !apn) {
+        g_simple_async_report_error_in_idle (
+            G_OBJECT (self),
+            callback,
+            user_data,
+            MM_CORE_ERROR,
+            MM_CORE_ERROR_INVALID_ARGS,
+            "3GPP connection logic requires APN setting");
+        g_object_unref (modem);
+        return;
+    }
+
+    /* Is this a 3GPP2 only modem and APN was given? If so, error */
+    if (mm_iface_modem_is_cdma_only (MM_IFACE_MODEM (modem)) && apn) {
+        g_simple_async_report_error_in_idle (
+            G_OBJECT (self),
+            callback,
+            user_data,
+            MM_CORE_ERROR,
+            MM_CORE_ERROR_INVALID_ARGS,
+            "3GPP2 doesn't support APN setting");
+        g_object_unref (modem);
+        return;
+    }
+
     /* In this context, we only keep the stuff we'll need later */
     ctx = g_slice_new0 (ConnectContext);
     ctx->self = g_object_ref (self);
@@ -1185,8 +1225,9 @@ connect (MMBearer *self,
                                              user_data,
                                              connect);
 
-    /* If the modem has 3GPP capabilities, launch 3GPP-based connection */
-    if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (modem))) {
+    /* If the modem has 3GPP capabilities and an APN, launch 3GPP-based connection */
+    if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (modem)) && apn) {
+        mm_dbg ("Launching 3GPP connection attempt with APN '%s'", apn);
         MM_BROADBAND_BEARER_GET_CLASS (self)->connect_3gpp (
             MM_BROADBAND_BEARER (self),
             MM_BROADBAND_MODEM (modem),
@@ -1199,8 +1240,9 @@ connect (MMBearer *self,
         return;
     }
 
-    /* Otherwise, launch CDMA-specific connection */
-    if (mm_iface_modem_is_cdma (MM_IFACE_MODEM (modem))) {
+    /* Otherwise, launch CDMA-specific connection. */
+    if (mm_iface_modem_is_cdma (MM_IFACE_MODEM (modem)) && !apn) {
+        mm_dbg ("Launching 3GPP2 connection attempt");
         MM_BROADBAND_BEARER_GET_CLASS (self)->connect_cdma (
             MM_BROADBAND_BEARER (self),
             MM_BROADBAND_MODEM (modem),

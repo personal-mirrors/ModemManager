@@ -66,8 +66,8 @@ mm_iface_modem_bind_simple_status (MMIfaceModem *self,
                             status, MM_SIMPLE_PROPERTY_SIGNAL_QUALITY,
                             G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
 
-    g_object_bind_property (skeleton, "bands",
-                            status, MM_SIMPLE_PROPERTY_BANDS,
+    g_object_bind_property (skeleton, "current-bands",
+                            status, MM_SIMPLE_PROPERTY_CURRENT_BANDS,
                             G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
 
     g_object_bind_property (skeleton, "access-technologies",
@@ -1791,17 +1791,153 @@ handle_factory_reset (MmGdbusModem *skeleton,
 }
 
 /*****************************************************************************/
-/* BANDS */
+/* Current capabilities setting */
+
+typedef struct {
+    MmGdbusModem *skeleton;
+    GDBusMethodInvocation *invocation;
+    MMIfaceModem *self;
+    MMModemCapability capabilities;
+} HandleSetCurrentCapabilitiesContext;
+
+static void
+handle_set_current_capabilities_context_free (HandleSetCurrentCapabilitiesContext *ctx)
+{
+    g_object_unref (ctx->skeleton);
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->self);
+    g_slice_free (HandleSetCurrentCapabilitiesContext, ctx);
+}
+
+static void
+set_current_capabilities_ready (MMIfaceModem *self,
+                                GAsyncResult *res,
+                                HandleSetCurrentCapabilitiesContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_capabilities_finish (self, res, &error))
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+    else
+        mm_gdbus_modem_complete_set_current_capabilities (ctx->skeleton, ctx->invocation);
+    handle_set_current_capabilities_context_free (ctx);
+}
+
+static void
+handle_set_current_capabilities_auth_ready (MMBaseModem *self,
+                                            GAsyncResult *res,
+                                            HandleSetCurrentCapabilitiesContext *ctx)
+{
+    GError *error = NULL;
+    gchar *capabilities_string;
+    GArray *supported;
+    gboolean matched = FALSE;
+    guint i;
+
+    if (!mm_base_modem_authorize_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_set_current_capabilities_context_free (ctx);
+        return;
+    }
+
+    /* Get list of supported capabilities */
+    supported = mm_common_capability_combinations_variant_to_garray (
+        mm_gdbus_modem_get_supported_capabilities (ctx->skeleton));
+
+    /* Don't allow capability switching if only one item given in the supported list */
+    if (supported->len == 1) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot change capabilities: only one combination supported");
+        handle_set_current_capabilities_context_free (ctx);
+        g_array_unref (supported);
+        return;
+    }
+
+    /* Check if the given combination is supported */
+    for (i = 0; !matched && i < supported->len; i++) {
+        MMModemCapability supported_capability;
+
+        supported_capability = g_array_index (supported, MMModemCapability, i);
+        if (supported_capability == ctx->capabilities)
+                matched = TRUE;
+    }
+    g_array_unref (supported);
+
+    if (!matched) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "The given combination of capabilities is not supported");
+        handle_set_current_capabilities_context_free (ctx);
+        return;
+    }
+
+    /* Check if we already are in the requested setup */
+    if (mm_gdbus_modem_get_current_capabilities (ctx->skeleton) == ctx->capabilities) {
+        /* Nothing to do */
+        mm_gdbus_modem_complete_set_current_capabilities (ctx->skeleton, ctx->invocation);
+        handle_set_current_capabilities_context_free (ctx);
+        return;
+    }
+
+    /* If setting current capabilities is not implemented, report an error */
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_capabilities ||
+        !MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_capabilities_finish) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Setting current capabilities not supported");
+        handle_set_current_capabilities_context_free (ctx);
+        return;
+    }
+
+    capabilities_string = mm_modem_capability_build_string_from_mask (ctx->capabilities);
+    mm_dbg ("Setting new list of capabilities: '%s'", capabilities_string);
+    g_free (capabilities_string);
+
+    MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_capabilities (
+        MM_IFACE_MODEM (self),
+        ctx->capabilities,
+        (GAsyncReadyCallback)set_current_capabilities_ready,
+        ctx);
+}
+
+static gboolean
+handle_set_current_capabilities (MmGdbusModem *skeleton,
+                                 GDBusMethodInvocation *invocation,
+                                 guint capabilities,
+                                 MMIfaceModem *self)
+{
+    HandleSetCurrentCapabilitiesContext *ctx;
+
+    ctx = g_slice_new (HandleSetCurrentCapabilitiesContext);
+    ctx->skeleton = g_object_ref (skeleton);
+    ctx->invocation = g_object_ref (invocation);
+    ctx->self = g_object_ref (self);
+    ctx->capabilities = capabilities;
+
+    mm_base_modem_authorize (MM_BASE_MODEM (self),
+                             invocation,
+                             MM_AUTHORIZATION_DEVICE_CONTROL,
+                             (GAsyncReadyCallback)handle_set_current_capabilities_auth_ready,
+                             ctx);
+    return TRUE;
+}
+
+/*****************************************************************************/
+/* Current bands setting */
 
 typedef struct {
     MMIfaceModem *self;
     MmGdbusModem *skeleton;
     GSimpleAsyncResult *result;
     GArray *bands_array;
-} SetBandsContext;
+} SetCurrentBandsContext;
 
 static void
-set_bands_context_complete_and_free (SetBandsContext *ctx)
+set_current_bands_context_complete_and_free (SetCurrentBandsContext *ctx)
 {
     g_simple_async_result_complete_in_idle (ctx->result);
     g_object_unref (ctx->result);
@@ -1810,25 +1946,25 @@ set_bands_context_complete_and_free (SetBandsContext *ctx)
         g_object_unref (ctx->skeleton);
     if (ctx->bands_array)
         g_array_unref (ctx->bands_array);
-    g_free (ctx);
+    g_slice_free (SetCurrentBandsContext, ctx);
 }
 
 gboolean
-mm_iface_modem_set_bands_finish (MMIfaceModem *self,
-                                 GAsyncResult *res,
-                                 GError **error)
+mm_iface_modem_set_current_bands_finish (MMIfaceModem *self,
+                                         GAsyncResult *res,
+                                         GError **error)
 {
     return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
 
 static void
-set_bands_ready (MMIfaceModem *self,
-                 GAsyncResult *res,
-                 SetBandsContext *ctx)
+set_current_bands_ready (MMIfaceModem *self,
+                         GAsyncResult *res,
+                         SetCurrentBandsContext *ctx)
 {
     GError *error = NULL;
 
-    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_bands_finish (self, res, &error))
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_bands_finish (self, res, &error))
         g_simple_async_result_take_error (ctx->result, error);
     else {
         /* Never show just 'any' in the interface */
@@ -1838,17 +1974,17 @@ set_bands_ready (MMIfaceModem *self,
 
             supported_bands = (mm_common_bands_variant_to_garray (
                                    mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
-            mm_gdbus_modem_set_bands (ctx->skeleton,
-                                      mm_common_bands_garray_to_variant (supported_bands));
+            mm_gdbus_modem_set_current_bands (ctx->skeleton,
+                                              mm_common_bands_garray_to_variant (supported_bands));
             g_array_unref (supported_bands);
         } else
-            mm_gdbus_modem_set_bands (ctx->skeleton,
-                                      mm_common_bands_garray_to_variant (ctx->bands_array));
+            mm_gdbus_modem_set_current_bands (ctx->skeleton,
+                                              mm_common_bands_garray_to_variant (ctx->bands_array));
 
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
     }
 
-    set_bands_context_complete_and_free (ctx);
+    set_current_bands_context_complete_and_free (ctx);
 }
 
 static gboolean
@@ -1910,20 +2046,20 @@ validate_bands (const GArray *supported_bands_array,
 }
 
 void
-mm_iface_modem_set_bands (MMIfaceModem *self,
-                          GArray *bands_array,
-                          GAsyncReadyCallback callback,
-                          gpointer user_data)
+mm_iface_modem_set_current_bands (MMIfaceModem *self,
+                                  GArray *bands_array,
+                                  GAsyncReadyCallback callback,
+                                  gpointer user_data)
 {
-    SetBandsContext *ctx;
+    SetCurrentBandsContext *ctx;
     GArray *supported_bands_array;
     GArray *current_bands_array;
     GError *error = NULL;
     gchar *bands_string;
 
     /* If setting allowed bands is not implemented, report an error */
-    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_bands ||
-        !MM_IFACE_MODEM_GET_INTERFACE (self)->set_bands_finish) {
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_bands ||
+        !MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_bands_finish) {
         g_simple_async_report_error_in_idle (G_OBJECT (self),
                                              callback,
                                              user_data,
@@ -1934,12 +2070,12 @@ mm_iface_modem_set_bands (MMIfaceModem *self,
     }
 
     /* Setup context */
-    ctx = g_new0 (SetBandsContext, 1);
+    ctx = g_slice_new0 (SetCurrentBandsContext);
     ctx->self = g_object_ref (self);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
                                              callback,
                                              user_data,
-                                             mm_iface_modem_set_bands);
+                                             mm_iface_modem_set_current_bands);
     g_object_get (self,
                   MM_IFACE_MODEM_DBUS_SKELETON, &ctx->skeleton,
                   NULL);
@@ -1948,7 +2084,7 @@ mm_iface_modem_set_bands (MMIfaceModem *self,
                                          MM_CORE_ERROR,
                                          MM_CORE_ERROR_FAILED,
                                          "Couldn't get interface skeleton");
-        set_bands_context_complete_and_free (ctx);
+        set_current_bands_context_complete_and_free (ctx);
         return;
     }
 
@@ -1986,7 +2122,7 @@ mm_iface_modem_set_bands (MMIfaceModem *self,
 
     /* Simply return if target list of bands equals to current list of bands */
     current_bands_array = (mm_common_bands_variant_to_garray (
-                              mm_gdbus_modem_get_bands (ctx->skeleton)));
+                              mm_gdbus_modem_get_current_bands (ctx->skeleton)));
     if (mm_common_bands_garray_cmp (ctx->bands_array, current_bands_array)) {
         mm_dbg ("Requested list of bands (%s) is equal to the current ones, skipping re-set",
                 bands_string);
@@ -1994,7 +2130,7 @@ mm_iface_modem_set_bands (MMIfaceModem *self,
         g_array_unref (supported_bands_array);
         g_array_unref (current_bands_array);
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        set_bands_context_complete_and_free (ctx);
+        set_current_bands_context_complete_and_free (ctx);
         return;
     }
 
@@ -2015,15 +2151,15 @@ mm_iface_modem_set_bands (MMIfaceModem *self,
         g_array_unref (supported_bands_array);
         g_array_unref (current_bands_array);
         g_simple_async_result_take_error (ctx->result, error);
-        set_bands_context_complete_and_free (ctx);
+        set_current_bands_context_complete_and_free (ctx);
         return;
     }
 
     mm_dbg ("Setting new list of bands: '%s'", bands_string);
-    MM_IFACE_MODEM_GET_INTERFACE (self)->set_bands (
+    MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_bands (
         self,
         ctx->bands_array,
-        (GAsyncReadyCallback)set_bands_ready,
+        (GAsyncReadyCallback)set_current_bands_ready,
         ctx);
 
     g_array_unref (supported_bands_array);
@@ -2036,37 +2172,37 @@ typedef struct {
     GDBusMethodInvocation *invocation;
     MMIfaceModem *self;
     GVariant *bands;
-} HandleSetBandsContext;
+} HandleSetCurrentBandsContext;
 
 static void
-handle_set_bands_context_free (HandleSetBandsContext *ctx)
+handle_set_current_bands_context_free (HandleSetCurrentBandsContext *ctx)
 {
     g_variant_unref (ctx->bands);
     g_object_unref (ctx->skeleton);
     g_object_unref (ctx->invocation);
     g_object_unref (ctx->self);
-    g_free (ctx);
+    g_slice_free (HandleSetCurrentBandsContext, ctx);
 }
 
 static void
-handle_set_bands_ready (MMIfaceModem *self,
-                        GAsyncResult *res,
-                        HandleSetBandsContext *ctx)
+handle_set_current_bands_ready (MMIfaceModem *self,
+                                GAsyncResult *res,
+                                HandleSetCurrentBandsContext *ctx)
 {
     GError *error = NULL;
 
-    if (!mm_iface_modem_set_bands_finish (self, res, &error))
+    if (!mm_iface_modem_set_current_bands_finish (self, res, &error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
     else
-        mm_gdbus_modem_complete_set_bands (ctx->skeleton, ctx->invocation);
+        mm_gdbus_modem_complete_set_current_bands (ctx->skeleton, ctx->invocation);
 
-    handle_set_bands_context_free (ctx);
+    handle_set_current_bands_context_free (ctx);
 }
 
 static void
-handle_set_bands_auth_ready (MMBaseModem *self,
-                             GAsyncResult *res,
-                             HandleSetBandsContext *ctx)
+handle_set_current_bands_auth_ready (MMBaseModem *self,
+                                     GAsyncResult *res,
+                                     HandleSetCurrentBandsContext *ctx)
 {
     GArray *bands_array;
     MMModemState modem_state;
@@ -2074,7 +2210,7 @@ handle_set_bands_auth_ready (MMBaseModem *self,
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_set_bands_context_free (ctx);
+        handle_set_current_bands_context_free (ctx);
         return;
     }
 
@@ -2087,29 +2223,29 @@ handle_set_bands_auth_ready (MMBaseModem *self,
         g_dbus_method_invocation_return_error (ctx->invocation,
                                                MM_CORE_ERROR,
                                                MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot set allowed bands: "
+                                               "Cannot set current bands: "
                                                "not initialized/unlocked yet");
-        handle_set_bands_context_free (ctx);
+        handle_set_current_bands_context_free (ctx);
         return;
     }
 
     bands_array = mm_common_bands_variant_to_garray (ctx->bands);
-    mm_iface_modem_set_bands (MM_IFACE_MODEM (self),
-                              bands_array,
-                              (GAsyncReadyCallback)handle_set_bands_ready,
-                              ctx);
+    mm_iface_modem_set_current_bands (MM_IFACE_MODEM (self),
+                                      bands_array,
+                                      (GAsyncReadyCallback)handle_set_current_bands_ready,
+                                      ctx);
     g_array_unref (bands_array);
 }
 
 static gboolean
-handle_set_bands (MmGdbusModem *skeleton,
-                  GDBusMethodInvocation *invocation,
-                  GVariant *bands_variant,
-                  MMIfaceModem *self)
+handle_set_current_bands (MmGdbusModem *skeleton,
+                          GDBusMethodInvocation *invocation,
+                          GVariant *bands_variant,
+                          MMIfaceModem *self)
 {
-    HandleSetBandsContext *ctx;
+    HandleSetCurrentBandsContext *ctx;
 
-    ctx = g_new (HandleSetBandsContext, 1);
+    ctx = g_slice_new (HandleSetCurrentBandsContext);
     ctx->skeleton = g_object_ref (skeleton);
     ctx->invocation = g_object_ref (invocation);
     ctx->self = g_object_ref (self);
@@ -2118,13 +2254,13 @@ handle_set_bands (MmGdbusModem *skeleton,
     mm_base_modem_authorize (MM_BASE_MODEM (self),
                              invocation,
                              MM_AUTHORIZATION_DEVICE_CONTROL,
-                             (GAsyncReadyCallback)handle_set_bands_auth_ready,
+                             (GAsyncReadyCallback)handle_set_current_bands_auth_ready,
                              ctx);
     return TRUE;
 }
 
 /*****************************************************************************/
-/* ALLOWED MODES */
+/* Set current modes */
 
 typedef struct {
     MMIfaceModem *self;
@@ -2132,10 +2268,10 @@ typedef struct {
     GSimpleAsyncResult *result;
     MMModemMode allowed;
     MMModemMode preferred;
-} SetAllowedModesContext;
+} SetCurrentModesContext;
 
 static void
-set_allowed_modes_context_complete_and_free (SetAllowedModesContext *ctx)
+set_current_modes_context_complete_and_free (SetCurrentModesContext *ctx)
 {
     g_simple_async_result_complete_in_idle (ctx->result);
     g_object_unref (ctx->result);
@@ -2146,7 +2282,7 @@ set_allowed_modes_context_complete_and_free (SetAllowedModesContext *ctx)
 }
 
 gboolean
-mm_iface_modem_set_allowed_modes_finish (MMIfaceModem *self,
+mm_iface_modem_set_current_modes_finish (MMIfaceModem *self,
                                          GAsyncResult *res,
                                          GError **error)
 {
@@ -2154,37 +2290,80 @@ mm_iface_modem_set_allowed_modes_finish (MMIfaceModem *self,
 }
 
 static void
-set_allowed_modes_ready (MMIfaceModem *self,
+after_set_load_current_modes_ready (MMIfaceModem *self,
+                                    GAsyncResult *res,
+                                    SetCurrentModesContext *ctx)
+{
+    MMModemMode allowed = MM_MODEM_MODE_NONE;
+    MMModemMode preferred = MM_MODEM_MODE_NONE;
+    GError *error = NULL;
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_modes_finish (self,
+                                                                         res,
+                                                                         &allowed,
+                                                                         &preferred,
+                                                                         &error)) {
+        /* Errors when getting allowed/preferred won't be critical */
+        mm_warn ("couldn't load current allowed/preferred modes: '%s'", error->message);
+        g_error_free (error);
+
+        /* If errors getting allowed modes, default to the ones we asked for */
+        mm_gdbus_modem_set_current_modes (ctx->skeleton, g_variant_new ("(uu)", ctx->allowed, ctx->preferred));
+    } else
+        mm_gdbus_modem_set_current_modes (ctx->skeleton, g_variant_new ("(uu)", allowed, preferred));
+
+    /* Done */
+    set_current_modes_context_complete_and_free (ctx);
+}
+
+static void
+set_current_modes_ready (MMIfaceModem *self,
                          GAsyncResult *res,
-                         SetAllowedModesContext *ctx)
+                         SetCurrentModesContext *ctx)
 {
     GError *error = NULL;
 
-    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_allowed_modes_finish (self, res, &error))
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_modes_finish (self, res, &error)) {
         g_simple_async_result_take_error (ctx->result, error);
-    else {
-        mm_gdbus_modem_set_allowed_modes (ctx->skeleton, ctx->allowed);
-        mm_gdbus_modem_set_preferred_mode (ctx->skeleton, ctx->preferred);
-        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+        set_current_modes_context_complete_and_free (ctx);
+        return;
     }
 
-    set_allowed_modes_context_complete_and_free (ctx);
+    if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_modes &&
+        MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_modes_finish) {
+        MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_modes (
+            ctx->self,
+            (GAsyncReadyCallback)after_set_load_current_modes_ready,
+            ctx);
+        return;
+    }
+
+    /* Default to the ones we requested */
+    mm_gdbus_modem_set_current_modes (ctx->skeleton,
+                                      g_variant_new ("(uu)",
+                                                     ctx->allowed,
+                                                     ctx->preferred));
+
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    set_current_modes_context_complete_and_free (ctx);
 }
 
 void
-mm_iface_modem_set_allowed_modes (MMIfaceModem *self,
+mm_iface_modem_set_current_modes (MMIfaceModem *self,
                                   MMModemMode allowed,
                                   MMModemMode preferred,
                                   GAsyncReadyCallback callback,
                                   gpointer user_data)
 {
-    SetAllowedModesContext *ctx;
-    MMModemMode supported;
-    MMModemMode not_supported;
+    GArray *supported;
+    SetCurrentModesContext *ctx;
+    MMModemMode current_allowed = MM_MODEM_MODE_ANY;
+    MMModemMode current_preferred = MM_MODEM_MODE_NONE;
+    guint i;
 
     /* If setting allowed modes is not implemented, report an error */
-    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_allowed_modes ||
-        !MM_IFACE_MODEM_GET_INTERFACE (self)->set_allowed_modes_finish) {
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_modes ||
+        !MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_modes_finish) {
         g_simple_async_report_error_in_idle (G_OBJECT (self),
                                              callback,
                                              user_data,
@@ -2195,12 +2374,14 @@ mm_iface_modem_set_allowed_modes (MMIfaceModem *self,
     }
 
     /* Setup context */
-    ctx = g_new0 (SetAllowedModesContext, 1);
+    ctx = g_new0 (SetCurrentModesContext, 1);
     ctx->self = g_object_ref (self);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
                                              callback,
                                              user_data,
-                                             mm_iface_modem_set_allowed_modes);
+                                             mm_iface_modem_set_current_modes);
+    ctx->allowed = allowed;
+    ctx->preferred = preferred;
     g_object_get (self,
                   MM_IFACE_MODEM_DBUS_SKELETON, &ctx->skeleton,
                   NULL);
@@ -2209,49 +2390,66 @@ mm_iface_modem_set_allowed_modes (MMIfaceModem *self,
                                          MM_CORE_ERROR,
                                          MM_CORE_ERROR_FAILED,
                                          "Couldn't get interface skeleton");
-        set_allowed_modes_context_complete_and_free (ctx);
+        set_current_modes_context_complete_and_free (ctx);
         return;
     }
 
     /* Get list of supported modes */
-    supported = mm_gdbus_modem_get_supported_modes (ctx->skeleton);
+    supported = mm_common_mode_combinations_variant_to_garray (
+        mm_gdbus_modem_get_supported_modes (ctx->skeleton));
 
-    /* Whenever we get 'any', just reset to be equal to the list of supported modes */
-    if (allowed == MM_MODEM_MODE_ANY)
-        allowed = supported;
-
-    ctx->allowed = allowed;
-    ctx->preferred = preferred;
-
-    /* Check if we already are in the requested setup */
-    if (mm_gdbus_modem_get_allowed_modes (ctx->skeleton) == allowed &&
-        mm_gdbus_modem_get_preferred_mode (ctx->skeleton) == preferred) {
-        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        set_allowed_modes_context_complete_and_free (ctx);
-        return;
-    }
-
-    /* Check if any of the modes being allowed is not supported */
-    not_supported = ((supported ^ allowed) & allowed);
-
-    /* Ensure allowed is a subset of supported */
-    if (not_supported) {
-        gchar *not_supported_str;
-        gchar *supported_str;
-
-        not_supported_str = mm_modem_mode_build_string_from_mask (not_supported);
-        supported_str = mm_modem_mode_build_string_from_mask (supported);
+    /* Don't allow mode switchin if only one item given in the supported list */
+    if (supported->len == 1) {
         g_simple_async_result_set_error (ctx->result,
                                          MM_CORE_ERROR,
                                          MM_CORE_ERROR_UNSUPPORTED,
-                                         "Some of the allowed modes (%s) are not "
-                                         "supported (%s)",
-                                         not_supported_str,
-                                         supported_str);
-        g_free (supported_str);
-        g_free (not_supported_str);
+                                         "Cannot change modes: only one combination supported");
+        g_array_unref (supported);
+        set_current_modes_context_complete_and_free (ctx);
+        return;
+    }
 
-        set_allowed_modes_context_complete_and_free (ctx);
+    if (allowed == MM_MODEM_MODE_ANY &&
+        preferred == MM_MODEM_MODE_NONE) {
+        /* Allow allowed=ANY & preferred=NONE, all plugins should support it */
+    } else {
+        gboolean matched = FALSE;
+
+        /* Check if the given combination is supported */
+        for (i = 0; !matched && i < supported->len; i++) {
+            MMModemModeCombination *supported_mode;
+
+            supported_mode = &g_array_index (supported, MMModemModeCombination, i);
+            if ((supported_mode->allowed == MM_MODEM_MODE_ANY &&
+                 supported_mode->preferred == MM_MODEM_MODE_NONE) ||
+                (supported_mode->allowed == allowed &&
+                 supported_mode->preferred == preferred)) {
+                matched = TRUE;
+            }
+        }
+
+        if (!matched) {
+            g_simple_async_result_set_error (ctx->result,
+                                             MM_CORE_ERROR,
+                                             MM_CORE_ERROR_UNSUPPORTED,
+                                             "The given combination of allowed and preferred modes is not supported");
+            g_array_unref (supported);
+            set_current_modes_context_complete_and_free (ctx);
+            return;
+        }
+    }
+
+    g_array_unref (supported);
+
+    /* Check if we already are in the requested setup */
+    g_variant_get (mm_gdbus_modem_get_current_modes (ctx->skeleton),
+                   "(uu)",
+                   &current_allowed,
+                   &current_preferred);
+    if (current_allowed == allowed &&
+        current_preferred == preferred) {
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+        set_current_modes_context_complete_and_free (ctx);
         return;
     }
 
@@ -2271,14 +2469,16 @@ mm_iface_modem_set_allowed_modes (MMIfaceModem *self,
         g_free (preferred_str);
         g_free (allowed_str);
 
-        set_allowed_modes_context_complete_and_free (ctx);
+        set_current_modes_context_complete_and_free (ctx);
         return;
     }
 
-    MM_IFACE_MODEM_GET_INTERFACE (self)->set_allowed_modes (self,
+    ctx->allowed = allowed;
+    ctx->preferred = preferred;
+    MM_IFACE_MODEM_GET_INTERFACE (self)->set_current_modes (self,
                                                             allowed,
                                                             preferred,
-                                                            (GAsyncReadyCallback)set_allowed_modes_ready,
+                                                            (GAsyncReadyCallback)set_current_modes_ready,
                                                             ctx);
 }
 
@@ -2288,10 +2488,10 @@ typedef struct {
     MMIfaceModem *self;
     MMModemMode allowed;
     MMModemMode preferred;
-} HandleSetAllowedModesContext;
+} HandleSetCurrentModesContext;
 
 static void
-handle_set_allowed_modes_context_free (HandleSetAllowedModesContext *ctx)
+handle_set_current_modes_context_free (HandleSetCurrentModesContext *ctx)
 {
     g_object_unref (ctx->skeleton);
     g_object_unref (ctx->invocation);
@@ -2300,31 +2500,31 @@ handle_set_allowed_modes_context_free (HandleSetAllowedModesContext *ctx)
 }
 
 static void
-handle_set_allowed_modes_ready (MMIfaceModem *self,
+handle_set_current_modes_ready (MMIfaceModem *self,
                                 GAsyncResult *res,
-                                HandleSetAllowedModesContext *ctx)
+                                HandleSetCurrentModesContext *ctx)
 {
     GError *error = NULL;
 
-    if (!mm_iface_modem_set_allowed_modes_finish (self, res, &error))
+    if (!mm_iface_modem_set_current_modes_finish (self, res, &error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
     else
-        mm_gdbus_modem_complete_set_allowed_modes (ctx->skeleton, ctx->invocation);
+        mm_gdbus_modem_complete_set_current_modes (ctx->skeleton, ctx->invocation);
 
-    handle_set_allowed_modes_context_free (ctx);
+    handle_set_current_modes_context_free (ctx);
 }
 
 static void
-handle_set_allowed_modes_auth_ready (MMBaseModem *self,
+handle_set_current_modes_auth_ready (MMBaseModem *self,
                                      GAsyncResult *res,
-                                     HandleSetAllowedModesContext *ctx)
+                                     HandleSetCurrentModesContext *ctx)
 {
     MMModemState modem_state;
     GError *error = NULL;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_set_allowed_modes_context_free (ctx);
+        handle_set_current_modes_context_free (ctx);
         return;
     }
 
@@ -2337,39 +2537,41 @@ handle_set_allowed_modes_auth_ready (MMBaseModem *self,
         g_dbus_method_invocation_return_error (ctx->invocation,
                                                MM_CORE_ERROR,
                                                MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot set allowed modes: "
+                                               "Cannot set current modes: "
                                                "not initialized/unlocked yet");
-        handle_set_allowed_modes_context_free (ctx);
+        handle_set_current_modes_context_free (ctx);
         return;
     }
 
-    mm_iface_modem_set_allowed_modes (MM_IFACE_MODEM (self),
+    mm_iface_modem_set_current_modes (MM_IFACE_MODEM (self),
                                       ctx->allowed,
                                       ctx->preferred,
-                                      (GAsyncReadyCallback)handle_set_allowed_modes_ready,
+                                      (GAsyncReadyCallback)handle_set_current_modes_ready,
                                       ctx);
 }
 
 static gboolean
-handle_set_allowed_modes (MmGdbusModem *skeleton,
+handle_set_current_modes (MmGdbusModem *skeleton,
                           GDBusMethodInvocation *invocation,
-                          guint allowed,
-                          guint preferred,
+                          GVariant *variant,
                           MMIfaceModem *self)
 {
-    HandleSetAllowedModesContext *ctx;
+    HandleSetCurrentModesContext *ctx;
 
-    ctx = g_new (HandleSetAllowedModesContext, 1);
+    ctx = g_new (HandleSetCurrentModesContext, 1);
     ctx->skeleton = g_object_ref (skeleton);
     ctx->invocation = g_object_ref (invocation);
     ctx->self = g_object_ref (self);
-    ctx->allowed = allowed;
-    ctx->preferred = preferred;
+
+    g_variant_get (variant,
+                   "(uu)",
+                   &ctx->allowed,
+                   &ctx->preferred);
 
     mm_base_modem_authorize (MM_BASE_MODEM (self),
                              invocation,
                              MM_AUTHORIZATION_DEVICE_CONTROL,
-                             (GAsyncReadyCallback)handle_set_allowed_modes_auth_ready,
+                             (GAsyncReadyCallback)handle_set_current_modes_auth_ready,
                              ctx);
     return TRUE;
 }
@@ -2955,35 +3157,6 @@ mm_iface_modem_set_power_state (MMIfaceModem *self,
 /*****************************************************************************/
 /* MODEM DISABLING */
 
-typedef struct _DisablingContext DisablingContext;
-static void interface_disabling_step (DisablingContext *ctx);
-
-typedef enum {
-    DISABLING_STEP_FIRST,
-    DISABLING_STEP_CURRENT_BANDS,
-    DISABLING_STEP_ALLOWED_MODES,
-    DISABLING_STEP_LAST
-} DisablingStep;
-
-struct _DisablingContext {
-    MMIfaceModem *self;
-    DisablingStep step;
-    MMModemState previous_state;
-    GSimpleAsyncResult *result;
-    MmGdbusModem *skeleton;
-};
-
-static void
-disabling_context_complete_and_free (DisablingContext *ctx)
-{
-    g_simple_async_result_complete_in_idle (ctx->result);
-    g_object_unref (ctx->self);
-    g_object_unref (ctx->result);
-    if (ctx->skeleton)
-        g_object_unref (ctx->skeleton);
-    g_free (ctx);
-}
-
 gboolean
 mm_iface_modem_disable_finish (MMIfaceModem *self,
                               GAsyncResult *res,
@@ -2992,65 +3165,21 @@ mm_iface_modem_disable_finish (MMIfaceModem *self,
     return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
 }
 
-static void
-interface_disabling_step (DisablingContext *ctx)
-{
-    switch (ctx->step) {
-    case DISABLING_STEP_FIRST:
-        /* Fall down to next step */
-        ctx->step++;
-
-    case DISABLING_STEP_CURRENT_BANDS:
-        /* Clear current bands */
-        mm_gdbus_modem_set_bands (ctx->skeleton, mm_common_build_bands_unknown ());
-        /* Fall down to next step */
-        ctx->step++;
-
-    case DISABLING_STEP_ALLOWED_MODES:
-        /* Clear allowed/preferred modes */
-        mm_gdbus_modem_set_allowed_modes (ctx->skeleton, MM_MODEM_MODE_NONE);
-        mm_gdbus_modem_set_preferred_mode (ctx->skeleton, MM_MODEM_MODE_NONE);
-        /* Fall down to next step */
-        ctx->step++;
-
-    case DISABLING_STEP_LAST:
-        /* We are done without errors! */
-        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        disabling_context_complete_and_free (ctx);
-        return;
-    }
-
-    g_assert_not_reached ();
-}
-
 void
 mm_iface_modem_disable (MMIfaceModem *self,
                         GAsyncReadyCallback callback,
                         gpointer user_data)
 {
-    DisablingContext *ctx;
+    GSimpleAsyncResult *result;
 
-    ctx = g_new0 (DisablingContext, 1);
-    ctx->self = g_object_ref (self);
-    ctx->result = g_simple_async_result_new (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             mm_iface_modem_disable);
-    ctx->step = DISABLING_STEP_FIRST;
-    g_object_get (ctx->self,
-                  MM_IFACE_MODEM_DBUS_SKELETON, &ctx->skeleton,
-                  MM_IFACE_MODEM_STATE, &ctx->previous_state,
-                  NULL);
-    if (!ctx->skeleton) {
-        g_simple_async_result_set_error (ctx->result,
-                                         MM_CORE_ERROR,
-                                         MM_CORE_ERROR_FAILED,
-                                         "Couldn't get interface skeleton");
-        disabling_context_complete_and_free (ctx);
-        return;
-    }
-
-    interface_disabling_step (ctx);
+    /* Just complete, nothing to do */
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        mm_iface_modem_disable);
+    g_simple_async_result_set_op_res_gboolean (result, TRUE);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
 }
 
 /*****************************************************************************/
@@ -3065,8 +3194,6 @@ typedef enum {
     ENABLING_STEP_FLOW_CONTROL,
     ENABLING_STEP_SUPPORTED_CHARSETS,
     ENABLING_STEP_CHARSET,
-    ENABLING_STEP_ALLOWED_MODES,
-    ENABLING_STEP_CURRENT_BANDS,
     ENABLING_STEP_LAST
 } EnablingStep;
 
@@ -3191,76 +3318,6 @@ setup_charset_ready (MMIfaceModem *self,
     interface_enabling_step (ctx);
 }
 
-static void
-load_allowed_modes_ready (MMIfaceModem *self,
-                          GAsyncResult *res,
-                          EnablingContext *ctx)
-{
-    MMModemMode allowed = MM_MODEM_MODE_NONE;
-    MMModemMode preferred = MM_MODEM_MODE_NONE;
-    GError *error = NULL;
-
-    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->load_allowed_modes_finish (self,
-                                                                         res,
-                                                                         &allowed,
-                                                                         &preferred,
-                                                                         &error)) {
-        /* Errors when getting allowed/preferred won't be critical */
-        mm_warn ("couldn't load current allowed/preferred modes: '%s'", error->message);
-        g_error_free (error);
-
-        /* If errors getting allowed modes, assume allowed=supported,
-         * and none preferred */
-        allowed = mm_gdbus_modem_get_supported_modes (ctx->skeleton);
-        preferred = MM_MODEM_MODE_NONE;
-    }
-
-    mm_gdbus_modem_set_allowed_modes (ctx->skeleton, allowed);
-    mm_gdbus_modem_set_preferred_mode (ctx->skeleton, preferred);
-
-    /* Done, Go on to next step */
-    ctx->step++;
-    interface_enabling_step (ctx);
-}
-
-static void
-load_current_bands_ready (MMIfaceModem *self,
-                          GAsyncResult *res,
-                          EnablingContext *ctx)
-{
-    GArray *current_bands;
-    GArray *filtered_bands;
-    GArray *supported_bands;
-    GError *error = NULL;
-
-    current_bands = MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands_finish (self, res, &error);
-
-    supported_bands = (mm_common_bands_variant_to_garray (
-                           mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
-    filtered_bands = mm_filter_current_bands (supported_bands, current_bands);
-    if (current_bands)
-        g_array_unref (current_bands);
-    if (supported_bands)
-        g_array_unref (supported_bands);
-
-    if (filtered_bands) {
-        mm_gdbus_modem_set_bands (ctx->skeleton,
-                                  mm_common_bands_garray_to_variant (filtered_bands));
-        g_array_unref (filtered_bands);
-    } else
-        mm_gdbus_modem_set_bands (ctx->skeleton, mm_common_build_bands_unknown ());
-
-    /* Errors when getting current bands won't be critical */
-    if (error) {
-        mm_warn ("couldn't load current Bands: '%s'", error->message);
-        g_error_free (error);
-    }
-
-    /* Done, Go on to next step */
-    ctx->step++;
-    interface_enabling_step (ctx);
-}
-
 static const MMModemCharset best_charsets[] = {
     MM_MODEM_CHARSET_UTF8,
     MM_MODEM_CHARSET_UCS2,
@@ -3354,37 +3411,6 @@ interface_enabling_step (EnablingContext *ctx)
         /* Fall down to next step */
         ctx->step++;
 
-    case ENABLING_STEP_ALLOWED_MODES:
-        if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_allowed_modes &&
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_allowed_modes_finish) {
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_allowed_modes (
-                    ctx->self,
-                    (GAsyncReadyCallback)load_allowed_modes_ready,
-                    ctx);
-                return;
-        }
-
-        /* If no way to get allowed modes, assume allowed=supported,
-         * and none preferred */
-        mm_gdbus_modem_set_allowed_modes (ctx->skeleton,
-                                          mm_gdbus_modem_get_supported_modes (ctx->skeleton));
-        mm_gdbus_modem_set_preferred_mode (ctx->skeleton, MM_MODEM_MODE_NONE);
-        /* Fall down to next step */
-        ctx->step++;
-
-    case ENABLING_STEP_CURRENT_BANDS:
-        if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_bands &&
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_bands_finish) {
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_bands (
-                    ctx->self,
-                    (GAsyncReadyCallback)load_current_bands_ready,
-                    ctx);
-                return;
-        } else
-            mm_gdbus_modem_set_bands (ctx->skeleton, mm_common_build_bands_unknown ());
-        /* Fall down to next step */
-        ctx->step++;
-
     case ENABLING_STEP_LAST:
         /* We are done without errors! */
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
@@ -3435,7 +3461,7 @@ static void interface_initialization_step (InitializationContext *ctx);
 typedef enum {
     INITIALIZATION_STEP_FIRST,
     INITIALIZATION_STEP_CURRENT_CAPABILITIES,
-    INITIALIZATION_STEP_MODEM_CAPABILITIES,
+    INITIALIZATION_STEP_SUPPORTED_CAPABILITIES,
     INITIALIZATION_STEP_BEARERS,
     INITIALIZATION_STEP_MANUFACTURER,
     INITIALIZATION_STEP_MODEL,
@@ -3444,10 +3470,13 @@ typedef enum {
     INITIALIZATION_STEP_DEVICE_ID,
     INITIALIZATION_STEP_SUPPORTED_MODES,
     INITIALIZATION_STEP_SUPPORTED_BANDS,
+    INITIALIZATION_STEP_SUPPORTED_IP_FAMILIES,
     INITIALIZATION_STEP_POWER_STATE,
     INITIALIZATION_STEP_UNLOCK_REQUIRED,
     INITIALIZATION_STEP_SIM,
     INITIALIZATION_STEP_OWN_NUMBERS,
+    INITIALIZATION_STEP_CURRENT_MODES,
+    INITIALIZATION_STEP_CURRENT_BANDS,
     INITIALIZATION_STEP_LAST
 } InitializationStep;
 
@@ -3614,7 +3643,33 @@ load_current_capabilities_ready (MMIfaceModem *self,
     interface_initialization_step (ctx);
 }
 
-UINT_REPLY_READY_FN (modem_capabilities, "Modem Capabilities")
+static void
+load_supported_capabilities_ready (MMIfaceModem *self,
+                                   GAsyncResult *res,
+                                   InitializationContext *ctx)
+{
+    GArray *supported_capabilities;
+    GError *error = NULL;
+
+    supported_capabilities = MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_capabilities_finish (self, res, &error);
+    if (error) {
+        g_propagate_error (&ctx->fatal_error, error);
+        g_prefix_error (&ctx->fatal_error, "couldn't load supported capabilities: ");
+        /* Jump to the last step */
+        ctx->step = INITIALIZATION_STEP_LAST;
+        interface_initialization_step (ctx);
+        return;
+    }
+
+    /* Update supported caps */
+    mm_gdbus_modem_set_supported_capabilities (ctx->skeleton,
+                                               mm_common_capability_combinations_garray_to_variant (supported_capabilities));
+    g_array_unref (supported_capabilities);
+
+    ctx->step++;
+    interface_initialization_step (ctx);
+}
+
 STR_REPLY_READY_FN (manufacturer, "Manufacturer")
 STR_REPLY_READY_FN (model, "Model")
 STR_REPLY_READY_FN (revision, "Revision")
@@ -3622,42 +3677,18 @@ STR_REPLY_READY_FN (equipment_identifier, "Equipment Identifier")
 STR_REPLY_READY_FN (device_identifier, "Device Identifier")
 
 static void
-load_own_numbers_ready (MMIfaceModem *self,
-                        GAsyncResult *res,
-                        InitializationContext *ctx)
-{
-    GError *error = NULL;
-    GStrv str_list;
-
-    str_list = MM_IFACE_MODEM_GET_INTERFACE (self)->load_own_numbers_finish (self, res, &error);
-    if (error) {
-        mm_warn ("couldn't load list of Own Numbers: '%s'", error->message);
-        g_error_free (error);
-    }
-
-    if (str_list) {
-        mm_gdbus_modem_set_own_numbers (ctx->skeleton, (const gchar *const *) str_list);
-        g_strfreev (str_list);
-    }
-
-    /* Go on to next step */
-    ctx->step++;
-    interface_initialization_step (ctx);
-}
-
-static void
 load_supported_modes_ready (MMIfaceModem *self,
                             GAsyncResult *res,
                             InitializationContext *ctx)
 {
     GError *error = NULL;
-    MMModemMode modes;
+    GArray *modes_array;
 
-    modes = MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_modes_finish (self, res, &error);
-
-    if (modes != MM_MODEM_MODE_NONE) {
-        mm_gdbus_modem_set_supported_modes (ctx->skeleton, modes);
-        mm_gdbus_modem_set_allowed_modes (ctx->skeleton, modes);
+    modes_array = MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_modes_finish (self, res, &error);
+    if (modes_array != NULL) {
+        mm_gdbus_modem_set_supported_modes (ctx->skeleton,
+                                            mm_common_mode_combinations_garray_to_variant (modes_array));
+        g_array_unref (modes_array);
     }
 
     if (error) {
@@ -3688,6 +3719,29 @@ load_supported_bands_ready (MMIfaceModem *self,
 
     if (error) {
         mm_warn ("couldn't load Supported Bands: '%s'", error->message);
+        g_error_free (error);
+    }
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_initialization_step (ctx);
+}
+
+static void
+load_supported_ip_families_ready (MMIfaceModem *self,
+                                  GAsyncResult *res,
+                                  InitializationContext *ctx)
+{
+    GError *error = NULL;
+    MMBearerIpFamily ip_families;
+
+    ip_families = MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_ip_families_finish (self, res, &error);
+
+    if (ip_families != MM_BEARER_IP_FAMILY_NONE)
+        mm_gdbus_modem_set_supported_ip_families (ctx->skeleton, ip_families);
+
+    if (error) {
+        mm_warn ("couldn't load Supported IP families: '%s'", error->message);
         g_error_free (error);
     }
 
@@ -3770,6 +3824,92 @@ sim_reinit_ready (MMSim *sim,
 }
 
 static void
+load_own_numbers_ready (MMIfaceModem *self,
+                        GAsyncResult *res,
+                        InitializationContext *ctx)
+{
+    GError *error = NULL;
+    GStrv str_list;
+
+    str_list = MM_IFACE_MODEM_GET_INTERFACE (self)->load_own_numbers_finish (self, res, &error);
+    if (error) {
+        mm_warn ("couldn't load list of Own Numbers: '%s'", error->message);
+        g_error_free (error);
+    }
+
+    if (str_list) {
+        mm_gdbus_modem_set_own_numbers (ctx->skeleton, (const gchar *const *) str_list);
+        g_strfreev (str_list);
+    }
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_initialization_step (ctx);
+}
+
+static void
+load_current_modes_ready (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          InitializationContext *ctx)
+{
+    MMModemMode allowed = MM_MODEM_MODE_NONE;
+    MMModemMode preferred = MM_MODEM_MODE_NONE;
+    GError *error = NULL;
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_modes_finish (self,
+                                                                         res,
+                                                                         &allowed,
+                                                                         &preferred,
+                                                                         &error)) {
+        /* Errors when getting allowed/preferred won't be critical */
+        mm_warn ("couldn't load current allowed/preferred modes: '%s'", error->message);
+        g_error_free (error);
+    } else
+        mm_gdbus_modem_set_current_modes (ctx->skeleton, g_variant_new ("(uu)", allowed, preferred));
+
+    /* Done, Go on to next step */
+    ctx->step++;
+    interface_initialization_step (ctx);
+}
+
+static void
+load_current_bands_ready (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          InitializationContext *ctx)
+{
+    GArray *current_bands;
+    GError *error = NULL;
+
+    current_bands = MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands_finish (self, res, &error);
+    if (!current_bands) {
+        /* Errors when getting current bands won't be critical */
+        mm_warn ("couldn't load current Bands: '%s'", error->message);
+        g_error_free (error);
+    } else {
+        GArray *filtered_bands;
+        GArray *supported_bands;
+
+        supported_bands = (mm_common_bands_variant_to_garray (
+                               mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
+        filtered_bands = mm_filter_current_bands (supported_bands, current_bands);
+
+        g_array_unref (current_bands);
+        if (supported_bands)
+            g_array_unref (supported_bands);
+
+        if (filtered_bands) {
+            mm_gdbus_modem_set_current_bands (ctx->skeleton,
+                                              mm_common_bands_garray_to_variant (filtered_bands));
+            g_array_unref (filtered_bands);
+        }
+    }
+
+    /* Done, Go on to next step */
+    ctx->step++;
+    interface_initialization_step (ctx);
+}
+
+static void
 interface_initialization_step (InitializationContext *ctx)
 {
     /* Don't run new steps if we're cancelled */
@@ -3845,26 +3985,42 @@ interface_initialization_step (InitializationContext *ctx)
         /* Fall down to next step */
         ctx->step++;
 
-    case INITIALIZATION_STEP_MODEM_CAPABILITIES:
-        /* Modem capabilities are meant to be loaded only once during the whole
+    case INITIALIZATION_STEP_SUPPORTED_CAPABILITIES: {
+        GArray *supported_capabilities;
+
+        supported_capabilities = (mm_common_capability_combinations_variant_to_garray (
+                                      mm_gdbus_modem_get_supported_capabilities (ctx->skeleton)));
+
+        /* Supported capabilities are meant to be loaded only once during the whole
          * lifetime of the modem. Therefore, if we already have them loaded,
          * don't try to load them again. */
-        if (mm_gdbus_modem_get_modem_capabilities (ctx->skeleton) == MM_MODEM_CAPABILITY_NONE &&
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_modem_capabilities &&
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_modem_capabilities_finish) {
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_modem_capabilities (
-                ctx->self,
-                (GAsyncReadyCallback)load_modem_capabilities_ready,
-                ctx);
-            return;
+        if (supported_capabilities->len == 0 ||
+            g_array_index (supported_capabilities, MMModemCapability, 0) == MM_MODEM_CAPABILITY_NONE) {
+            MMModemCapability current;
+
+            if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_capabilities &&
+                MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_capabilities_finish) {
+                MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_capabilities (
+                    ctx->self,
+                    (GAsyncReadyCallback)load_supported_capabilities_ready,
+                    ctx);
+                return;
+            }
+
+            /* If no specific way of getting modem capabilities, default to the current ones */
+            g_array_unref (supported_capabilities);
+            supported_capabilities = g_array_sized_new (FALSE, FALSE, sizeof (MMModemCapability), 1);
+            current = mm_gdbus_modem_get_current_capabilities (ctx->skeleton);
+            g_array_append_val (supported_capabilities, current);
+            mm_gdbus_modem_set_supported_capabilities (
+                ctx->skeleton,
+                mm_common_capability_combinations_garray_to_variant (supported_capabilities));
         }
-       /* If no specific way of getting modem capabilities, assume they are
-        * equal to the current capabilities */
-        mm_gdbus_modem_set_modem_capabilities (
-            ctx->skeleton,
-            mm_gdbus_modem_get_current_capabilities (ctx->skeleton));
+        g_array_unref (supported_capabilities);
+
         /* Fall down to next step */
         ctx->step++;
+    }
 
     case INITIALIZATION_STEP_BEARERS: {
         MMBearerList *list = NULL;
@@ -3986,18 +4142,30 @@ interface_initialization_step (InitializationContext *ctx)
         ctx->step++;
 
     case INITIALIZATION_STEP_SUPPORTED_MODES:
-        g_assert (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_modes != NULL);
-        g_assert (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_modes_finish != NULL);
+        if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_modes != NULL &&
+            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_modes_finish != NULL) {
+            GArray *supported_modes;
+            MMModemModeCombination *mode = NULL;
 
-        /* Supported modes are meant to be loaded only once during the whole
-         * lifetime of the modem. Therefore, if we already have them loaded,
-         * don't try to load them again. */
-        if (mm_gdbus_modem_get_supported_modes (ctx->skeleton) == MM_MODEM_MODE_NONE) {
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_modes (
-                ctx->self,
-                (GAsyncReadyCallback)load_supported_modes_ready,
-                ctx);
-            return;
+            supported_modes = (mm_common_mode_combinations_variant_to_garray (
+                                   mm_gdbus_modem_get_supported_modes (ctx->skeleton)));
+
+            /* Supported modes are meant to be loaded only once during the whole
+             * lifetime of the modem. Therefore, if we already have them loaded,
+             * don't try to load them again. */
+            if (supported_modes->len == 1)
+                mode = &g_array_index (supported_modes, MMModemModeCombination, 0);
+            if (supported_modes->len == 0 ||
+                (mode && mode->allowed == MM_MODEM_MODE_ANY && mode->preferred == MM_MODEM_MODE_NONE)) {
+                MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_modes (
+                    ctx->self,
+                    (GAsyncReadyCallback)load_supported_modes_ready,
+                    ctx);
+                g_array_unref (supported_modes);
+                return;
+            }
+
+            g_array_unref (supported_modes);
         }
         /* Fall down to next step */
         ctx->step++;
@@ -4025,13 +4193,29 @@ interface_initialization_step (InitializationContext *ctx)
 
             /* Loading supported bands not implemented, default to UNKNOWN */
             mm_gdbus_modem_set_supported_bands (ctx->skeleton, mm_common_build_bands_unknown ());
-            mm_gdbus_modem_set_bands (ctx->skeleton, mm_common_build_bands_unknown ());
+            mm_gdbus_modem_set_current_bands (ctx->skeleton, mm_common_build_bands_unknown ());
         }
         g_array_unref (supported_bands);
 
         /* Fall down to next step */
         ctx->step++;
     }
+
+    case INITIALIZATION_STEP_SUPPORTED_IP_FAMILIES:
+        /* Supported ip_families are meant to be loaded only once during the whole
+         * lifetime of the modem. Therefore, if we already have them loaded,
+         * don't try to load them again. */
+        if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_ip_families != NULL &&
+            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_ip_families_finish != NULL &&
+            mm_gdbus_modem_get_supported_ip_families (ctx->skeleton) == MM_BEARER_IP_FAMILY_NONE) {
+            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_supported_ip_families (
+                ctx->self,
+                (GAsyncReadyCallback)load_supported_ip_families_ready,
+                ctx);
+            return;
+        }
+        /* Fall down to next step */
+        ctx->step++;
 
     case INITIALIZATION_STEP_POWER_STATE:
         /* Initial power state is meant to be loaded only once. Therefore, if we
@@ -4112,7 +4296,88 @@ interface_initialization_step (InitializationContext *ctx)
         /* Fall down to next step */
         ctx->step++;
 
+    case INITIALIZATION_STEP_CURRENT_MODES: {
+        MMModemMode allowed = MM_MODEM_MODE_ANY;
+        MMModemMode preferred = MM_MODEM_MODE_NONE;
+        GVariant *aux;
+
+        aux = mm_gdbus_modem_get_current_modes (ctx->skeleton);
+        if (aux)
+            g_variant_get (aux, "(uu)", &allowed, &preferred);
+
+        /* Current modes are only meant to be loaded once, so if we have them
+         * loaded already, just skip re-loading */
+        if (allowed == MM_MODEM_MODE_ANY && preferred == MM_MODEM_MODE_NONE) {
+            GArray *supported;
+
+            supported = (mm_common_mode_combinations_variant_to_garray (
+                             mm_gdbus_modem_get_supported_modes (ctx->skeleton)));
+
+            /* If there is only one item in the list of supported modes, we're done */
+            if (supported && supported->len == 1) {
+                MMModemModeCombination *supported_mode;
+
+                supported_mode = &g_array_index (supported, MMModemModeCombination, 0);
+                mm_gdbus_modem_set_current_modes (ctx->skeleton, g_variant_new ("(uu)", supported_mode->allowed, supported_mode->preferred));
+            } else if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_modes &&
+                       MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_modes_finish) {
+                MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_modes (
+                    ctx->self,
+                    (GAsyncReadyCallback)load_current_modes_ready,
+                    ctx);
+                if (supported)
+                    g_array_unref (supported);
+                return;
+            }
+
+            if (supported)
+                g_array_unref (supported);
+        }
+
+        /* Fall down to next step */
+        ctx->step++;
+    }
+
+    case INITIALIZATION_STEP_CURRENT_BANDS: {
+        GArray *current;
+
+        current = (mm_common_bands_variant_to_garray (
+                       mm_gdbus_modem_get_current_bands (ctx->skeleton)));
+
+        /* Current bands are only meant to be loaded once, so if we have them
+         * loaded already, just skip re-loading */
+        if (!current || (current->len == 1 && g_array_index (current, MMModemBand, 0) == MM_MODEM_BAND_UNKNOWN)) {
+            if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_bands &&
+                MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_bands_finish) {
+                MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_current_bands (
+                    ctx->self,
+                    (GAsyncReadyCallback)load_current_bands_ready,
+                    ctx);
+                if (current)
+                    g_array_unref (current);
+                return;
+            }
+
+            /* If no way to get current bands, default to what supported has */
+            mm_gdbus_modem_set_current_bands (ctx->skeleton, mm_gdbus_modem_get_supported_bands (ctx->skeleton));
+        }
+
+        if (current)
+            g_array_unref (current);
+
+        /* Fall down to next step */
+        ctx->step++;
+    }
+
     case INITIALIZATION_STEP_LAST:
+        /* Setting capabilities allowed also in FAILED state. Just imagine a
+         * 3GPP+3GPP2 modem in 3GPP-only mode without SIM, we should allow
+         * changing caps to 3GPP2, which doesn't require SIM */
+        g_signal_connect (ctx->skeleton,
+                          "handle-set-current-capabilities",
+                          G_CALLBACK (handle_set_current_capabilities),
+                          ctx->self);
+
         if (ctx->fatal_error) {
             g_simple_async_result_take_error (ctx->result, ctx->fatal_error);
             ctx->fatal_error = NULL;
@@ -4152,12 +4417,12 @@ interface_initialization_step (InitializationContext *ctx)
                               G_CALLBACK (handle_factory_reset),
                               ctx->self);
             g_signal_connect (ctx->skeleton,
-                              "handle-set-bands",
-                              G_CALLBACK (handle_set_bands),
+                              "handle-set-current-bands",
+                              G_CALLBACK (handle_set_current_bands),
                               ctx->self);
             g_signal_connect (ctx->skeleton,
-                              "handle-set-allowed-modes",
-                              G_CALLBACK (handle_set_allowed_modes),
+                              "handle-set-current-modes",
+                              G_CALLBACK (handle_set_current_modes),
                               ctx->self);
             g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
         }
@@ -4200,8 +4465,8 @@ mm_iface_modem_initialize (MMIfaceModem *self,
 
         /* Set all initial property defaults */
         mm_gdbus_modem_set_sim (skeleton, NULL);
+        mm_gdbus_modem_set_supported_capabilities (skeleton, mm_common_build_capability_combinations_none ());
         mm_gdbus_modem_set_current_capabilities (skeleton, MM_MODEM_CAPABILITY_NONE);
-        mm_gdbus_modem_set_modem_capabilities (skeleton, MM_MODEM_CAPABILITY_NONE);
         mm_gdbus_modem_set_max_bearers (skeleton, 0);
         mm_gdbus_modem_set_max_active_bearers (skeleton, 0);
         mm_gdbus_modem_set_manufacturer (skeleton, NULL);
@@ -4217,11 +4482,11 @@ mm_iface_modem_initialize (MMIfaceModem *self,
         mm_gdbus_modem_set_unlock_retries (skeleton, 0);
         mm_gdbus_modem_set_access_technologies (skeleton, MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
         mm_gdbus_modem_set_signal_quality (skeleton, g_variant_new ("(ub)", 0, FALSE));
-        mm_gdbus_modem_set_supported_modes (skeleton, MM_MODEM_MODE_NONE);
-        mm_gdbus_modem_set_allowed_modes (skeleton, MM_MODEM_MODE_NONE);
-        mm_gdbus_modem_set_preferred_mode (skeleton, MM_MODEM_MODE_NONE);
+        mm_gdbus_modem_set_supported_modes (skeleton, mm_common_build_mode_combinations_default ());
+        mm_gdbus_modem_set_current_modes (skeleton, g_variant_new ("(uu)", MM_MODEM_MODE_ANY, MM_MODEM_MODE_NONE));
         mm_gdbus_modem_set_supported_bands (skeleton, mm_common_build_bands_unknown ());
-        mm_gdbus_modem_set_bands (skeleton, mm_common_build_bands_unknown ());
+        mm_gdbus_modem_set_current_bands (skeleton, mm_common_build_bands_unknown ());
+        mm_gdbus_modem_set_supported_ip_families (skeleton, MM_BEARER_IP_FAMILY_NONE);
         mm_gdbus_modem_set_power_state (skeleton, MM_MODEM_POWER_STATE_UNKNOWN);
         mm_gdbus_modem_set_state_failed_reason (skeleton, MM_MODEM_STATE_FAILED_REASON_NONE);
 
@@ -4316,10 +4581,12 @@ mm_iface_modem_get_access_technologies (MMIfaceModem *self)
 
 /*****************************************************************************/
 
-MMModemMode
-mm_iface_modem_get_supported_modes (MMIfaceModem *self)
+static gboolean
+find_supported_mode (MMIfaceModem *self,
+                     MMModemMode mode,
+                     gboolean *only)
 {
-    MMModemMode supported = MM_MODEM_MODE_NONE;
+    gboolean matched = FALSE;
     MmGdbusModem *skeleton;
 
     g_object_get (self,
@@ -4327,56 +4594,85 @@ mm_iface_modem_get_supported_modes (MMIfaceModem *self)
                   NULL);
 
     if (skeleton) {
-        supported = mm_gdbus_modem_get_supported_modes (skeleton);
+        GArray *supported;
+        guint i;
+        guint n_unmatched = 0;
+
+        supported = mm_common_mode_combinations_variant_to_garray (
+            mm_gdbus_modem_get_supported_modes (skeleton));
+
+        /* Check if the given mode is supported */
+        for (i = 0; i < supported->len; i++) {
+            MMModemModeCombination *supported_mode;
+
+            supported_mode = &g_array_index (supported, MMModemModeCombination, i);
+            if (supported_mode->allowed & mode) {
+                matched = TRUE;
+                if (supported_mode->allowed != mode)
+                    n_unmatched++;
+            } else
+                n_unmatched++;
+
+            if (matched && (only == NULL || n_unmatched > 0))
+                break;
+        }
+
+        if (only)
+            *only = (n_unmatched == 0);
+
+        g_array_unref (supported);
         g_object_unref (skeleton);
     }
 
-    return supported;
+    return matched;
 }
 
 gboolean
 mm_iface_modem_is_2g (MMIfaceModem *self)
 {
-    return (mm_iface_modem_get_supported_modes (self) & MM_MODEM_MODE_2G);
+    return find_supported_mode (self, MM_MODEM_MODE_2G, NULL);
 }
 
 gboolean
 mm_iface_modem_is_2g_only (MMIfaceModem *self)
 {
-    MMModemMode supported;
+    gboolean only;
 
-    supported = mm_iface_modem_get_supported_modes (self);
-    return !((MM_MODEM_MODE_2G ^ supported) & supported);
+    return (find_supported_mode (self, MM_MODEM_MODE_2G, &only) ?
+            only :
+            FALSE);
 }
 
 gboolean
 mm_iface_modem_is_3g (MMIfaceModem *self)
 {
-    return (mm_iface_modem_get_supported_modes (self) & MM_MODEM_MODE_3G);
+    return find_supported_mode (self, MM_MODEM_MODE_3G, NULL);
 }
 
 gboolean
 mm_iface_modem_is_3g_only (MMIfaceModem *self)
 {
-    MMModemMode supported;
+    gboolean only;
 
-    supported = mm_iface_modem_get_supported_modes (self);
-    return !((MM_MODEM_MODE_3G ^ supported) & supported);
+    return (find_supported_mode (self, MM_MODEM_MODE_3G, &only) ?
+            only :
+            FALSE);
 }
 
 gboolean
 mm_iface_modem_is_4g (MMIfaceModem *self)
 {
-    return (mm_iface_modem_get_supported_modes (self) & MM_MODEM_MODE_4G);
+    return find_supported_mode (self, MM_MODEM_MODE_4G, NULL);
 }
 
 gboolean
 mm_iface_modem_is_4g_only (MMIfaceModem *self)
 {
-    MMModemMode supported;
+    gboolean only;
 
-    supported = mm_iface_modem_get_supported_modes (self);
-    return !((MM_MODEM_MODE_4G ^ supported) & supported);
+    return (find_supported_mode (self, MM_MODEM_MODE_4G, &only) ?
+            only :
+            FALSE);
 }
 
 /*****************************************************************************/

@@ -1276,6 +1276,7 @@ typedef struct {
     GSimpleAsyncResult *result;
     MMBroadbandModem *self;
     MMModemMode mode;
+    gboolean run_cnti;
     gboolean run_ws46;
     gboolean run_gcap;
 } LoadSupportedModesContext;
@@ -1286,19 +1287,28 @@ load_supported_modes_context_complete_and_free (LoadSupportedModesContext *ctx)
     g_simple_async_result_complete (ctx->result);
     g_object_unref (ctx->result);
     g_object_unref (ctx->self);
-    g_free (ctx);
+    g_slice_free (LoadSupportedModesContext, ctx);
 }
 
-static MMModemMode
+static GArray *
 modem_load_supported_modes_finish (MMIfaceModem *self,
                                    GAsyncResult *res,
                                    GError **error)
 {
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
-        return MM_MODEM_MODE_NONE;
+    GArray *modes;
+    MMModemModeCombination mode;
 
-    return (MMModemMode)GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
-                                              G_SIMPLE_ASYNC_RESULT (res)));
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return NULL;
+
+    /* Build a mask with all supported modes */
+    modes = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 1);
+    mode.allowed = (MMModemMode) GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
+                                                       G_SIMPLE_ASYNC_RESULT (res)));
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (modes, mode);
+
+    return modes;
 }
 
 static void load_supported_modes_step (LoadSupportedModesContext *ctx);
@@ -1437,31 +1447,14 @@ supported_modes_ws46_test_ready (MMBroadbandModem *self,
             }
         }
 
-        /* If no expected ID found, error */
-        if (mode == MM_MODEM_MODE_NONE) {
-            error = g_error_new (MM_CORE_ERROR,
-                                 MM_CORE_ERROR_FAILED,
-                                 "Invalid list of supported networks: '%s'",
-                                 response);
-        } else {
-            /* Keep our results */
+        /* If no expected ID found, log error */
+        if (mode == MM_MODEM_MODE_NONE)
+            mm_dbg ("Invalid list of supported networks reported by WS46=?: '%s'", response);
+        else
             ctx->mode |= mode;
-        }
-    }
-
-    /* Process error, which may come either directly from the AT command or from
-     * our parsing logic. In this case, always fallback to some default guesses. */
-    if (error) {
-        mm_dbg ("Generic query of supported 3GPP networks failed: '%s'", error->message);
+    } else {
+        mm_dbg ("Generic query of supported 3GPP networks with WS46=? failed: '%s'", error->message);
         g_error_free (error);
-
-        /* If PS supported, assume we can do both 2G and 3G, even if it may not really
-         * be true. This is the generic implementation anyway, plugins can use modem
-         * specific commands to check which technologies are supported. */
-        if (ctx->self->priv->modem_3gpp_ps_network_supported) {
-            mm_dbg ("Assuming device allows (3GPP) 2G/3G network modes");
-            ctx->mode |= (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-        }
     }
 
     /* Now keep on with the loading, we may need CDMA-specific checks */
@@ -1470,8 +1463,71 @@ supported_modes_ws46_test_ready (MMBroadbandModem *self,
 }
 
 static void
+supported_modes_cnti_ready (MMBroadbandModem *self,
+                            GAsyncResult *res,
+                            LoadSupportedModesContext *ctx)
+{
+    const gchar *response;
+    GError *error = NULL;
+
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
+    if (!error) {
+        MMModemMode mode = MM_MODEM_MODE_NONE;
+        gchar *lower;
+
+        lower = g_ascii_strdown (response, -1);
+
+        if (g_strstr_len (lower, -1, "gsm") ||
+            g_strstr_len (lower, -1, "gprs") ||
+            g_strstr_len (lower, -1, "edge")) {
+            mm_dbg ("Device allows (3GPP) 2G networks");
+            mode |= MM_MODEM_MODE_2G;
+        }
+
+        if (g_strstr_len (lower, -1, "umts") ||
+            g_strstr_len (lower, -1, "hsdpa") ||
+            g_strstr_len (lower, -1, "hsupa") ||
+            g_strstr_len (lower, -1, "hspa+")) {
+            mm_dbg ("Device allows (3GPP) 3G networks");
+            mode |= MM_MODEM_MODE_3G;
+        }
+
+        if (g_strstr_len (lower, -1, "lte")) {
+            mm_dbg ("Device allows (3GPP) 4G networks");
+            mode |= MM_MODEM_MODE_4G;
+        }
+
+        g_free (lower);
+
+        /* If no expected ID found, log error */
+        if (mode == MM_MODEM_MODE_NONE)
+            mm_dbg ("Invalid list of supported networks reported by *CNTI: '%s'", response);
+        else
+            ctx->mode |= mode;
+    } else {
+        mm_dbg ("Generic query of supported 3GPP networks with *CNTI failed: '%s'", error->message);
+        g_error_free (error);
+    }
+
+    /* Now keep on with the loading */
+    ctx->run_cnti = FALSE;
+    load_supported_modes_step (ctx);
+}
+
+static void
 load_supported_modes_step (LoadSupportedModesContext *ctx)
 {
+    if (ctx->run_cnti) {
+        mm_base_modem_at_command (
+            MM_BASE_MODEM (ctx->self),
+            "*CNTI=2",
+            3,
+            FALSE,
+            (GAsyncReadyCallback)supported_modes_cnti_ready,
+            ctx);
+        return;
+    }
+
     if (ctx->run_ws46) {
         mm_base_modem_at_command (
             MM_BASE_MODEM (ctx->self),
@@ -1515,8 +1571,8 @@ modem_load_supported_modes (MMIfaceModem *self,
 {
     LoadSupportedModesContext *ctx;
 
-    mm_dbg ("loading initial supported modes...");
-    ctx = g_new0 (LoadSupportedModesContext, 1);
+    mm_dbg ("loading supported modes...");
+    ctx = g_slice_new0 (LoadSupportedModesContext);
     ctx->self = g_object_ref (self);
     ctx->result = g_simple_async_result_new (G_OBJECT (self),
                                              callback,
@@ -1525,12 +1581,9 @@ modem_load_supported_modes (MMIfaceModem *self,
     ctx->mode = MM_MODEM_MODE_NONE;
 
     if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (self))) {
-        /* Run +WS46=? in order to know if the modem is 2G-only or 2G/3G */
+        /* Run +WS46=? and *CNTI=2 */
         ctx->run_ws46 = TRUE;
-
-        /* If the modem has LTE caps, it does 4G */
-        if (mm_iface_modem_is_3gpp_lte (MM_IFACE_MODEM (self)))
-            ctx->mode |= MM_MODEM_MODE_4G;
+        ctx->run_cnti = TRUE;
     }
 
     if (mm_iface_modem_is_cdma (MM_IFACE_MODEM (self))) {
@@ -1539,6 +1592,83 @@ modem_load_supported_modes (MMIfaceModem *self,
     }
 
     load_supported_modes_step (ctx);
+}
+
+/*****************************************************************************/
+/* Supported IP families loading (Modem interface) */
+
+static MMBearerIpFamily
+modem_load_supported_ip_families_finish (MMIfaceModem *self,
+                                         GAsyncResult *res,
+                                         GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return MM_BEARER_IP_FAMILY_NONE;
+
+    return (MMBearerIpFamily) GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
+                                                    G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static void
+supported_ip_families_cgdcont_test_ready (MMBaseModem *self,
+                                          GAsyncResult *res,
+                                          GSimpleAsyncResult *simple)
+{
+    const gchar *response;
+    GError *error = NULL;
+    MMBearerIpFamily mask = MM_BEARER_IP_FAMILY_NONE;
+
+    response = mm_base_modem_at_command_finish (self, res, &error);
+    if (response) {
+        GList *formats, *l;
+
+        formats = mm_3gpp_parse_cgdcont_test_response (response, &error);
+        for (l = formats; l; l = g_list_next (l))
+            mask |= ((MM3gppPdpContextFormat *)(l->data))->pdp_type;
+
+        mm_3gpp_pdp_context_format_list_free (formats);
+    }
+
+    if (error)
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gpointer (simple, GUINT_TO_POINTER (mask), NULL);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+modem_load_supported_ip_families (MMIfaceModem *self,
+                                  GAsyncReadyCallback callback,
+                                  gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    mm_dbg ("loading supported IP families...");
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        modem_load_supported_ip_families);
+
+    if (mm_iface_modem_is_cdma_only (MM_IFACE_MODEM (self))) {
+        g_simple_async_result_set_op_res_gpointer (
+            result,
+            GUINT_TO_POINTER (MM_BEARER_IP_FAMILY_IPV4),
+            NULL);
+        g_simple_async_result_complete_in_idle (result);
+        g_object_unref (result);
+        return;
+    }
+
+    /* Query with CGDCONT=? */
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        "+CGDCONT=?",
+        3,
+        TRUE, /* allow caching, it's a test command */
+        (GAsyncReadyCallback)supported_ip_families_cgdcont_test_ready,
+        result);
 }
 
 /*****************************************************************************/
@@ -9328,6 +9458,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_supported_modes_finish = modem_load_supported_modes_finish;
     iface->load_power_state = load_power_state;
     iface->load_power_state_finish = load_power_state_finish;
+    iface->load_supported_ip_families = modem_load_supported_ip_families;
+    iface->load_supported_ip_families_finish = modem_load_supported_ip_families_finish;
 
     /* Enabling steps */
     iface->modem_power_up = modem_power_up;

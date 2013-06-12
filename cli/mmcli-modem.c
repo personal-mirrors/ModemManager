@@ -57,9 +57,10 @@ static gchar *command_str;
 static gboolean list_bearers_flag;
 static gchar *create_bearer_str;
 static gchar *delete_bearer_str;
+static gchar *set_current_capabilities_str;
 static gchar *set_allowed_modes_str;
 static gchar *set_preferred_mode_str;
-static gchar *set_bands_str;
+static gchar *set_current_bands_str;
 
 static GOptionEntry entries[] = {
     { "monitor-state", 'w', 0, G_OPTION_ARG_NONE, &monitor_state_flag,
@@ -106,17 +107,21 @@ static GOptionEntry entries[] = {
       "Delete a data bearer from a given modem",
       "[PATH]"
     },
+    { "set-current-capabilities", 0, 0, G_OPTION_ARG_STRING, &set_current_capabilities_str,
+      "Set current modem capabilities.",
+      "[CAPABILITY1|CAPABILITY2...]"
+    },
     { "set-allowed-modes", 0, 0, G_OPTION_ARG_STRING, &set_allowed_modes_str,
       "Set allowed modes in a given modem.",
       "[MODE1|MODE2...]"
     },
-    { "set-bands", 0, 0, G_OPTION_ARG_STRING, &set_bands_str,
-      "Set bands to be used by a given modem.",
-      "[BAND1|BAND2...]"
-    },
     { "set-preferred-mode", 0, 0, G_OPTION_ARG_STRING, &set_preferred_mode_str,
       "Set preferred mode in a given modem (Must give allowed modes with --set-allowed-modes)",
       "[MODE]"
+    },
+    { "set-current-bands", 0, 0, G_OPTION_ARG_STRING, &set_current_bands_str,
+      "Set bands to be used by a given modem.",
+      "[BAND1|BAND2...]"
     },
     { NULL }
 };
@@ -157,9 +162,10 @@ mmcli_modem_options_enabled (void)
                  !!delete_bearer_str +
                  !!factory_reset_str +
                  !!command_str +
+                 !!set_current_capabilities_str +
                  !!set_allowed_modes_str +
                  !!set_preferred_mode_str +
-                 !!set_bands_str);
+                 !!set_current_bands_str);
 
     if (n_actions == 0 && mmcli_get_common_modem_string ()) {
         /* default to info */
@@ -235,19 +241,26 @@ print_modem_info (void)
 {
     gchar *drivers_string;
     gchar *prefixed_revision;
-    gchar *modem_capabilities_string;
+    gchar *supported_capabilities_string;
+    MMModemCapability *capabilities = NULL;
+    guint n_capabilities = 0;
     gchar *current_capabilities_string;
     gchar *access_technologies_string;
+    MMModemModeCombination *modes = NULL;
+    guint n_modes = 0;
     gchar *supported_modes_string;
-    gchar *allowed_modes_string;
-    gchar *preferred_mode_string;
+    MMModemMode allowed_modes;
+    gchar *allowed_modes_string = NULL;
+    MMModemMode preferred_mode;
+    gchar *preferred_mode_string = NULL;
     gchar *supported_bands_string;
-    gchar *bands_string;
+    gchar *current_bands_string;
+    gchar *supported_ip_families_string;
     gchar *unlock_retries_string;
     gchar *own_numbers_string;
     MMModemBand *bands = NULL;
-    MMUnlockRetries *unlock_retries;
     guint n_bands = 0;
+    MMUnlockRetries *unlock_retries;
     guint signal_quality = 0;
     gboolean signal_quality_recent = FALSE;
 
@@ -259,24 +272,28 @@ print_modem_info (void)
 #define VALIDATE_PATH(str) ((str && !g_str_equal (str, "/")) ? str : "none")
 
     /* Strings in heap */
-    modem_capabilities_string = mm_modem_capability_build_string_from_mask (
-        mm_modem_get_modem_capabilities (ctx->modem));
+    mm_modem_get_supported_capabilities (ctx->modem, &capabilities, &n_capabilities);
+    supported_capabilities_string = mm_common_build_capabilities_string (capabilities, n_capabilities);
+    g_free (capabilities);
     current_capabilities_string = mm_modem_capability_build_string_from_mask (
         mm_modem_get_current_capabilities (ctx->modem));
     access_technologies_string = mm_modem_access_technology_build_string_from_mask (
         mm_modem_get_access_technologies (ctx->modem));
-    mm_modem_get_bands (ctx->modem, &bands, &n_bands);
-    bands_string = mm_common_build_bands_string (bands, n_bands);
+    mm_modem_get_supported_modes (ctx->modem, &modes, &n_modes);
+    supported_modes_string = mm_common_build_mode_combinations_string (modes, n_modes);
+    g_free (modes);
+    mm_modem_get_current_bands (ctx->modem, &bands, &n_bands);
+    current_bands_string = mm_common_build_bands_string (bands, n_bands);
     g_free (bands);
     mm_modem_get_supported_bands (ctx->modem, &bands, &n_bands);
     supported_bands_string = mm_common_build_bands_string (bands, n_bands);
     g_free (bands);
-    allowed_modes_string = mm_modem_mode_build_string_from_mask (
-        mm_modem_get_allowed_modes (ctx->modem));
-    preferred_mode_string = mm_modem_mode_build_string_from_mask (
-        mm_modem_get_preferred_mode (ctx->modem));
-    supported_modes_string = mm_modem_mode_build_string_from_mask (
-        mm_modem_get_supported_modes (ctx->modem));
+    if (mm_modem_get_current_modes (ctx->modem, &allowed_modes, &preferred_mode)) {
+        allowed_modes_string = mm_modem_mode_build_string_from_mask (allowed_modes);
+        preferred_mode_string = mm_modem_mode_build_string_from_mask (preferred_mode);
+    }
+    supported_ip_families_string = mm_bearer_ip_family_build_string_from_mask (
+        mm_modem_get_supported_ip_families (ctx->modem));
 
     unlock_retries = mm_modem_get_unlock_retries (ctx->modem);
     unlock_retries_string = mm_unlock_retries_build_string (unlock_retries);
@@ -307,6 +324,24 @@ print_modem_info (void)
     else
         prefixed_revision = NULL;
 
+    if (supported_modes_string) {
+        gchar *prefixed;
+
+        prefixed = mmcli_prefix_newlines ("           |                  ",
+                                          supported_modes_string);
+        g_free (supported_modes_string);
+        supported_modes_string = prefixed;
+    }
+
+    if (supported_capabilities_string) {
+        gchar *prefixed;
+
+        prefixed = mmcli_prefix_newlines ("           |                  ",
+                                          supported_capabilities_string);
+        g_free (supported_capabilities_string);
+        supported_capabilities_string = prefixed;
+    }
+
     /* Get signal quality info */
     signal_quality = mm_modem_get_signal_quality (ctx->modem, &signal_quality_recent);
 
@@ -321,13 +356,13 @@ print_modem_info (void)
              "  Hardware |   manufacturer: '%s'\n"
              "           |          model: '%s'\n"
              "           |       revision: '%s'\n"
-             "           |   capabilities: '%s'\n"
+             "           |      supported: '%s'\n"
              "           |        current: '%s'\n"
              "           |   equipment id: '%s'\n",
              VALIDATE_UNKNOWN (mm_modem_get_manufacturer (ctx->modem)),
              VALIDATE_UNKNOWN (mm_modem_get_model (ctx->modem)),
              VALIDATE_UNKNOWN (prefixed_revision),
-             VALIDATE_UNKNOWN (modem_capabilities_string),
+             VALIDATE_UNKNOWN (supported_capabilities_string),
              VALIDATE_UNKNOWN (current_capabilities_string),
              VALIDATE_UNKNOWN (mm_modem_get_equipment_identifier (ctx->modem)));
 
@@ -370,8 +405,7 @@ print_modem_info (void)
     /* Modes */
     g_print ("  -------------------------\n"
              "  Modes    |      supported: '%s'\n"
-             "           |        allowed: '%s'\n"
-             "           |      preferred: '%s'\n",
+             "           |        current: 'allowed: %s; preferred: %s'\n",
              VALIDATE_UNKNOWN (supported_modes_string),
              VALIDATE_UNKNOWN (allowed_modes_string),
              VALIDATE_UNKNOWN (preferred_mode_string));
@@ -381,7 +415,12 @@ print_modem_info (void)
              "  Bands    |      supported: '%s'\n"
              "           |        current: '%s'\n",
              VALIDATE_UNKNOWN (supported_bands_string),
-             VALIDATE_UNKNOWN (bands_string));
+             VALIDATE_UNKNOWN (current_bands_string));
+
+    /* IP families */
+    g_print ("  -------------------------\n"
+             "  IP       |      supported: '%s'\n",
+             VALIDATE_UNKNOWN (supported_ip_families_string));
 
     /* If available, 3GPP related stuff */
     if (ctx->modem_3gpp) {
@@ -450,10 +489,11 @@ print_modem_info (void)
              VALIDATE_PATH (mm_modem_get_sim_path (ctx->modem)));
     g_print ("\n");
 
-    g_free (bands_string);
+    g_free (supported_ip_families_string);
+    g_free (current_bands_string);
     g_free (supported_bands_string);
     g_free (access_technologies_string);
-    g_free (modem_capabilities_string);
+    g_free (supported_capabilities_string);
     g_free (current_capabilities_string);
     g_free (prefixed_revision);
     g_free (allowed_modes_string);
@@ -742,28 +782,69 @@ delete_bearer_ready (MMModem      *modem,
 }
 
 static void
-set_allowed_modes_process_reply (gboolean      result,
-                                 const GError *error)
+set_current_capabilities_process_reply (gboolean      result,
+                                        const GError *error)
 {
     if (!result) {
-        g_printerr ("error: couldn't set allowed modes: '%s'\n",
+        g_printerr ("error: couldn't set current capabilities: '%s'\n",
                     error ? error->message : "unknown error");
         exit (EXIT_FAILURE);
     }
 
-    g_print ("successfully set allowed modes in the modem\n");
+    g_print ("successfully set current capabilities in the modem\n");
 }
 
 static void
-set_allowed_modes_ready (MMModem      *modem,
+set_current_capabilities_ready (MMModem      *modem,
+                                GAsyncResult *result,
+                                gpointer      nothing)
+{
+    gboolean operation_result;
+    GError *error = NULL;
+
+    operation_result = mm_modem_set_current_capabilities_finish (modem, result, &error);
+    set_current_capabilities_process_reply (operation_result, error);
+
+    mmcli_async_operation_done ();
+}
+
+static void
+parse_current_capabilities (MMModemCapability *capabilities)
+{
+    GError *error = NULL;
+
+    *capabilities = mm_common_get_capabilities_from_string (set_current_capabilities_str,
+                                                            &error);
+    if (error) {
+        g_printerr ("error: couldn't parse list of capabilities: '%s'\n",
+                    error->message);
+        exit (EXIT_FAILURE);
+    }
+}
+
+static void
+set_current_modes_process_reply (gboolean      result,
+                                 const GError *error)
+{
+    if (!result) {
+        g_printerr ("error: couldn't set current modes: '%s'\n",
+                    error ? error->message : "unknown error");
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("successfully set current modes in the modem\n");
+}
+
+static void
+set_current_modes_ready (MMModem      *modem,
                          GAsyncResult *result,
                          gpointer      nothing)
 {
     gboolean operation_result;
     GError *error = NULL;
 
-    operation_result = mm_modem_set_allowed_modes_finish (modem, result, &error);
-    set_allowed_modes_process_reply (operation_result, error);
+    operation_result = mm_modem_set_current_modes_finish (modem, result, &error);
+    set_current_modes_process_reply (operation_result, error);
 
     mmcli_async_operation_done ();
 }
@@ -792,39 +873,39 @@ parse_modes (MMModemMode *allowed,
 }
 
 static void
-set_bands_process_reply (gboolean      result,
-                         const GError *error)
+set_current_bands_process_reply (gboolean      result,
+                                 const GError *error)
 {
     if (!result) {
-        g_printerr ("error: couldn't set bands: '%s'\n",
+        g_printerr ("error: couldn't set current bands: '%s'\n",
                     error ? error->message : "unknown error");
         exit (EXIT_FAILURE);
     }
 
-    g_print ("successfully set bands in the modem\n");
+    g_print ("successfully set current bands in the modem\n");
 }
 
 static void
-set_bands_ready (MMModem      *modem,
-                 GAsyncResult *result,
-                 gpointer      nothing)
+set_current_bands_ready (MMModem      *modem,
+                         GAsyncResult *result,
+                         gpointer      nothing)
 {
     gboolean operation_result;
     GError *error = NULL;
 
-    operation_result = mm_modem_set_bands_finish (modem, result, &error);
-    set_bands_process_reply (operation_result, error);
+    operation_result = mm_modem_set_current_bands_finish (modem, result, &error);
+    set_current_bands_process_reply (operation_result, error);
 
     mmcli_async_operation_done ();
 }
 
 static void
-parse_bands (MMModemBand **bands,
-             guint *n_bands)
+parse_current_bands (MMModemBand **bands,
+                     guint *n_bands)
 {
     GError *error = NULL;
 
-    mm_common_get_bands_from_string (set_bands_str,
+    mm_common_get_bands_from_string (set_current_bands_str,
                                      bands,
                                      n_bands,
                                      &error);
@@ -834,7 +915,6 @@ parse_bands (MMModemBand **bands,
         exit (EXIT_FAILURE);
     }
 }
-
 
 static void
 state_changed (MMModem                  *modem,
@@ -1015,34 +1095,47 @@ get_modem_ready (GObject      *source,
         return;
     }
 
+    /* Request to set current capabilities in a given modem? */
+    if (set_current_capabilities_str) {
+        MMModemCapability current_capabilities;
+
+        parse_current_capabilities (&current_capabilities);
+        mm_modem_set_current_capabilities (ctx->modem,
+                                           current_capabilities,
+                                           ctx->cancellable,
+                                           (GAsyncReadyCallback)set_current_capabilities_ready,
+                                           NULL);
+        return;
+    }
+
     /* Request to set allowed modes in a given modem? */
     if (set_allowed_modes_str) {
         MMModemMode allowed;
         MMModemMode preferred;
 
         parse_modes (&allowed, &preferred);
-        mm_modem_set_allowed_modes (ctx->modem,
+        mm_modem_set_current_modes (ctx->modem,
                                     allowed,
                                     preferred,
                                     ctx->cancellable,
-                                    (GAsyncReadyCallback)set_allowed_modes_ready,
+                                    (GAsyncReadyCallback)set_current_modes_ready,
                                     NULL);
         return;
     }
 
-    /* Request to set allowed bands in a given modem? */
-    if (set_bands_str) {
-        MMModemBand *bands;
-        guint n_bands;
+    /* Request to set current bands in a given modem? */
+    if (set_current_bands_str) {
+        MMModemBand *current_bands;
+        guint n_current_bands;
 
-        parse_bands (&bands, &n_bands);
-        mm_modem_set_bands (ctx->modem,
-                            bands,
-                            n_bands,
-                            ctx->cancellable,
-                            (GAsyncReadyCallback)set_bands_ready,
-                            NULL);
-        g_free (bands);
+        parse_current_bands (&current_bands, &n_current_bands);
+        mm_modem_set_current_bands (ctx->modem,
+                                    current_bands,
+                                    n_current_bands,
+                                    ctx->cancellable,
+                                    (GAsyncReadyCallback)set_current_bands_ready,
+                                    NULL);
+        g_free (current_bands);
         return;
     }
 
@@ -1227,6 +1320,20 @@ mmcli_modem_run_synchronous (GDBusConnection *connection)
         return;
     }
 
+    /* Request to set capabilities in a given modem? */
+    if (set_current_capabilities_str) {
+        gboolean result;
+        MMModemCapability current_capabilities;
+
+        parse_current_capabilities (&current_capabilities);
+        result = mm_modem_set_current_capabilities_sync (ctx->modem,
+                                                         current_capabilities,
+                                                         NULL,
+                                                         &error);
+        set_current_capabilities_process_reply (result, error);
+        return;
+    }
+
     /* Request to set allowed modes in a given modem? */
     if (set_allowed_modes_str) {
         MMModemMode allowed;
@@ -1234,30 +1341,30 @@ mmcli_modem_run_synchronous (GDBusConnection *connection)
         gboolean result;
 
         parse_modes (&allowed, &preferred);
-        result = mm_modem_set_allowed_modes_sync (ctx->modem,
+        result = mm_modem_set_current_modes_sync (ctx->modem,
                                                   allowed,
                                                   preferred,
                                                   NULL,
                                                   &error);
 
-        set_allowed_modes_process_reply (result, error);
+        set_current_modes_process_reply (result, error);
         return;
     }
 
     /* Request to set allowed bands in a given modem? */
-    if (set_bands_str) {
+    if (set_current_bands_str) {
         gboolean result;
-        MMModemBand *bands;
-        guint n_bands;
+        MMModemBand *current_bands;
+        guint n_current_bands;
 
-        parse_bands (&bands, &n_bands);
-        result = mm_modem_set_bands_sync (ctx->modem,
-                                          bands,
-                                          n_bands,
-                                          NULL,
-                                          &error);
-        g_free (bands);
-        set_bands_process_reply (result, error);
+        parse_current_bands (&current_bands, &n_current_bands);
+        result = mm_modem_set_current_bands_sync (ctx->modem,
+                                                  current_bands,
+                                                  n_current_bands,
+                                                  NULL,
+                                                  &error);
+        g_free (current_bands);
+        set_current_bands_process_reply (result, error);
         return;
     }
 

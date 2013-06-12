@@ -26,6 +26,7 @@
 #define _LIBMM_INSIDE_MM
 #include <libmm-glib.h>
 
+#include "mm-iface-modem.h"
 #include "mm-bearer-qmi.h"
 #include "mm-modem-helpers-qmi.h"
 #include "mm-serial-enums-types.h"
@@ -54,11 +55,12 @@ typedef enum {
     CONNECT_STEP_WDS_CLIENT_IPV4,
     CONNECT_STEP_IP_FAMILY_IPV4,
     CONNECT_STEP_START_NETWORK_IPV4,
+    CONNECT_STEP_GET_CURRENT_SETTINGS_IPV4,
     CONNECT_STEP_IPV6,
     CONNECT_STEP_WDS_CLIENT_IPV6,
     CONNECT_STEP_IP_FAMILY_IPV6,
     CONNECT_STEP_START_NETWORK_IPV6,
-    CONNECT_STEP_GET_CURRENT_SETTINGS,
+    CONNECT_STEP_GET_CURRENT_SETTINGS_IPV6,
     CONNECT_STEP_LAST
 } ConnectStep;
 
@@ -301,7 +303,6 @@ get_current_settings_ready (QmiClientWds *client,
     QmiMessageWdsGetCurrentSettingsOutput *output;
 
     g_assert (ctx->running_ipv4 || ctx->running_ipv6);
-    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
 
     output = qmi_client_wds_get_current_settings_finish (client, res, &error);
     if (!output ||
@@ -316,12 +317,12 @@ get_current_settings_ready (QmiClientWds *client,
         GArray *array;
         guint8 prefix;
 
-        if (ctx->running_ipv4) {
+        /* If the message has an IPv4 address, print IPv4 settings */
+        if (qmi_message_wds_get_current_settings_output_get_ipv4_address (output, &addr, &error)) {
             mm_dbg ("QMI IPv4 Settings:");
 
             /* IPv4 address */
-            success = qmi_message_wds_get_current_settings_output_get_ipv4_address (output, &addr, &error);
-            print_address4 (success, "Address", addr, error);
+            print_address4 (TRUE, "Address", addr, error);
             g_clear_error (&error);
 
             /* IPv4 gateway address */
@@ -343,12 +344,14 @@ get_current_settings_ready (QmiClientWds *client,
             success = qmi_message_wds_get_current_settings_output_get_secondary_ipv4_dns_address (output, &addr, &error);
             print_address4 (success, " DNS #2", addr, error);
             g_clear_error (&error);
-        } else {
+        }
+
+        /* If the message has an IPv6 address, print IPv6 settings */
+        if (qmi_message_wds_get_current_settings_output_get_ipv6_address (output, &array, &prefix, &error)) {
             mm_dbg ("QMI IPv6 Settings:");
 
             /* IPv6 address */
-            success = qmi_message_wds_get_current_settings_output_get_ipv6_address (output, &array, &prefix, &error);
-            print_address6 (success, "Address", array, prefix, error);
+            print_address6 (TRUE, "Address", array, prefix, error);
             g_clear_error (&error);
 
             /* IPv6 gateway address */
@@ -399,16 +402,13 @@ get_current_settings_ready (QmiClientWds *client,
     connect_context_step (ctx);
 }
 
-static QmiMessageWdsGetCurrentSettingsInput *
-build_get_current_settings_input (ConnectContext *ctx)
+static void
+get_current_settings (ConnectContext *ctx, QmiClientWds *client)
 {
     QmiMessageWdsGetCurrentSettingsInput *input;
-    QmiWdsGetCurrentSettingsRequestedSettings requested = QMI_WDS_GET_CURRENT_SETTINGS_REQUESTED_SETTINGS_NONE;
+    QmiWdsGetCurrentSettingsRequestedSettings requested;
 
     g_assert (ctx->running_ipv4 || ctx->running_ipv6);
-    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
-
-    input = qmi_message_wds_get_current_settings_input_new ();
 
     requested = QMI_WDS_GET_CURRENT_SETTINGS_REQUESTED_SETTINGS_DNS_ADDRESS |
                 QMI_WDS_GET_CURRENT_SETTINGS_REQUESTED_SETTINGS_GRANTED_QOS |
@@ -418,8 +418,15 @@ build_get_current_settings_input (ConnectContext *ctx)
                 QMI_WDS_GET_CURRENT_SETTINGS_REQUESTED_SETTINGS_DOMAIN_NAME_LIST |
                 QMI_WDS_GET_CURRENT_SETTINGS_REQUESTED_SETTINGS_IP_FAMILY;
 
+    input = qmi_message_wds_get_current_settings_input_new ();
     qmi_message_wds_get_current_settings_input_set_requested_settings (input, requested, NULL);
-    return input;
+    qmi_client_wds_get_current_settings (client,
+                                         input,
+                                         10,
+                                         ctx->cancellable,
+                                         (GAsyncReadyCallback)get_current_settings_ready,
+                                         ctx);
+    qmi_message_wds_get_current_settings_input_unref (input);
 }
 
 static void
@@ -612,10 +619,21 @@ connect_context_step (ConnectContext *ctx)
         return;
     }
 
+    case CONNECT_STEP_GET_CURRENT_SETTINGS_IPV4: {
+        /* Retrieve and print IP configuration */
+        if (ctx->packet_data_handle_ipv4) {
+            mm_dbg ("Getting IPv4 configuration...");
+            get_current_settings (ctx, ctx->client_ipv4);
+            return;
+        }
+        /* Fall through */
+        ctx->step++;
+    }
+
     case CONNECT_STEP_IPV6:
         /* If no IPv6 setup needed, jump to last */
         if (!ctx->ipv6) {
-            ctx->step = CONNECT_STEP_GET_CURRENT_SETTINGS;
+            ctx->step = CONNECT_STEP_LAST;
             connect_context_step (ctx);
             return;
         }
@@ -690,32 +708,16 @@ connect_context_step (ConnectContext *ctx)
         return;
     }
 
-    case CONNECT_STEP_GET_CURRENT_SETTINGS:
-        /* If one of IPv4 or IPv6 succeeds, get IP configuration */
-        if (ctx->packet_data_handle_ipv4 || ctx->packet_data_handle_ipv6) {
-            QmiMessageWdsGetCurrentSettingsInput *input;
-            QmiClientWds *client;
-
-            if (ctx->running_ipv4)
-                client = ctx->client_ipv4;
-            else if (ctx->running_ipv6)
-                client = ctx->client_ipv6;
-            else
-                g_assert_not_reached ();
-
-            mm_dbg ("Getting IP configuration...");
-            input = build_get_current_settings_input (ctx);
-            qmi_client_wds_get_current_settings (client,
-                                                 input,
-                                                 45,
-                                                 ctx->cancellable,
-                                                 (GAsyncReadyCallback)get_current_settings_ready,
-                                                 ctx);
-            qmi_message_wds_get_current_settings_input_unref (input);
+    case CONNECT_STEP_GET_CURRENT_SETTINGS_IPV6: {
+        /* Retrieve and print IP configuration */
+        if (ctx->packet_data_handle_ipv6) {
+            mm_dbg ("Getting IPv6 configuration...");
+            get_current_settings (ctx, ctx->client_ipv6);
             return;
         }
-        /* Just fall down */
+        /* Fall through */
         ctx->step++;
+    }
 
     case CONNECT_STEP_LAST:
         /* If one of IPv4 or IPv6 succeeds, we're connected */
@@ -788,6 +790,7 @@ _connect (MMBearer *self,
     MMPort *data;
     MMQmiPort *qmi;
     GError *error = NULL;
+    const gchar *apn;
 
     g_object_get (self,
                   MM_BEARER_MODEM, &modem,
@@ -817,6 +820,35 @@ _connect (MMBearer *self,
             user_data,
             error);
         g_object_unref (data);
+        g_object_unref (modem);
+        return;
+    }
+
+    /* Check whether we have an APN */
+    apn = mm_bearer_properties_get_apn (mm_bearer_peek_config (MM_BEARER (self)));
+
+    /* Is this a 3GPP only modem and no APN was given? If so, error */
+    if (mm_iface_modem_is_3gpp_only (MM_IFACE_MODEM (modem)) && !apn) {
+        g_simple_async_report_error_in_idle (
+            G_OBJECT (self),
+            callback,
+            user_data,
+            MM_CORE_ERROR,
+            MM_CORE_ERROR_INVALID_ARGS,
+            "3GPP connection logic requires APN setting");
+        g_object_unref (modem);
+        return;
+    }
+
+    /* Is this a 3GPP2 only modem and APN was given? If so, error */
+    if (mm_iface_modem_is_cdma_only (MM_IFACE_MODEM (modem)) && apn) {
+        g_simple_async_report_error_in_idle (
+            G_OBJECT (self),
+            callback,
+            user_data,
+            MM_CORE_ERROR,
+            MM_CORE_ERROR_INVALID_ARGS,
+            "3GPP2 doesn't support APN setting");
         g_object_unref (modem);
         return;
     }
@@ -853,31 +885,40 @@ _connect (MMBearer *self,
         ctx->password = g_strdup (mm_bearer_properties_get_password (properties));
 
         ip_family = mm_bearer_properties_get_ip_type (properties);
-        if (ip_family == MM_BEARER_IP_FAMILY_UNKNOWN) {
+        if (ip_family == MM_BEARER_IP_FAMILY_NONE ||
+            ip_family == MM_BEARER_IP_FAMILY_ANY) {
+            gchar *ip_family_str;
+
             ip_family = mm_bearer_get_default_ip_family (self);
+            ip_family_str = mm_bearer_ip_family_build_string_from_mask (ip_family);
             mm_dbg ("No specific IP family requested, defaulting to %s",
-                    mm_bearer_ip_family_get_string (ip_family));
+                    ip_family_str);
             ctx->no_ip_family_preference = TRUE;
+            g_free (ip_family_str);
         }
 
-        switch (ip_family) {
-        case MM_BEARER_IP_FAMILY_IPV4:
+        if (ip_family & MM_BEARER_IP_FAMILY_IPV4)
             ctx->ipv4 = TRUE;
-            ctx->ipv6 = FALSE;
-            break;
-        case MM_BEARER_IP_FAMILY_IPV6:
-            ctx->ipv4 = FALSE;
+        if (ip_family & MM_BEARER_IP_FAMILY_IPV6)
             ctx->ipv6 = TRUE;
-            break;
-        case MM_BEARER_IP_FAMILY_IPV4V6:
+        if (ip_family & MM_BEARER_IP_FAMILY_IPV4V6) {
             ctx->ipv4 = TRUE;
             ctx->ipv6 = TRUE;
-            break;
-        case MM_BEARER_IP_FAMILY_UNKNOWN:
-        default:
-            /* A valid default IP family should have been specified */
-            g_assert_not_reached ();
-            break;
+        }
+
+        if (!ctx->ipv4 && !ctx->ipv6) {
+            gchar *str;
+
+            str = mm_bearer_ip_family_build_string_from_mask (ip_family);
+            g_simple_async_result_set_error (
+                ctx->result,
+                MM_CORE_ERROR,
+                MM_CORE_ERROR_UNSUPPORTED,
+                "Unsupported IP type requested: '%s'",
+                str);
+            g_free (str);
+            connect_context_complete_and_free (ctx);
+            return;
         }
 
         auth = mm_bearer_properties_get_allowed_auth (properties);

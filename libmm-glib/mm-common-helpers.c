@@ -26,6 +26,34 @@
 #include "mm-common-helpers.h"
 
 gchar *
+mm_common_build_capabilities_string (const MMModemCapability *capabilities,
+                                     guint n_capabilities)
+{
+    gboolean first = TRUE;
+    GString *str;
+    guint i;
+
+    if (!capabilities || !n_capabilities)
+        return g_strdup ("none");
+
+    str = g_string_new ("");
+    for (i = 0; i < n_capabilities; i++) {
+        gchar *tmp;
+
+        tmp = mm_modem_capability_build_string_from_mask (capabilities[i]);
+        g_string_append_printf (str, "%s%s",
+                                first ? "" : "\n",
+                                tmp);
+        g_free (tmp);
+
+        if (first)
+            first = FALSE;
+    }
+
+    return g_string_free (str, FALSE);
+}
+
+gchar *
 mm_common_build_bands_string (const MMModemBand *bands,
                               guint n_bands)
 {
@@ -65,6 +93,38 @@ mm_common_build_sms_storages_string (const MMSmsStorage *storages,
         g_string_append_printf (str, "%s%s",
                                 first ? "" : ", ",
                                 mm_sms_storage_get_string (storages[i]));
+
+        if (first)
+            first = FALSE;
+    }
+
+    return g_string_free (str, FALSE);
+}
+
+gchar *
+mm_common_build_mode_combinations_string (const MMModemModeCombination *modes,
+                                          guint n_modes)
+{
+    gboolean first = TRUE;
+    GString *str;
+    guint i;
+
+    if (!modes || !n_modes)
+        return g_strdup ("none");
+
+    str = g_string_new ("");
+    for (i = 0; i < n_modes; i++) {
+        gchar *allowed;
+        gchar *preferred;
+
+        allowed = mm_modem_mode_build_string_from_mask (modes[i].allowed);
+        preferred = mm_modem_mode_build_string_from_mask (modes[i].preferred);
+        g_string_append_printf (str, "%sallowed: %s; preferred: %s",
+                                first ? "" : "\n",
+                                allowed,
+                                preferred);
+        g_free (allowed);
+        g_free (preferred);
 
         if (first)
             first = FALSE;
@@ -134,6 +194,56 @@ mm_common_sms_storages_garray_to_variant (GArray *array)
     return mm_common_sms_storages_array_to_variant (NULL, 0);
 }
 
+MMModemCapability
+mm_common_get_capabilities_from_string (const gchar *str,
+                                        GError **error)
+{
+    GError *inner_error = NULL;
+    MMModemCapability capabilities;
+    gchar **capability_strings;
+	GFlagsClass *flags_class;
+
+    capabilities = MM_MODEM_CAPABILITY_NONE;
+
+    flags_class = G_FLAGS_CLASS (g_type_class_ref (MM_TYPE_MODEM_CAPABILITY));
+    capability_strings = g_strsplit (str, "|", -1);
+
+    if (capability_strings) {
+        guint i;
+
+        for (i = 0; capability_strings[i]; i++) {
+            guint j;
+            gboolean found = FALSE;
+
+            for (j = 0; flags_class->values[j].value_nick; j++) {
+                if (!g_ascii_strcasecmp (capability_strings[i], flags_class->values[j].value_nick)) {
+                    capabilities |= flags_class->values[j].value;
+                    found = TRUE;
+                    break;
+                }
+            }
+
+            if (!found) {
+                inner_error = g_error_new (
+                    MM_CORE_ERROR,
+                    MM_CORE_ERROR_INVALID_ARGS,
+                    "Couldn't match '%s' with a valid MMModemCapability value",
+                    capability_strings[i]);
+                break;
+            }
+        }
+    }
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        capabilities = MM_MODEM_CAPABILITY_NONE;
+    }
+
+    g_type_class_unref (flags_class);
+    g_strfreev (capability_strings);
+    return capabilities;
+}
+
 MMModemMode
 mm_common_get_modes_from_string (const gchar *str,
                                  GError **error)
@@ -182,6 +292,103 @@ mm_common_get_modes_from_string (const gchar *str,
     g_type_class_unref (flags_class);
     g_strfreev (mode_strings);
     return modes;
+}
+
+GArray *
+mm_common_capability_combinations_variant_to_garray (GVariant *variant)
+{
+    GArray *array = NULL;
+
+    if (variant) {
+        GVariantIter iter;
+        guint n;
+
+        g_variant_iter_init (&iter, variant);
+        n = g_variant_iter_n_children (&iter);
+
+        if (n > 0) {
+            guint32 capability;
+
+            array = g_array_sized_new (FALSE, FALSE, sizeof (MMModemCapability), n);
+            while (g_variant_iter_loop (&iter, "u", &capability))
+                g_array_append_val (array, capability);
+        }
+    }
+
+    /* If nothing set, fallback to default */
+    if (!array) {
+        guint32 capability = MM_MODEM_CAPABILITY_NONE;
+
+        array = g_array_sized_new (FALSE, FALSE, sizeof (MMModemCapability), 1);
+        g_array_append_val (array, capability);
+    }
+
+    return array;
+}
+
+MMModemCapability *
+mm_common_capability_combinations_variant_to_array (GVariant *variant,
+                                                    guint *n_capabilities)
+{
+    GArray *array;
+
+    array = mm_common_capability_combinations_variant_to_garray (variant);
+    if (n_capabilities)
+        *n_capabilities = array->len;
+    return (MMModemCapability *) g_array_free (array, FALSE);
+}
+
+GVariant *
+mm_common_capability_combinations_array_to_variant (const MMModemCapability *capabilities,
+                                                    guint n_capabilities)
+{
+    GVariantBuilder builder;
+
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("au"));
+
+    if (n_capabilities > 0) {
+        guint i;
+
+        for (i = 0; i < n_capabilities; i++)
+            g_variant_builder_add_value (&builder,
+                                         g_variant_new_uint32 ((guint32)capabilities[i]));
+    } else
+        g_variant_builder_add_value (&builder,
+                                     g_variant_new_uint32 (MM_MODEM_CAPABILITY_NONE));
+
+    return g_variant_builder_end (&builder);
+}
+
+GVariant *
+mm_common_capability_combinations_garray_to_variant (GArray *array)
+{
+    if (array)
+        return mm_common_capability_combinations_array_to_variant ((const MMModemCapability *)array->data,
+                                                                   array->len);
+
+    return mm_common_capability_combinations_array_to_variant (NULL, 0);
+}
+
+GVariant *
+mm_common_build_capability_combinations_none (void)
+{
+    GVariantBuilder builder;
+
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("au"));
+    g_variant_builder_add_value (&builder,
+                                 g_variant_new_uint32 (MM_MODEM_CAPABILITY_NONE));
+    return g_variant_builder_end (&builder);
+}
+
+GVariant *
+mm_common_build_capability_combinations_any (void)
+{
+    GVariantBuilder builder;
+
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("au"));
+    g_variant_builder_add_value (&builder,
+                                 g_variant_new_uint32 (MM_MODEM_CAPABILITY_ANY));
+    return g_variant_builder_end (&builder);
 }
 
 void
@@ -357,6 +564,96 @@ mm_common_bands_garray_cmp (GArray *a, GArray *b)
     return !different;
 }
 
+GArray *
+mm_common_mode_combinations_variant_to_garray (GVariant *variant)
+{
+    GArray *array = NULL;
+
+    if (variant) {
+        GVariantIter iter;
+        guint n;
+
+        g_variant_iter_init (&iter, variant);
+        n = g_variant_iter_n_children (&iter);
+
+        if (n > 0) {
+            MMModemModeCombination mode;
+
+            array = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), n);
+            while (g_variant_iter_loop (&iter, "(uu)", &mode.allowed, &mode.preferred))
+                g_array_append_val (array, mode);
+        }
+    }
+
+    /* If nothing set, fallback to default */
+    if (!array) {
+        MMModemModeCombination default_mode;
+
+        default_mode.allowed = MM_MODEM_MODE_ANY;
+        default_mode.preferred = MM_MODEM_MODE_NONE;
+        array = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 1);
+        g_array_append_val (array, default_mode);
+    }
+
+    return array;
+}
+
+MMModemModeCombination *
+mm_common_mode_combinations_variant_to_array (GVariant *variant,
+                                              guint *n_modes)
+{
+    GArray *array;
+
+    array = mm_common_mode_combinations_variant_to_garray (variant);
+    if (n_modes)
+        *n_modes = array->len;
+    return (MMModemModeCombination *) g_array_free (array, FALSE);
+}
+
+GVariant *
+mm_common_mode_combinations_array_to_variant (const MMModemModeCombination *modes,
+                                              guint n_modes)
+{
+    if (n_modes > 0) {
+        GVariantBuilder builder;
+        guint i;
+
+        g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(uu)"));
+
+        for (i = 0; i < n_modes; i++)
+            g_variant_builder_add_value (&builder,
+                                         g_variant_new ("(uu)",
+                                                        ((guint32)modes[i].allowed),
+                                                        ((guint32)modes[i].preferred)));
+        return g_variant_builder_end (&builder);
+    }
+
+    return mm_common_build_mode_combinations_default ();
+}
+
+GVariant *
+mm_common_mode_combinations_garray_to_variant (GArray *array)
+{
+    if (array)
+        return mm_common_mode_combinations_array_to_variant ((const MMModemModeCombination *)array->data,
+                                                             array->len);
+
+    return mm_common_mode_combinations_array_to_variant (NULL, 0);
+}
+
+GVariant *
+mm_common_build_mode_combinations_default (void)
+{
+    GVariantBuilder builder;
+
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("a(uu)"));
+    g_variant_builder_add_value (&builder,
+                                 g_variant_new ("(uu)",
+                                                MM_MODEM_MODE_ANY,
+                                                MM_MODEM_MODE_NONE));
+    return g_variant_builder_end (&builder);
+}
+
 gboolean
 mm_common_get_boolean_from_string (const gchar *value,
                                    GError **error)
@@ -399,14 +696,14 @@ MMBearerIpFamily
 mm_common_get_ip_type_from_string (const gchar *str,
                                    GError **error)
 {
-	GEnumClass *enum_class;
+    GFlagsClass *flags_class;
     guint i;
 
-    enum_class = G_ENUM_CLASS (g_type_class_ref (MM_TYPE_BEARER_IP_FAMILY));
+    flags_class = G_FLAGS_CLASS (g_type_class_ref (MM_TYPE_BEARER_IP_FAMILY));
 
-    for (i = 0; enum_class->values[i].value_nick; i++) {
-        if (!g_ascii_strcasecmp (str, enum_class->values[i].value_nick))
-            return enum_class->values[i].value;
+    for (i = 0; flags_class->values[i].value_nick; i++) {
+        if (!g_ascii_strcasecmp (str, flags_class->values[i].value_nick))
+            return flags_class->values[i].value;
     }
 
     g_set_error (error,
@@ -414,7 +711,7 @@ mm_common_get_ip_type_from_string (const gchar *str,
                  MM_CORE_ERROR_INVALID_ARGS,
                  "Couldn't match '%s' with a valid MMBearerIpFamily value",
                  str);
-    return MM_BEARER_IP_FAMILY_UNKNOWN;
+    return MM_BEARER_IP_FAMILY_NONE;
 }
 
 MMBearerAllowedAuth

@@ -49,15 +49,25 @@ struct _MMModemPrivate {
     guint unlock_retries_id;
     MMUnlockRetries *unlock_retries;
 
+    /* Supported Modes */
+    GMutex supported_modes_mutex;
+    guint supported_modes_id;
+    GArray *supported_modes;
+
+    /* Supported Capabilities */
+    GMutex supported_capabilities_mutex;
+    guint supported_capabilities_id;
+    GArray *supported_capabilities;
+
     /* Supported Bands */
     GMutex supported_bands_mutex;
     guint supported_bands_id;
     GArray *supported_bands;
 
-    /* Bands */
-    GMutex bands_mutex;
-    guint bands_id;
-    GArray *bands;
+    /* Current Bands */
+    GMutex current_bands_mutex;
+    guint current_bands_id;
+    GArray *current_bands;
 };
 
 /*****************************************************************************/
@@ -143,24 +153,118 @@ mm_modem_dup_sim_path (MMModem *self)
 
 /*****************************************************************************/
 
-/**
- * mm_modem_get_modem_capabilities:
- * @self: A #MMModem.
- *
- * Gets the list of generic families of access technologies supported by this #MMModem.
- *
- * Not all capabilities are available at the same time however; some
- * modems require a firmware reload or other reinitialization to switch
- * between e.g. CDMA/EVDO and GSM/UMTS.
- *
- * Returns: A bitmask of #MMModemCapability flags.
- */
-MMModemCapability
-mm_modem_get_modem_capabilities (MMModem *self)
+static void
+supported_capabilities_updated (MMModem *self,
+                                GParamSpec *pspec)
 {
-    g_return_val_if_fail (MM_IS_MODEM (self), MM_MODEM_CAPABILITY_NONE);
+    g_mutex_lock (&self->priv->supported_capabilities_mutex);
+    {
+        GVariant *dictionary;
 
-    return (MMModemCapability) mm_gdbus_modem_get_modem_capabilities (MM_GDBUS_MODEM (self));
+        if (self->priv->supported_capabilities)
+            g_array_unref (self->priv->supported_capabilities);
+
+        dictionary = mm_gdbus_modem_get_supported_capabilities (MM_GDBUS_MODEM (self));
+        self->priv->supported_capabilities = (dictionary ?
+                                              mm_common_capability_combinations_variant_to_garray (dictionary) :
+                                              NULL);
+    }
+    g_mutex_unlock (&self->priv->supported_capabilities_mutex);
+}
+
+static gboolean
+ensure_internal_supported_capabilities (MMModem *self,
+                                        MMModemCapability **dup_capabilities,
+                                        guint *dup_capabilities_n)
+{
+    gboolean ret;
+
+    g_mutex_lock (&self->priv->supported_capabilities_mutex);
+    {
+        /* If this is the first time ever asking for the array, setup the
+         * update listener and the initial array, if any. */
+        if (!self->priv->supported_capabilities_id) {
+            GVariant *dictionary;
+
+            dictionary = mm_gdbus_modem_dup_supported_capabilities (MM_GDBUS_MODEM (self));
+            if (dictionary) {
+                self->priv->supported_capabilities = mm_common_capability_combinations_variant_to_garray (dictionary);
+                g_variant_unref (dictionary);
+            }
+
+            /* No need to clear this signal connection when freeing self */
+            self->priv->supported_capabilities_id =
+                g_signal_connect (self,
+                                  "notify::supported-capabilities",
+                                  G_CALLBACK (supported_capabilities_updated),
+                                  NULL);
+        }
+
+        if (!self->priv->supported_capabilities)
+            ret = FALSE;
+        else {
+            ret = TRUE;
+
+            if (dup_capabilities && dup_capabilities_n) {
+                *dup_capabilities_n = self->priv->supported_capabilities->len;
+                if (self->priv->supported_capabilities->len > 0) {
+                    *dup_capabilities = g_malloc (sizeof (MMModemCapability) * self->priv->supported_capabilities->len);
+                    memcpy (*dup_capabilities, self->priv->supported_capabilities->data, sizeof (MMModemCapability) * self->priv->supported_capabilities->len);
+                } else
+                    *dup_capabilities = NULL;
+            }
+        }
+    }
+    g_mutex_unlock (&self->priv->supported_capabilities_mutex);
+
+    return ret;
+}
+
+/**
+ * mm_modem_get_supported_capabilities:
+ * @self: A #MMModem.
+ * @capabilities: (out) (array length=n_capabilities): Return location for the array of #MMModemCapability values. The returned array should be freed with g_free() when no longer needed.
+ * @n_capabilities: (out): Return location for the number of values in @capabilities.
+ *
+ * Gets the list of combinations of generic families of access technologies supported by this #MMModem.
+ *
+ * Returns: %TRUE if @capabilities and @n_capabilities are set, %FALSE otherwise.
+ */
+gboolean
+mm_modem_get_supported_capabilities (MMModem *self,
+                                     MMModemCapability **capabilities,
+                                     guint *n_capabilities)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
+
+    return ensure_internal_supported_capabilities (self, capabilities, n_capabilities);
+}
+
+/**
+ * mm_modem_peek_supported_capabilities:
+ * @self: A #MMModem.
+ * @capabilities: (out) (array length=n_capabilities): Return location for the array of #MMModemCapability values. Do not free the returned array, it is owned by @self.
+ * @n_capabilities: (out): Return location for the number of values in @capabilities.
+ *
+ * Gets the list of combinations of generic families of access technologies supported by this #MMModem.
+ *
+ * Returns: %TRUE if @capabilities and @n_capabilities are set, %FALSE otherwise.
+ */
+gboolean
+mm_modem_peek_supported_capabilities (MMModem *self,
+                                      const MMModemCapability **capabilities,
+                                      guint *n_capabilities)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
+    g_return_val_if_fail (capabilities != NULL, FALSE);
+    g_return_val_if_fail (n_capabilities != NULL, FALSE);
+
+    if (!ensure_internal_supported_capabilities (self, NULL, NULL))
+        return FALSE;
+
+    *n_capabilities = self->priv->supported_capabilities->len;
+    *capabilities = (MMModemCapability *)self->priv->supported_capabilities->data;
+    return TRUE;
 }
 
 /*****************************************************************************/
@@ -910,62 +1014,158 @@ mm_modem_get_signal_quality (MMModem *self,
 
 /*****************************************************************************/
 
+static void
+supported_modes_updated (MMModem *self,
+                         GParamSpec *pspec)
+{
+    g_mutex_lock (&self->priv->supported_modes_mutex);
+    {
+        GVariant *dictionary;
+
+        if (self->priv->supported_modes)
+            g_array_unref (self->priv->supported_modes);
+
+        dictionary = mm_gdbus_modem_get_supported_modes (MM_GDBUS_MODEM (self));
+        self->priv->supported_modes = (dictionary ?
+                                       mm_common_mode_combinations_variant_to_garray (dictionary) :
+                                       NULL);
+    }
+    g_mutex_unlock (&self->priv->supported_modes_mutex);
+}
+
+static gboolean
+ensure_internal_supported_modes (MMModem *self,
+                                 MMModemModeCombination **dup_modes,
+                                 guint *dup_modes_n)
+{
+    gboolean ret;
+
+    g_mutex_lock (&self->priv->supported_modes_mutex);
+    {
+        /* If this is the first time ever asking for the array, setup the
+         * update listener and the initial array, if any. */
+        if (!self->priv->supported_modes_id) {
+            GVariant *dictionary;
+
+            dictionary = mm_gdbus_modem_dup_supported_modes (MM_GDBUS_MODEM (self));
+            if (dictionary) {
+                self->priv->supported_modes = mm_common_mode_combinations_variant_to_garray (dictionary);
+                g_variant_unref (dictionary);
+            }
+
+            /* No need to clear this signal connection when freeing self */
+            self->priv->supported_modes_id =
+                g_signal_connect (self,
+                                  "notify::supported-modes",
+                                  G_CALLBACK (supported_modes_updated),
+                                  NULL);
+        }
+
+        if (!self->priv->supported_modes)
+            ret = FALSE;
+        else {
+            ret = TRUE;
+
+            if (dup_modes && dup_modes_n) {
+                *dup_modes_n = self->priv->supported_modes->len;
+                if (self->priv->supported_modes->len > 0) {
+                    *dup_modes = g_malloc (sizeof (MMModemModeCombination) * self->priv->supported_modes->len);
+                    memcpy (*dup_modes, self->priv->supported_modes->data, sizeof (MMModemModeCombination) * self->priv->supported_modes->len);
+                } else
+                    *dup_modes = NULL;
+            }
+        }
+    }
+    g_mutex_unlock (&self->priv->supported_modes_mutex);
+
+    return ret;
+}
+
 /**
  * mm_modem_get_supported_modes:
  * @self: A #MMModem.
+ * @modes: (out) (array length=n_modes): Return location for the array of #MMModemModeCombination structs. The returned array should be freed with g_free() when no longer needed.
+ * @n_modes: (out): Return location for the number of values in @modes.
  *
- * Gets the list of modes specifying the access technologies supported by the #MMModem.
+ * Gets the list of supported mode combinations.
  *
- * For POTS devices, only #MM_MODEM_MODE_ANY will be returned.
- *
- * Returns: A bitmask of #MMModemMode values.
+ * Returns: %TRUE if @modes and @n_modes are set, %FALSE otherwise.
  */
-MMModemMode
-mm_modem_get_supported_modes (MMModem *self)
+gboolean
+mm_modem_get_supported_modes (MMModem *self,
+                              MMModemModeCombination **modes,
+                              guint *n_modes)
 {
-    g_return_val_if_fail (MM_IS_MODEM (self), MM_MODEM_MODE_NONE);
+    g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
+    g_return_val_if_fail (modes != NULL, FALSE);
+    g_return_val_if_fail (n_modes != NULL, FALSE);
 
-    return (MMModemMode) mm_gdbus_modem_get_supported_modes (MM_GDBUS_MODEM (self));
+    return ensure_internal_supported_modes (self, modes, n_modes);
+}
+
+/**
+ * mm_modem_peek_supported_modes:
+ * @self: A #MMModem.
+ * @modes: (out) (array length=n_modes): Return location for the array of #MMModemModeCombination values. Do not free the returned array, it is owned by @self.
+ * @n_modes: (out): Return location for the number of values in @modes.
+ *
+ * Gets the list of supported mode combinations.
+ *
+ * Returns: %TRUE if @modes and @n_modes are set, %FALSE otherwise.
+ */
+gboolean
+mm_modem_peek_supported_modes (MMModem *self,
+                               const MMModemModeCombination **modes,
+                               guint *n_modes)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
+    g_return_val_if_fail (modes != NULL, FALSE);
+    g_return_val_if_fail (n_modes != NULL, FALSE);
+
+    if (!ensure_internal_supported_modes (self, NULL, NULL))
+        return FALSE;
+
+    *n_modes = self->priv->supported_modes->len;
+    *modes = (MMModemModeCombination *)self->priv->supported_modes->data;
+    return TRUE;
 }
 
 /*****************************************************************************/
 
 /**
- * mm_modem_get_allowed_modes:
+ * mm_modem_get_current_modes:
  * @self: A #MMModem.
+ * @allowed: (out): Return location for a bitmask of #MMModemMode values.
+ * @preferred: (out): Return location for a #MMModemMode value.
  *
- * Gets the list of modes specifying the access technologies (eg 2G/3G/4G preference)
- * the #MMModem is currently allowed to use when connecting to a network.
+ * Gets the list of modes specifying the access technologies (eg 2G/3G/4G)
+ * the #MMModem is currently allowed to use when connecting to a network, as
+ * well as the preferred one, if any.
  *
- * For POTS devices, only the #MM_MODEM_MODE_ANY is supported.
- *
- * Returns: A bitmask of #MMModemMode values.
+ * Returns: %TRUE if @allowed and @preferred are set, %FALSE otherwise.
  */
-MMModemMode
-mm_modem_get_allowed_modes (MMModem *self)
+gboolean
+mm_modem_get_current_modes (MMModem *self,
+                            MMModemMode *allowed,
+                            MMModemMode *preferred)
 {
-    g_return_val_if_fail (MM_IS_MODEM (self), MM_MODEM_MODE_NONE);
+    GVariant *variant;
 
-    return (MMModemMode) mm_gdbus_modem_get_allowed_modes (MM_GDBUS_MODEM (self));
-}
+    g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
+    g_return_val_if_fail (allowed != NULL, FALSE);
+    g_return_val_if_fail (preferred != NULL, FALSE);
 
-/*****************************************************************************/
+    variant = mm_gdbus_modem_dup_current_modes (MM_GDBUS_MODEM (self));
+    if (variant) {
+        g_variant_get (variant,
+                       "(uu)",
+                       allowed,
+                       preferred);
+        g_variant_unref (variant);
+        return TRUE;
+    }
 
-/**
- * mm_modem_get_preferred_mode:
- * @self: A #MMModem.
- *
- * Get the preferred access technology (eg 2G/3G/4G preference), among
- * the ones defined in the allowed modes.
- *
- * Returns: A single #MMModemMode value.
- */
-MMModemMode
-mm_modem_get_preferred_mode (MMModem *self)
-{
-    g_return_val_if_fail (MM_IS_MODEM (self), MM_MODEM_MODE_NONE);
-
-    return (MMModemMode) mm_gdbus_modem_get_preferred_mode (MM_GDBUS_MODEM (self));
+    return FALSE;
 }
 
 /*****************************************************************************/
@@ -1093,74 +1293,74 @@ mm_modem_peek_supported_bands (MMModem *self,
 /*****************************************************************************/
 
 static void
-bands_updated (MMModem *self,
-               GParamSpec *pspec)
+current_bands_updated (MMModem *self,
+                       GParamSpec *pspec)
 {
-    g_mutex_lock (&self->priv->bands_mutex);
+    g_mutex_lock (&self->priv->current_bands_mutex);
     {
         GVariant *dictionary;
 
-        if (self->priv->bands)
-            g_array_unref (self->priv->bands);
+        if (self->priv->current_bands)
+            g_array_unref (self->priv->current_bands);
 
-        dictionary = mm_gdbus_modem_get_bands (MM_GDBUS_MODEM (self));
-        self->priv->bands = (dictionary ?
-                             mm_common_bands_variant_to_garray (dictionary) :
-                             NULL);
+        dictionary = mm_gdbus_modem_get_current_bands (MM_GDBUS_MODEM (self));
+        self->priv->current_bands = (dictionary ?
+                                     mm_common_bands_variant_to_garray (dictionary) :
+                                     NULL);
     }
-    g_mutex_unlock (&self->priv->bands_mutex);
+    g_mutex_unlock (&self->priv->current_bands_mutex);
 }
 
 static gboolean
-ensure_internal_bands (MMModem *self,
-                       MMModemBand **dup_bands,
-                       guint *dup_bands_n)
+ensure_internal_current_bands (MMModem *self,
+                               MMModemBand **dup_bands,
+                               guint *dup_bands_n)
 {
     gboolean ret;
 
-    g_mutex_lock (&self->priv->bands_mutex);
+    g_mutex_lock (&self->priv->current_bands_mutex);
     {
         /* If this is the first time ever asking for the array, setup the
          * update listener and the initial array, if any. */
-        if (!self->priv->bands_id) {
+        if (!self->priv->current_bands_id) {
             GVariant *dictionary;
 
-            dictionary = mm_gdbus_modem_dup_bands (MM_GDBUS_MODEM (self));
+            dictionary = mm_gdbus_modem_dup_current_bands (MM_GDBUS_MODEM (self));
             if (dictionary) {
-                self->priv->bands = mm_common_bands_variant_to_garray (dictionary);
+                self->priv->current_bands = mm_common_bands_variant_to_garray (dictionary);
                 g_variant_unref (dictionary);
             }
 
             /* No need to clear this signal connection when freeing self */
-            self->priv->bands_id =
+            self->priv->current_bands_id =
                 g_signal_connect (self,
-                                  "notify::bands",
-                                  G_CALLBACK (bands_updated),
+                                  "notify::current-bands",
+                                  G_CALLBACK (current_bands_updated),
                                   NULL);
         }
 
-        if (!self->priv->bands)
+        if (!self->priv->current_bands)
             ret = FALSE;
         else {
             ret = TRUE;
 
             if (dup_bands && dup_bands_n) {
-                *dup_bands_n = self->priv->bands->len;
-                if (self->priv->bands->len > 0) {
-                    *dup_bands = g_malloc (sizeof (MMModemBand) * self->priv->bands->len);
-                    memcpy (*dup_bands, self->priv->bands->data, sizeof (MMModemBand) * self->priv->bands->len);
+                *dup_bands_n = self->priv->current_bands->len;
+                if (self->priv->current_bands->len > 0) {
+                    *dup_bands = g_malloc (sizeof (MMModemBand) * self->priv->current_bands->len);
+                    memcpy (*dup_bands, self->priv->current_bands->data, sizeof (MMModemBand) * self->priv->current_bands->len);
                 } else
                     *dup_bands = NULL;
             }
         }
     }
-    g_mutex_unlock (&self->priv->bands_mutex);
+    g_mutex_unlock (&self->priv->current_bands_mutex);
 
     return ret;
 }
 
 /**
- * mm_modem_get_bands:
+ * mm_modem_get_current_bands:
  * @self: A #MMModem.
  * @bands: (out) (array length=n_bands): Return location for the array of #MMModemBand values. The returned array should be freed with g_free() when no longer needed.
  * @n_bands: (out): Return location for the number of values in @bands.
@@ -1173,19 +1373,19 @@ ensure_internal_bands (MMModem *self,
  * Returns: %TRUE if @bands and @n_bands are set, %FALSE otherwise.
  */
 gboolean
-mm_modem_get_bands (MMModem *self,
-                    MMModemBand **bands,
-                    guint *n_bands)
+mm_modem_get_current_bands (MMModem *self,
+                            MMModemBand **bands,
+                            guint *n_bands)
 {
     g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
     g_return_val_if_fail (bands != NULL, FALSE);
     g_return_val_if_fail (n_bands != NULL, FALSE);
 
-    return ensure_internal_bands (self, bands, n_bands);
+    return ensure_internal_current_bands (self, bands, n_bands);
 }
 
 /**
- * mm_modem_peek_bands:
+ * mm_modem_peek_current_bands:
  * @self: A #MMModem.
  * @bands: (out) (array length=n_storages): Return location for the array of #MMModemBand values. Do not free the returned value, it is owned by @self.
  * @n_bands: (out): Return location for the number of values in @bands.
@@ -1198,20 +1398,38 @@ mm_modem_get_bands (MMModem *self,
  * Returns: %TRUE if @bands and @n_bands are set, %FALSE otherwise.
  */
 gboolean
-mm_modem_peek_bands (MMModem *self,
-                     const MMModemBand **bands,
-                     guint *n_bands)
+mm_modem_peek_current_bands (MMModem *self,
+                             const MMModemBand **bands,
+                             guint *n_bands)
 {
     g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
     g_return_val_if_fail (bands != NULL, FALSE);
     g_return_val_if_fail (n_bands != NULL, FALSE);
 
-    if (!ensure_internal_bands (self, NULL, NULL))
+    if (!ensure_internal_current_bands (self, NULL, NULL))
         return FALSE;
 
-    *n_bands = self->priv->bands->len;
-    *bands = (MMModemBand *)self->priv->bands->data;
+    *n_bands = self->priv->current_bands->len;
+    *bands = (MMModemBand *)self->priv->current_bands->data;
     return TRUE;
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_modem_get_supported_ip_families:
+ * @self: A #MMModem.
+ *
+ * Gets the list of supported IP families.
+ *
+ * Returns: A bitmask of #MMBearerIpFamily values.
+ */
+MMBearerIpFamily
+mm_modem_get_supported_ip_families (MMModem *self)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), MM_BEARER_IP_FAMILY_NONE);
+
+    return (MMBearerIpFamily) mm_gdbus_modem_get_supported_ip_families (MM_GDBUS_MODEM (self));
 }
 
 /*****************************************************************************/
@@ -2197,27 +2415,109 @@ mm_modem_set_power_state_sync (MMModem *self,
 /*****************************************************************************/
 
 /**
- * mm_modem_set_allowed_modes_finish:
+ * mm_modem_set_current_capabilities_finish:
  * @self: A #MMModem.
- * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to mm_modem_set_allowed_modes().
+ * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to mm_modem_set_current_capabilities().
  * @error: Return location for error or %NULL.
  *
- * Finishes an operation started with mm_modem_set_allowed_modes().
+ * Finishes an operation started with mm_modem_set_current_capabilities().
+ *
+ * Returns: %TRUE if the capabilities were successfully set, %FALSE if @error is set.
+ */
+gboolean
+mm_modem_set_current_capabilities_finish (MMModem *self,
+                                          GAsyncResult *res,
+                                          GError **error)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
+
+    return mm_gdbus_modem_call_set_current_capabilities_finish (MM_GDBUS_MODEM (self), res, error);
+}
+
+/**
+ * mm_modem_set_current_capabilities:
+ * @self: A #MMModem.
+ * @capabilities: A #MMModemCapability mask.
+ * @cancellable: (allow-none): A #GCancellable or %NULL.
+ * @callback: A #GAsyncReadyCallback to call when the request is satisfied or %NULL.
+ * @user_data: User data to pass to @callback.
+ *
+ * Asynchronously sets the capabilities of the device. A restart of the modem may be required.
+ *
+ * When the operation is finished, @callback will be invoked in the <link linkend="g-main-context-push-thread-default">thread-default main loop</link> of the thread you are calling this method from.
+ * You can then call mm_modem_set_current_capabilities_finish() to get the result of the operation.
+ *
+ * See mm_modem_set_current_capabilities_sync() for the synchronous, blocking version of this method.
+ */
+void
+mm_modem_set_current_capabilities (MMModem *self,
+                                   MMModemCapability capabilities,
+                                   GCancellable *cancellable,
+                                   GAsyncReadyCallback callback,
+                                   gpointer user_data)
+{
+    g_return_if_fail (MM_IS_MODEM (self));
+
+    mm_gdbus_modem_call_set_current_capabilities (MM_GDBUS_MODEM (self),
+                                                  capabilities,
+                                                  cancellable,
+                                                  callback,
+                                                  user_data);
+}
+
+/**
+ * mm_modem_set_current_capabilities_sync:
+ * @self: A #MMModem.
+ * @capabilities: A #MMModemCapability mask.
+ * @cancellable: (allow-none): A #GCancellable or %NULL.
+ * @error: Return location for error or %NULL.
+ *
+ * Synchronously sets the capabilities of the device. A restart of the modem may be required.
+ *
+ * The calling thread is blocked until a reply is received. See mm_modem_set_current_capabilities()
+ * for the asynchronous version of this method.
+ *
+ * Returns: %TRUE if the capabilities were successfully set, %FALSE if @error is set.
+ */
+gboolean
+mm_modem_set_current_capabilities_sync (MMModem *self,
+                                        MMModemCapability capabilities,
+                                        GCancellable *cancellable,
+                                        GError **error)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
+
+    return (mm_gdbus_modem_call_set_current_capabilities_sync (
+                MM_GDBUS_MODEM (self),
+                capabilities,
+                cancellable,
+                error));
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_modem_set_current_modes_finish:
+ * @self: A #MMModem.
+ * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to mm_modem_set_current_modes().
+ * @error: Return location for error or %NULL.
+ *
+ * Finishes an operation started with mm_modem_set_current_modes().
  *
  * Returns: %TRUE if the allowed modes were successfully set, %FALSE if @error is set.
  */
 gboolean
-mm_modem_set_allowed_modes_finish (MMModem *self,
+mm_modem_set_current_modes_finish (MMModem *self,
                                    GAsyncResult *res,
                                    GError **error)
 {
     g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
 
-    return mm_gdbus_modem_call_set_allowed_modes_finish (MM_GDBUS_MODEM (self), res, error);
+    return mm_gdbus_modem_call_set_current_modes_finish (MM_GDBUS_MODEM (self), res, error);
 }
 
 /**
- * mm_modem_set_allowed_modes:
+ * mm_modem_set_current_modes:
  * @self: A #MMModem.
  * @modes: Mask of #MMModemMode values specifying which modes are allowed.
  * @preferred: A #MMModemMode value specifying which of the modes given in @modes is the preferred one, or #MM_MODEM_MODE_NONE if none.
@@ -2229,12 +2529,12 @@ mm_modem_set_allowed_modes_finish (MMModem *self,
  * currently allowed to use when connecting to a network.
  *
  * When the operation is finished, @callback will be invoked in the <link linkend="g-main-context-push-thread-default">thread-default main loop</link> of the thread you are calling this method from.
- * You can then call mm_modem_set_allowed_modes_finish() to get the result of the operation.
+ * You can then call mm_modem_set_current_modes_finish() to get the result of the operation.
  *
- * See mm_modem_set_allowed_modes_sync() for the synchronous, blocking version of this method.
+ * See mm_modem_set_current_modes_sync() for the synchronous, blocking version of this method.
  */
 void
-mm_modem_set_allowed_modes (MMModem *self,
+mm_modem_set_current_modes (MMModem *self,
                             MMModemMode modes,
                             MMModemMode preferred,
                             GCancellable *cancellable,
@@ -2243,11 +2543,15 @@ mm_modem_set_allowed_modes (MMModem *self,
 {
     g_return_if_fail (MM_IS_MODEM (self));
 
-    mm_gdbus_modem_call_set_allowed_modes (MM_GDBUS_MODEM (self), modes, preferred, cancellable, callback, user_data);
+    mm_gdbus_modem_call_set_current_modes (MM_GDBUS_MODEM (self),
+                                           g_variant_new ("(uu)", modes, preferred),
+                                           cancellable,
+                                           callback,
+                                           user_data);
 }
 
 /**
- * mm_modem_set_allowed_modes_sync:
+ * mm_modem_set_current_modes_sync:
  * @self: A #MMModem.
  * @modes: Mask of #MMModemMode values specifying which modes are allowed.
  * @preferred: A #MMModemMode value specifying which of the modes given in @modes is the preferred one, or #MM_MODEM_MODE_NONE if none.
@@ -2257,13 +2561,13 @@ mm_modem_set_allowed_modes (MMModem *self,
  * Synchronously sets the access technologies (e.g. 2G/3G/4G preference) the device is
  * currently allowed to use when connecting to a network.
  *
- * The calling thread is blocked until a reply is received. See mm_modem_set_allowed_modes()
+ * The calling thread is blocked until a reply is received. See mm_modem_set_current_modes()
  * for the asynchronous version of this method.
  *
  * Returns: %TRUE if the allowed modes were successfully set, %FALSE if @error is set.
  */
 gboolean
-mm_modem_set_allowed_modes_sync (MMModem *self,
+mm_modem_set_current_modes_sync (MMModem *self,
                                  MMModemMode modes,
                                  MMModemMode preferred,
                                  GCancellable *cancellable,
@@ -2271,33 +2575,36 @@ mm_modem_set_allowed_modes_sync (MMModem *self,
 {
     g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
 
-    return mm_gdbus_modem_call_set_allowed_modes_sync (MM_GDBUS_MODEM (self), modes, preferred, cancellable, error);
+    return mm_gdbus_modem_call_set_current_modes_sync (MM_GDBUS_MODEM (self),
+                                                       g_variant_new ("(uu)", modes, preferred),
+                                                       cancellable,
+                                                       error);
 }
 
 /*****************************************************************************/
 
 /**
- * mm_modem_set_bands_finish:
+ * mm_modem_set_current_bands_finish:
  * @self: A #MMModem.
- * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to mm_modem_set_bands().
+ * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to mm_modem_set_current_bands().
  * @error: Return location for error or %NULL.
  *
- * Finishes an operation started with mm_modem_set_bands().
+ * Finishes an operation started with mm_modem_set_current_bands().
  *
  * Returns: %TRUE if the bands were successfully set, %FALSE if @error is set.
  */
 gboolean
-mm_modem_set_bands_finish (MMModem *self,
-                           GAsyncResult *res,
-                           GError **error)
+mm_modem_set_current_bands_finish (MMModem *self,
+                                   GAsyncResult *res,
+                                   GError **error)
 {
     g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
 
-    return mm_gdbus_modem_call_set_bands_finish (MM_GDBUS_MODEM (self), res, error);
+    return mm_gdbus_modem_call_set_current_bands_finish (MM_GDBUS_MODEM (self), res, error);
 }
 
 /**
- * mm_modem_set_bands:
+ * mm_modem_set_current_bands:
  * @self: A #MMModem.
  * @bands: An array of #MMModemBand values specifying which bands are allowed.
  * @n_bands: Number of elements in @bands.
@@ -2309,29 +2616,29 @@ mm_modem_set_bands_finish (MMModem *self,
  * allowed to use when connecting to a network.
  *
  * When the operation is finished, @callback will be invoked in the <link linkend="g-main-context-push-thread-default">thread-default main loop</link> of the thread you are calling this method from.
- * You can then call mm_modem_set_bands_finish() to get the result of the operation.
+ * You can then call mm_modem_set_current_bands_finish() to get the result of the operation.
  *
- * See mm_modem_set_bands_sync() for the synchronous, blocking version of this method.
+ * See mm_modem_set_current_bands_sync() for the synchronous, blocking version of this method.
  */
 void
-mm_modem_set_bands (MMModem *self,
-                    const MMModemBand *bands,
-                    guint n_bands,
-                    GCancellable *cancellable,
-                    GAsyncReadyCallback callback,
-                    gpointer user_data)
+mm_modem_set_current_bands (MMModem *self,
+                            const MMModemBand *bands,
+                            guint n_bands,
+                            GCancellable *cancellable,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
 {
     g_return_if_fail (MM_IS_MODEM (self));
 
-    mm_gdbus_modem_call_set_bands (MM_GDBUS_MODEM (self),
-                                   mm_common_bands_array_to_variant (bands, n_bands),
-                                   cancellable,
-                                   callback,
-                                   user_data);
+    mm_gdbus_modem_call_set_current_bands (MM_GDBUS_MODEM (self),
+                                           mm_common_bands_array_to_variant (bands, n_bands),
+                                           cancellable,
+                                           callback,
+                                           user_data);
 }
 
 /**
- * mm_modem_set_bands_sync:
+ * mm_modem_set_current_bands_sync:
  * @self: A #MMModem.
  * @bands: An array of #MMModemBand values specifying which bands are allowed.
  * @n_bands: Number of elements in @bands.
@@ -2341,21 +2648,21 @@ mm_modem_set_bands (MMModem *self,
  * Synchronously sets the radio frequency and technology bands the device is currently
  * allowed to use when connecting to a network.
  *
- * The calling thread is blocked until a reply is received. See mm_modem_set_bands()
+ * The calling thread is blocked until a reply is received. See mm_modem_set_current_bands()
  * for the asynchronous version of this method.
  *
  * Returns: %TRUE if the bands were successfully set, %FALSE if @error is set.
  */
 gboolean
-mm_modem_set_bands_sync (MMModem *self,
-                         const MMModemBand *bands,
-                         guint n_bands,
-                         GCancellable *cancellable,
-                         GError **error)
+mm_modem_set_current_bands_sync (MMModem *self,
+                                 const MMModemBand *bands,
+                                 guint n_bands,
+                                 GCancellable *cancellable,
+                                 GError **error)
 {
     g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
 
-    return (mm_gdbus_modem_call_set_bands_sync (
+    return (mm_gdbus_modem_call_set_current_bands_sync (
                 MM_GDBUS_MODEM (self),
                 mm_common_bands_array_to_variant (bands, n_bands),
                 cancellable,
@@ -2515,8 +2822,10 @@ mm_modem_init (MMModem *self)
                                               MM_TYPE_MODEM,
                                               MMModemPrivate);
     g_mutex_init (&self->priv->unlock_retries_mutex);
+    g_mutex_init (&self->priv->supported_modes_mutex);
+    g_mutex_init (&self->priv->supported_capabilities_mutex);
     g_mutex_init (&self->priv->supported_bands_mutex);
-    g_mutex_init (&self->priv->bands_mutex);
+    g_mutex_init (&self->priv->current_bands_mutex);
 }
 
 static void
@@ -2525,13 +2834,18 @@ finalize (GObject *object)
     MMModem *self = MM_MODEM (object);
 
     g_mutex_clear (&self->priv->unlock_retries_mutex);
+    g_mutex_clear (&self->priv->supported_modes_mutex);
     g_mutex_clear (&self->priv->supported_bands_mutex);
-    g_mutex_clear (&self->priv->bands_mutex);
+    g_mutex_clear (&self->priv->current_bands_mutex);
 
+    if (self->priv->supported_modes)
+        g_array_unref (self->priv->supported_modes);
+    if (self->priv->supported_capabilities)
+        g_array_unref (self->priv->supported_capabilities);
     if (self->priv->supported_bands)
         g_array_unref (self->priv->supported_bands);
-    if (self->priv->bands)
-        g_array_unref (self->priv->bands);
+    if (self->priv->current_bands)
+        g_array_unref (self->priv->current_bands);
 
     G_OBJECT_CLASS (mm_modem_parent_class)->finalize (object);
 }

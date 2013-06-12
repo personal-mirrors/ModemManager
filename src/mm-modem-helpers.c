@@ -248,6 +248,81 @@ mm_new_iso8601_time (guint year,
 
 /*****************************************************************************/
 
+GArray *
+mm_filter_supported_modes (const GArray *all,
+                           const GArray *supported_combinations)
+{
+    MMModemModeCombination all_item;
+    guint i;
+    GArray *filtered_combinations;
+    gboolean all_item_added = FALSE;
+
+    g_return_val_if_fail (all != NULL, NULL);
+    g_return_val_if_fail (all->len == 1, NULL);
+    g_return_val_if_fail (supported_combinations != NULL, NULL);
+
+    all_item = g_array_index (all, MMModemModeCombination, 0);
+    g_return_val_if_fail (all_item.allowed != MM_MODEM_MODE_NONE, NULL);
+
+    /* We will filter out all combinations which have modes not listed in 'all' */
+    filtered_combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), supported_combinations->len);
+    for (i = 0; i < supported_combinations->len; i++) {
+        MMModemModeCombination *mode;
+
+        mode = &g_array_index (supported_combinations, MMModemModeCombination, i);
+        if (!(mode->allowed & ~all_item.allowed)) {
+            /* Compare only 'allowed', *not* preferred. If there is at least one item with allowed
+             * containing all supported modes, we're already good to go. This allows us to have a
+             * default with preferred != NONE (e.g. Wavecom 2G modem with allowed=CS+2G and
+             * preferred=2G */
+            if (all_item.allowed == mode->allowed)
+                all_item_added = TRUE;
+            g_array_append_val (filtered_combinations, *mode);
+        }
+    }
+
+    if (filtered_combinations->len == 0)
+        mm_warn ("All supported mode combinations were filtered out.");
+
+    /* Add default entry with the generic mask including all items */
+    if (!all_item_added) {
+        mm_dbg ("Adding an explicit item with all supported modes allowed");
+        g_array_append_val (filtered_combinations, all_item);
+    }
+
+    return filtered_combinations;
+}
+
+/*****************************************************************************/
+
+GArray *
+mm_filter_supported_capabilities (MMModemCapability all,
+                                  const GArray *supported_combinations)
+{
+    guint i;
+    GArray *filtered_combinations;
+
+    g_return_val_if_fail (all != MM_MODEM_CAPABILITY_NONE, NULL);
+    g_return_val_if_fail (supported_combinations != NULL, NULL);
+
+    /* We will filter out all combinations which have modes not listed in 'all' */
+    filtered_combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemCapability), supported_combinations->len);
+    for (i = 0; i < supported_combinations->len; i++) {
+        MMModemCapability capability;
+
+        capability = g_array_index (supported_combinations, MMModemCapability, i);
+        if (!(capability & ~all))
+            g_array_append_val (filtered_combinations, capability);
+    }
+
+    if (filtered_combinations->len == 0)
+        mm_warn ("All supported capability combinations were filtered out.");
+
+    return filtered_combinations;
+}
+
+/*****************************************************************************/
+
 /* +CREG: <stat>                      (GSM 07.07 CREG=1 unsolicited) */
 #define CREG1 "\\+(CREG|CGREG|CEREG):\\s*0*([0-9])"
 
@@ -644,6 +719,88 @@ mm_3gpp_parse_cops_test_response (const gchar *reply,
 
 /*************************************************************************/
 
+
+static void
+mm_3gpp_pdp_context_format_free (MM3gppPdpContextFormat *format)
+{
+    g_slice_free (MM3gppPdpContextFormat, format);
+}
+
+void
+mm_3gpp_pdp_context_format_list_free (GList *pdp_format_list)
+{
+    g_list_free_full (pdp_format_list, (GDestroyNotify) mm_3gpp_pdp_context_format_free);
+}
+
+GList *
+mm_3gpp_parse_cgdcont_test_response (const gchar *response,
+                                     GError **error)
+{
+    GRegex *r;
+    GMatchInfo *match_info;
+    GError *inner_error = NULL;
+    GList *list = NULL;
+
+    if (!response || !g_str_has_prefix (response, "+CGDCONT:")) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Missing +CGDCONT prefix");
+        return NULL;
+    }
+
+    r = g_regex_new ("\\+CGDCONT:\\s*\\((\\d+)-(\\d+)\\),\\(?\"(\\S+)\"",
+                     G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW,
+                     0, &inner_error);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    while (!inner_error && g_match_info_matches (match_info)) {
+        gchar *pdp_type_str;
+        guint min_cid;
+        guint max_cid;
+        MMBearerIpFamily pdp_type;
+
+        /* Read PDP type */
+        pdp_type_str = mm_get_string_unquoted_from_match_info (match_info, 3);
+        pdp_type = mm_3gpp_get_ip_family_from_pdp_type (pdp_type_str);
+        if (pdp_type == MM_BEARER_IP_FAMILY_NONE)
+            mm_dbg ("Unhandled PDP type in CGDCONT=? reply: '%s'", pdp_type_str);
+        else {
+            /* Read min CID */
+            if (!mm_get_uint_from_match_info (match_info, 1, &min_cid))
+                mm_warn ("Invalid min CID in CGDCONT=? reply for PDP type '%s'", pdp_type_str);
+            else {
+                /* Read max CID */
+                if (!mm_get_uint_from_match_info (match_info, 2, &max_cid))
+                    mm_warn ("Invalid max CID in CGDCONT=? reply for PDP type '%s'", pdp_type_str);
+                else {
+                    MM3gppPdpContextFormat *format;
+
+                    format = g_slice_new (MM3gppPdpContextFormat);
+                    format->pdp_type = pdp_type;
+                    format->min_cid = min_cid;
+                    format->max_cid = max_cid;
+
+                    list = g_list_prepend (list, format);
+                }
+            }
+        }
+
+        g_free (pdp_type_str);
+        g_match_info_next (match_info, &inner_error);
+    }
+
+    g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        mm_warn ("Unexpected error matching +CGDCONT response: '%s'", inner_error->message);
+        g_error_free (inner_error);
+    }
+
+    return list;
+}
+
+/*************************************************************************/
+
 static void
 mm_3gpp_pdp_context_free (MM3gppPdpContext *pdp)
 {
@@ -691,7 +848,7 @@ mm_3gpp_parse_cgdcont_read_response (const gchar *reply,
 
             str = mm_get_string_unquoted_from_match_info (match_info, 2);
             ip_family = mm_3gpp_get_ip_family_from_pdp_type (str);
-            if (ip_family == MM_BEARER_IP_FAMILY_UNKNOWN)
+            if (ip_family == MM_BEARER_IP_FAMILY_NONE)
                 mm_dbg ("Ignoring PDP context type: '%s'", str);
             else {
                 MM3gppPdpContext *pdp;
@@ -1711,7 +1868,7 @@ mm_3gpp_get_ip_family_from_pdp_type (const gchar *pdp_type)
         return MM_BEARER_IP_FAMILY_IPV6;
     if (g_str_equal (pdp_type, "IPV4V6"))
         return MM_BEARER_IP_FAMILY_IPV4V6;
-    return MM_BEARER_IP_FAMILY_UNKNOWN;
+    return MM_BEARER_IP_FAMILY_NONE;
 }
 
 /*************************************************************************/
