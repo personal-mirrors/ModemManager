@@ -28,6 +28,8 @@ libtool
 callouts/mm-modem-probe
 test/lsudev
 
+include/ModemManager-version.h
+
 libmm-glib/generated/mm-gdbus-*.[ch]
 libmm-glib/generated/mm-enums-types.[ch]
 libmm-glib/generated/mm-errors-types.[ch]
@@ -57,6 +59,7 @@ libwmc/tests/test-wmc
 data/org.freedesktop.ModemManager1.conf
 data/org.freedesktop.ModemManager1.service
 data/org.freedesktop.ModemManager1.policy
+data/org.freedesktop.ModemManager1.policy.in
 data/ModemManager.service
 data/ModemManager.pc
 data/mm-common.pc
