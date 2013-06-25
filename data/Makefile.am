@@ -33,10 +33,8 @@ endif
 
 # DBus Activation file
 dbusactivationdir = $(datadir)/dbus-1/system-services
-dbusactivation_in_files = org.freedesktop.ModemManager1.service.in
-org.freedesktop.ModemManager1.service: org.freedesktop.ModemManager1.service.in
-	$(edit) $< >$@
 dbusactivation_DATA = org.freedesktop.ModemManager1.service
+dbusactivation_in_files = org.freedesktop.ModemManager1.service.in
 
 # Icon
 icondir=${datadir}/icons/hicolor/22x22/apps

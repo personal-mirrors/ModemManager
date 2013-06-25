@@ -189,7 +189,7 @@ dnl
 AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support]), [], [with_mbim=auto])
 if (test "${with_mbim}" != "no"); then
     PKG_CHECK_MODULES(MBIM,
-                      [mbim-glib >= 1.0.0],
+                      [mbim-glib >= 1.4.0],
                       [have_libmbim_glib=yes],
                       [have_libmbim_glib=no])
     AC_SUBST(MBIM_CFLAGS)
@@ -268,6 +268,7 @@ data/Makefile
 data/ModemManager.pc
 data/mm-glib.pc
 data/org.freedesktop.ModemManager1.policy.in
+data/org.freedesktop.ModemManager1.service
 include/Makefile
 include/ModemManager-version.h
 build-aux/Makefile
