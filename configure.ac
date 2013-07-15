@@ -184,32 +184,25 @@ fi
 AM_CONDITIONAL(WITH_POLKIT, [test "x$with_polkit" != "xnone" ])
 
 dnl
-dnl MBIM support (auto by default)
+dnl MBIM support (enabled by default)
 dnl
-AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support]), [], [with_mbim=auto])
-if (test "${with_mbim}" != "no"); then
-    PKG_CHECK_MODULES(MBIM,
-                      [mbim-glib >= 1.4.0],
-                      [have_libmbim_glib=yes],
-                      [have_libmbim_glib=no])
-    AC_SUBST(MBIM_CFLAGS)
-    AC_SUBST(MBIM_LIBS)
-
-    if (test "${have_libmbim_glib}" = "no"); then
-        if (test "${with_mbim}" = "yes"); then
-            AC_MSG_ERROR([Couldn't find libmbim-glib])
+AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support]), [], [with_mbim=yes])
+AM_CONDITIONAL(WITH_MBIM, test "x$with_mbim" = "xyes")
+case $with_mbim in
+    yes)
+        PKG_CHECK_MODULES(MBIM, [mbim-glib >= 1.4], [have_mbim=yes],[have_mbim=no])
+        if test "x$have_mbim" = "xno"; then
+            AC_MSG_ERROR([Couldn't find libmbim-glib. Install it, or otherwise configure using --without-mbim to disable MBIM support.])
         else
-            with_mbim="no"
+            AC_DEFINE(WITH_MBIM, 1, [Define if you want MBIM support])
+            AC_SUBST(MBIM_CFLAGS)
+            AC_SUBST(MBIM_LIBS)
         fi
-    else
-        with_mbim="yes"
-    fi
-fi
-
-if (test "${with_mbim}" = "yes"); then
-    AC_DEFINE(WITH_MBIM, 1, [Define if you want MBIM support])
-fi
-AM_CONDITIONAL(WITH_MBIM, test "${with_mbim}" = "yes")
+        ;;
+    *)
+        with_mbim=no
+        ;;
+esac
 
 dnl
 dnl QMI support (enabled by default)
@@ -218,10 +211,14 @@ AC_ARG_WITH(qmi, AS_HELP_STRING([--without-qmi], [Build without QMI support]), [
 AM_CONDITIONAL(WITH_QMI, test "x$with_qmi" = "xyes")
 case $with_qmi in
     yes)
-        PKG_CHECK_MODULES(QMI, qmi-glib)
-        AC_DEFINE(WITH_QMI, 1, [Define if you want QMI support])
-        AC_SUBST(QMI_CFLAGS)
-        AC_SUBST(QMI_LIBS)
+        PKG_CHECK_MODULES(QMI, [qmi-glib >= 1.4], [have_qmi=yes],[have_qmi=no])
+        if test "x$have_qmi" = "xno"; then
+            AC_MSG_ERROR([Couldn't find libqmi-glib. Install it, or otherwise configure using --without-qmi to disable QMI support.])
+        else
+            AC_DEFINE(WITH_QMI, 1, [Define if you want QMI support])
+            AC_SUBST(QMI_CFLAGS)
+            AC_SUBST(QMI_LIBS)
+        fi
         ;;
     *)
         with_qmi=no
