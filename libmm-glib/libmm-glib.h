@@ -43,6 +43,7 @@
 # include <mm-modem-messaging.h>
 # include <mm-modem-time.h>
 # include <mm-modem-firmware.h>
+# include <mm-modem-signal.h>
 #endif
 
 #if defined (_LIBMM_INSIDE_MM) ||    \
@@ -67,6 +68,7 @@
 #include <mm-network-timezone.h>
 #include <mm-firmware-properties.h>
 #include <mm-cdma-manual-activation-properties.h>
+#include <mm-signal.h>
 
 /* generated */
 #include <mm-errors-types.h>

@@ -58,6 +58,8 @@ mm_object_peek_modem_firmware
 mm_object_get_modem_firmware
 mm_object_peek_modem_simple
 mm_object_get_modem_simple
+mm_object_peek_modem_signal
+mm_object_get_modem_signal
 <SUBSECTION Standard>
 MMObjectClass
 MM_IS_OBJECT
@@ -759,6 +761,76 @@ MM_SIMPLE_STATUS_CLASS
 MM_SIMPLE_STATUS_GET_CLASS
 MM_TYPE_SIMPLE_STATUS
 mm_simple_status_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-modem-signal</FILE>
+<TITLE>MMModemSignal</TITLE>
+MMModemSignal
+<SUBSECTION Getters>
+mm_modem_signal_get_path
+mm_modem_signal_dup_path
+mm_modem_signal_get_rate
+mm_modem_signal_peek_cdma
+mm_modem_signal_get_cdma
+mm_modem_signal_peek_evdo
+mm_modem_signal_get_evdo
+mm_modem_signal_peek_gsm
+mm_modem_signal_get_gsm
+mm_modem_signal_peek_umts
+mm_modem_signal_get_umts
+mm_modem_signal_peek_lte
+mm_modem_signal_get_lte
+<SUBSECTION Methods>
+mm_modem_signal_setup
+mm_modem_signal_setup_finish
+mm_modem_signal_setup_sync
+<SUBSECTION Standard>
+MMModemSignalPrivate
+MMModemSignalClass
+MM_IS_MODEM_SIGNAL
+MM_IS_MODEM_SIGNAL_CLASS
+MM_MODEM_SIGNAL
+MM_MODEM_SIGNAL_CLASS
+MM_MODEM_SIGNAL_GET_CLASS
+MM_TYPE_MODEM_SIGNAL
+mm_modem_signal_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-signal</FILE>
+<TITLE>MMSignal</TITLE>
+MMSignal
+MM_SIGNAL_UNKNOWN
+<SUBSECTION Getters>
+mm_signal_get_rssi
+mm_signal_get_ecio
+mm_signal_get_sinr
+mm_signal_get_io
+mm_signal_get_rsrp
+mm_signal_get_rsrq
+mm_signal_get_snr
+<SUBSECTION Private>
+mm_signal_new
+mm_signal_new_from_dictionary
+mm_signal_get_dictionary
+mm_signal_set_rssi
+mm_signal_set_ecio
+mm_signal_set_sinr
+mm_signal_set_io
+mm_signal_set_rsrp
+mm_signal_set_rsrq
+mm_signal_set_snr
+<SUBSECTION Standard>
+MMSignalClass
+MMSignalPrivate
+MM_SIGNAL
+MM_SIGNAL_CLASS
+MM_SIGNAL_GET_CLASS
+MM_IS_SIGNAL
+MM_IS_SIGNAL_CLASS
+MM_TYPE_SIGNAL
+mm_signal_get_type
 </SECTION>
 
 <SECTION>
@@ -2087,6 +2159,85 @@ MmGdbusModemSimpleSkeletonPrivate
 mm_gdbus_modem_simple_skeleton_get_type
 </SECTION>
 
+<SECTION>
+<FILE>MmGdbusModemSignal</FILE>
+<TITLE>MmGdbusModemSignal</TITLE>
+MmGdbusModemSignal
+MmGdbusModemSignalIface
+<SUBSECTION Getters>
+mm_gdbus_modem_signal_get_rate
+mm_gdbus_modem_signal_get_cdma
+mm_gdbus_modem_signal_get_evdo
+mm_gdbus_modem_signal_get_gsm
+mm_gdbus_modem_signal_get_umts
+mm_gdbus_modem_signal_get_lte
+mm_gdbus_modem_signal_dup_cdma
+mm_gdbus_modem_signal_dup_evdo
+mm_gdbus_modem_signal_dup_gsm
+mm_gdbus_modem_signal_dup_umts
+mm_gdbus_modem_signal_dup_lte
+<SUBSECTION Methods>
+mm_gdbus_modem_signal_call_setup
+mm_gdbus_modem_signal_call_setup_finish
+mm_gdbus_modem_signal_call_setup_sync
+<SUBSECTION Private>
+mm_gdbus_modem_signal_set_cdma
+mm_gdbus_modem_signal_set_evdo
+mm_gdbus_modem_signal_set_gsm
+mm_gdbus_modem_signal_set_lte
+mm_gdbus_modem_signal_set_rate
+mm_gdbus_modem_signal_set_umts
+mm_gdbus_modem_signal_complete_setup
+mm_gdbus_modem_signal_interface_info
+mm_gdbus_modem_signal_override_properties
+<SUBSECTION Standard>
+MM_GDBUS_IS_MODEM_SIGNAL
+MM_GDBUS_MODEM_SIGNAL
+MM_GDBUS_MODEM_SIGNAL_GET_IFACE
+MM_GDBUS_TYPE_MODEM_SIGNAL
+mm_gdbus_modem_signal_get_type
+</SECTION>
+
+<SECTION>
+<FILE>MmGdbusModemSignalProxy</FILE>
+<TITLE>MmGdbusModemSignalProxy</TITLE>
+MmGdbusModemSignalProxy
+<SUBSECTION New>
+mm_gdbus_modem_signal_proxy_new
+mm_gdbus_modem_signal_proxy_new_finish
+mm_gdbus_modem_signal_proxy_new_for_bus
+mm_gdbus_modem_signal_proxy_new_for_bus_finish
+mm_gdbus_modem_signal_proxy_new_for_bus_sync
+mm_gdbus_modem_signal_proxy_new_sync
+<SUBSECTION Standard>
+MmGdbusModemSignalProxyClass
+MM_GDBUS_IS_MODEM_SIGNAL_PROXY
+MM_GDBUS_IS_MODEM_SIGNAL_PROXY_CLASS
+MM_GDBUS_MODEM_SIGNAL_PROXY
+MM_GDBUS_MODEM_SIGNAL_PROXY_CLASS
+MM_GDBUS_MODEM_SIGNAL_PROXY_GET_CLASS
+MM_GDBUS_TYPE_MODEM_SIGNAL_PROXY
+MmGdbusModemSignalProxyPrivate
+mm_gdbus_modem_signal_proxy_get_type
+</SECTION>
+
+<SECTION>
+<FILE>MmGdbusModemSignalSkeleton</FILE>
+<TITLE>MmGdbusModemSignalSkeleton</TITLE>
+MmGdbusModemSignalSkeleton
+<SUBSECTION New>
+mm_gdbus_modem_signal_skeleton_new
+<SUBSECTION Standard>
+MmGdbusModemSignalSkeletonClass
+MM_GDBUS_IS_MODEM_SIGNAL_SKELETON
+MM_GDBUS_IS_MODEM_SIGNAL_SKELETON_CLASS
+MM_GDBUS_MODEM_SIGNAL_SKELETON
+MM_GDBUS_MODEM_SIGNAL_SKELETON_CLASS
+MM_GDBUS_MODEM_SIGNAL_SKELETON_GET_CLASS
+MM_GDBUS_TYPE_MODEM_SIGNAL_SKELETON
+MmGdbusModemSignalSkeletonPrivate
+mm_gdbus_modem_signal_skeleton_get_type
+</SECTION>
 
 <SECTION>
 <FILE>MmGdbusObject</FILE>
@@ -2112,6 +2263,8 @@ mm_gdbus_object_peek_modem_firmware
 mm_gdbus_object_get_modem_firmware
 mm_gdbus_object_peek_modem_simple
 mm_gdbus_object_get_modem_simple
+mm_gdbus_object_peek_modem_signal
+mm_gdbus_object_get_modem_signal
 <SUBSECTION Methods>
 <SUBSECTION Private>
 <SUBSECTION Standard>
@@ -2156,6 +2309,7 @@ mm_gdbus_object_skeleton_set_modem_location
 mm_gdbus_object_skeleton_set_modem_messaging
 mm_gdbus_object_skeleton_set_modem_simple
 mm_gdbus_object_skeleton_set_modem_time
+mm_gdbus_object_skeleton_set_modem_signal
 <SUBSECTION Standard>
 MmGdbusObjectSkeletonClass
 MM_GDBUS_IS_OBJECT_SKELETON

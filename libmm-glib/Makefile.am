@@ -27,6 +27,8 @@ libmm_glib_la_SOURCES = \
 	mm-modem-time.c \
 	mm-modem-firmware.h \
 	mm-modem-firmware.c \
+	mm-modem-signal.h \
+	mm-modem-signal.c \
 	mm-sim.h \
 	mm-sim.c \
 	mm-sms.h \
@@ -63,7 +65,9 @@ libmm_glib_la_SOURCES = \
 	mm-firmware-properties.h \
 	mm-firmware-properties.c \
 	mm-cdma-manual-activation-properties.h \
-	mm-cdma-manual-activation-properties.c
+	mm-cdma-manual-activation-properties.c \
+	mm-signal.h \
+	mm-signal.c
 
 libmm_glib_la_CPPFLAGS = \
 	-I$(srcdir) \
@@ -101,6 +105,7 @@ include_HEADERS = \
 	mm-modem-location.h \
 	mm-modem-time.h \
 	mm-modem-firmware.h \
+	mm-modem-signal.h \
 	mm-modem-simple.h \
 	mm-sim.h \
 	mm-sms.h \
@@ -118,7 +123,8 @@ include_HEADERS = \
 	mm-unlock-retries.h \
 	mm-network-timezone.h \
 	mm-firmware-properties.h \
-	mm-cdma-manual-activation-properties.h
+	mm-cdma-manual-activation-properties.h \
+	mm-signal.h
 
 CLEANFILES =
 
