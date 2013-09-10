@@ -36,6 +36,7 @@
 #include "mm-iface-modem-location.h"
 #include "mm-iface-modem-firmware.h"
 #include "mm-iface-modem-signal.h"
+#include "mm-iface-modem-oma.h"
 #include "mm-sim-qmi.h"
 #include "mm-bearer-qmi.h"
 #include "mm-sms-qmi.h"
@@ -46,6 +47,7 @@ static void iface_modem_3gpp_ussd_init (MMIfaceModem3gppUssd *iface);
 static void iface_modem_cdma_init (MMIfaceModemCdma *iface);
 static void iface_modem_messaging_init (MMIfaceModemMessaging *iface);
 static void iface_modem_location_init (MMIfaceModemLocation *iface);
+static void iface_modem_oma_init (MMIfaceModemOma *iface);
 static void iface_modem_firmware_init (MMIfaceModemFirmware *iface);
 static void iface_modem_signal_init (MMIfaceModemSignal *iface);
 
@@ -59,8 +61,9 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemQmi, mm_broadband_modem_qmi, MM_TYPE_BRO
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_CDMA, iface_modem_cdma_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_LOCATION, iface_modem_location_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_FIRMWARE, iface_modem_firmware_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init))
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_OMA, iface_modem_oma_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_FIRMWARE, iface_modem_firmware_init))
 
 struct _MMBroadbandModemQmiPrivate {
     /* Cached device IDs, retrieved by the modem interface when loading device
@@ -107,6 +110,11 @@ struct _MMBroadbandModemQmiPrivate {
     /* Location helpers */
     MMModemLocationSource enabled_sources;
     guint location_event_report_indication_id;
+
+    /* Oma helpers */
+    gboolean oma_unsolicited_events_enabled;
+    gboolean oma_unsolicited_events_setup;
+    guint oma_event_report_indication_id;
 
     /* Firmware helpers */
     GList *firmware_list;
@@ -7990,6 +7998,659 @@ enable_location_gathering (MMIfaceModemLocation *self,
 }
 
 /*****************************************************************************/
+/* Check support (OMA interface) */
+
+static gboolean
+oma_check_support_finish (MMIfaceModemOma *self,
+                          GAsyncResult *res,
+                          GError **error)
+{
+    /* no error expected here */
+    return g_simple_async_result_get_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res));
+}
+
+static void
+oma_check_support (MMIfaceModemOma *self,
+                   GAsyncReadyCallback callback,
+                   gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+    MMQmiPort *port;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        oma_check_support);
+
+    port = mm_base_modem_peek_port_qmi (MM_BASE_MODEM (self));
+    /* If we have support for the OMA client, OMA is supported */
+    if (!port || !mm_qmi_port_peek_client (port, QMI_SERVICE_OMA, MM_QMI_PORT_FLAG_DEFAULT)) {
+        mm_dbg ("OMA capabilities not supported");
+        g_simple_async_result_set_op_res_gboolean (result, FALSE);
+    } else {
+        mm_dbg ("OMA capabilities supported");
+        g_simple_async_result_set_op_res_gboolean (result, TRUE);
+    }
+
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
+}
+
+/*****************************************************************************/
+/* Load features (OMA interface) */
+
+static MMOmaFeature
+oma_load_features_finish (MMIfaceModemOma *self,
+                          GAsyncResult *res,
+                          GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return MM_OMA_FEATURE_NONE;
+
+    return (MMOmaFeature) GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static void
+oma_get_feature_setting_ready (QmiClientOma *client,
+                               GAsyncResult *res,
+                               GSimpleAsyncResult *simple)
+{
+    QmiMessageOmaGetFeatureSettingOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_oma_get_feature_setting_finish (client, res, &error);
+    if (!output || !qmi_message_oma_get_feature_setting_output_get_result (output, &error))
+        g_simple_async_result_take_error (simple, error);
+    else {
+        MMOmaFeature features = MM_OMA_FEATURE_NONE;
+        gboolean enabled;
+
+        if (qmi_message_oma_get_feature_setting_output_get_device_provisioning_service_update_config (
+                output,
+                &enabled,
+                NULL) &&
+            enabled)
+            features |= MM_OMA_FEATURE_DEVICE_PROVISIONING;
+
+        if (qmi_message_oma_get_feature_setting_output_get_prl_update_service_config (
+                output,
+                &enabled,
+                NULL) &&
+            enabled)
+            features |= MM_OMA_FEATURE_PRL_UPDATE;
+
+        if (qmi_message_oma_get_feature_setting_output_get_hfa_feature_config (
+                output,
+                &enabled,
+                NULL) &&
+            enabled)
+            features |= MM_OMA_FEATURE_HANDS_FREE_ACTIVATION;
+
+        g_simple_async_result_set_op_res_gpointer (simple, GUINT_TO_POINTER ((guint)features), NULL);
+    }
+
+    if (output)
+        qmi_message_oma_get_feature_setting_output_unref (output);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+oma_load_features (MMIfaceModemOma *self,
+                   GAsyncReadyCallback callback,
+                   gpointer user_data)
+{
+    QmiClient *client = NULL;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_OMA, &client,
+                            callback, user_data))
+        return;
+
+    qmi_client_oma_get_feature_setting (
+        QMI_CLIENT_OMA (client),
+        NULL,
+        5,
+        NULL,
+        (GAsyncReadyCallback)oma_get_feature_setting_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                   callback,
+                                   user_data,
+                                   oma_load_features));
+}
+
+/*****************************************************************************/
+/* Setup (OMA interface) */
+
+static gboolean
+oma_setup_finish (MMIfaceModemOma *self,
+                  GAsyncResult *res,
+                  GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+oma_set_feature_setting_ready (QmiClientOma *client,
+                               GAsyncResult *res,
+                               GSimpleAsyncResult *simple)
+{
+    QmiMessageOmaSetFeatureSettingOutput *output;
+    GError *error = NULL;
+
+    output = qmi_client_oma_set_feature_setting_finish (client, res, &error);
+    if (!output || !qmi_message_oma_set_feature_setting_output_get_result (output, &error))
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
+
+    if (output)
+        qmi_message_oma_set_feature_setting_output_unref (output);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+oma_setup (MMIfaceModemOma *self,
+           MMOmaFeature features,
+           GAsyncReadyCallback callback,
+           gpointer user_data)
+{
+    QmiClient *client = NULL;
+    QmiMessageOmaSetFeatureSettingInput *input;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_OMA, &client,
+                            callback, user_data))
+        return;
+
+    input = qmi_message_oma_set_feature_setting_input_new ();
+    qmi_message_oma_set_feature_setting_input_set_device_provisioning_service_update_config (
+        input,
+        !!(features & MM_OMA_FEATURE_DEVICE_PROVISIONING),
+        NULL);
+    qmi_message_oma_set_feature_setting_input_set_prl_update_service_config (
+        input,
+        !!(features & MM_OMA_FEATURE_PRL_UPDATE),
+        NULL);
+    qmi_message_oma_set_feature_setting_input_set_hfa_feature_config (
+        input,
+        !!(features & MM_OMA_FEATURE_HANDS_FREE_ACTIVATION),
+        NULL);
+
+    qmi_client_oma_set_feature_setting (
+        QMI_CLIENT_OMA (client),
+        input,
+        5,
+        NULL,
+        (GAsyncReadyCallback)oma_set_feature_setting_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                   callback,
+                                   user_data,
+                                   oma_setup));
+
+    qmi_message_oma_set_feature_setting_input_unref (input);
+}
+
+/*****************************************************************************/
+/* Start client initiated session (OMA interface) */
+
+static gboolean
+oma_start_client_initiated_session_finish (MMIfaceModemOma *self,
+                                           GAsyncResult *res,
+                                           GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+oma_start_session_ready (QmiClientOma *client,
+                         GAsyncResult *res,
+                         GSimpleAsyncResult *simple)
+{
+    QmiMessageOmaStartSessionOutput *output;
+    GError *error = NULL;
+
+    output = qmi_client_oma_start_session_finish (client, res, &error);
+    if (!output || !qmi_message_oma_start_session_output_get_result (output, &error))
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
+
+    if (output)
+        qmi_message_oma_start_session_output_unref (output);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+oma_start_client_initiated_session (MMIfaceModemOma *self,
+                                    MMOmaSessionType session_type,
+                                    GAsyncReadyCallback callback,
+                                    gpointer user_data)
+{
+    QmiClient *client = NULL;
+    QmiMessageOmaStartSessionInput *input;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_OMA, &client,
+                            callback, user_data))
+        return;
+
+    /* It's already checked in mm-iface-modem-oma; so just assert if this is not ok */
+    g_assert (session_type == MM_OMA_SESSION_TYPE_CLIENT_INITIATED_DEVICE_CONFIGURE ||
+              session_type == MM_OMA_SESSION_TYPE_CLIENT_INITIATED_PRL_UPDATE ||
+              session_type == MM_OMA_SESSION_TYPE_CLIENT_INITIATED_HANDS_FREE_ACTIVATION);
+
+    input = qmi_message_oma_start_session_input_new ();
+    qmi_message_oma_start_session_input_set_session_type (
+        input,
+        mm_oma_session_type_to_qmi_oma_session_type (session_type),
+        NULL);
+
+    qmi_client_oma_start_session (
+        QMI_CLIENT_OMA (client),
+        input,
+        5,
+        NULL,
+        (GAsyncReadyCallback)oma_start_session_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                   callback,
+                                   user_data,
+                                   oma_start_client_initiated_session));
+
+    qmi_message_oma_start_session_input_unref (input);
+}
+
+/*****************************************************************************/
+/* Accept network initiated session (OMA interface) */
+
+static gboolean
+oma_accept_network_initiated_session_finish (MMIfaceModemOma *self,
+                                             GAsyncResult *res,
+                                             GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+oma_send_selection_ready (QmiClientOma *client,
+                          GAsyncResult *res,
+                          GSimpleAsyncResult *simple)
+{
+    QmiMessageOmaSendSelectionOutput *output;
+    GError *error = NULL;
+
+    output = qmi_client_oma_send_selection_finish (client, res, &error);
+    if (!output || !qmi_message_oma_send_selection_output_get_result (output, &error))
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
+
+    if (output)
+        qmi_message_oma_send_selection_output_unref (output);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+oma_accept_network_initiated_session (MMIfaceModemOma *self,
+                                      guint session_id,
+                                      gboolean accept,
+                                      GAsyncReadyCallback callback,
+                                      gpointer user_data)
+{
+    QmiClient *client = NULL;
+    QmiMessageOmaSendSelectionInput *input;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_OMA, &client,
+                            callback, user_data))
+        return;
+
+    input = qmi_message_oma_send_selection_input_new ();
+    qmi_message_oma_send_selection_input_set_network_initiated_alert_selection (
+        input,
+        accept,
+        (guint16)session_id,
+        NULL);
+
+    qmi_client_oma_send_selection (
+        QMI_CLIENT_OMA (client),
+        input,
+        5,
+        NULL,
+        (GAsyncReadyCallback)oma_send_selection_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                   callback,
+                                   user_data,
+                                   oma_accept_network_initiated_session));
+
+    qmi_message_oma_send_selection_input_unref (input);
+}
+
+/*****************************************************************************/
+/* Cancel session (OMA interface) */
+
+static gboolean
+oma_cancel_session_finish (MMIfaceModemOma *self,
+                           GAsyncResult *res,
+                           GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+oma_cancel_session_ready (QmiClientOma *client,
+                          GAsyncResult *res,
+                          GSimpleAsyncResult *simple)
+{
+    QmiMessageOmaCancelSessionOutput *output;
+    GError *error = NULL;
+
+    output = qmi_client_oma_cancel_session_finish (client, res, &error);
+    if (!output || !qmi_message_oma_cancel_session_output_get_result (output, &error))
+        g_simple_async_result_take_error (simple, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
+
+    if (output)
+        qmi_message_oma_cancel_session_output_unref (output);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+oma_cancel_session (MMIfaceModemOma *self,
+                    GAsyncReadyCallback callback,
+                    gpointer user_data)
+{
+    QmiClient *client = NULL;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_OMA, &client,
+                            callback, user_data))
+        return;
+
+    qmi_client_oma_cancel_session (
+        QMI_CLIENT_OMA (client),
+        NULL,
+        5,
+        NULL,
+        (GAsyncReadyCallback)oma_cancel_session_ready,
+        g_simple_async_result_new (G_OBJECT (self),
+                                   callback,
+                                   user_data,
+                                   oma_cancel_session));
+}
+
+/*****************************************************************************/
+/* Setup/Cleanup unsolicited event handlers (OMA interface) */
+
+static void
+oma_event_report_indication_cb (QmiClientNas *client,
+                                QmiIndicationOmaEventReportOutput *output,
+                                MMBroadbandModemQmi *self)
+{
+    QmiOmaSessionState qmi_session_state;
+    QmiOmaSessionType network_initiated_alert_session_type;
+    guint16 network_initiated_alert_session_id;
+
+    /* Update session state? */
+    if (qmi_indication_oma_event_report_output_get_session_state (
+            output,
+            &qmi_session_state,
+            NULL)) {
+        QmiOmaSessionFailedReason qmi_oma_session_failed_reason = QMI_OMA_SESSION_FAILED_REASON_UNKNOWN;
+
+        if (qmi_session_state == QMI_OMA_SESSION_STATE_FAILED)
+            qmi_indication_oma_event_report_output_get_session_fail_reason (
+                output,
+                &qmi_oma_session_failed_reason,
+                NULL);
+
+        mm_iface_modem_oma_update_session_state (
+            MM_IFACE_MODEM_OMA (self),
+            mm_oma_session_state_from_qmi_oma_session_state (qmi_session_state),
+            mm_oma_session_state_failed_reason_from_qmi_oma_session_failed_reason (qmi_oma_session_failed_reason));
+    }
+
+    /* New network initiated session? */
+    if (qmi_indication_oma_event_report_output_get_network_initiated_alert (
+            output,
+            &network_initiated_alert_session_type,
+            &network_initiated_alert_session_id,
+            NULL)) {
+        MMOmaSessionType session_type;
+
+        session_type = mm_oma_session_type_from_qmi_oma_session_type (network_initiated_alert_session_type);
+        if (session_type == MM_OMA_SESSION_TYPE_UNKNOWN)
+            g_warning ("Unknown QMI OMA session type '%u'", network_initiated_alert_session_type);
+        else
+            mm_iface_modem_oma_add_pending_network_initiated_session (
+                MM_IFACE_MODEM_OMA (self),
+                session_type,
+                (guint)network_initiated_alert_session_id);
+    }
+}
+
+static gboolean
+common_oma_setup_cleanup_unsolicited_events_finish (MMIfaceModemOma *_self,
+                                                    GAsyncResult *res,
+                                                    GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+common_setup_cleanup_oma_unsolicited_events (MMBroadbandModemQmi *self,
+                                             gboolean enable,
+                                             GAsyncReadyCallback callback,
+                                             gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+    QmiClient *client = NULL;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_OMA, &client,
+                            callback, user_data))
+        return;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        common_setup_cleanup_oma_unsolicited_events);
+
+    if (enable == self->priv->oma_unsolicited_events_setup) {
+        mm_dbg ("OMA unsolicited events already %s; skipping",
+                enable ? "setup" : "cleanup");
+        g_simple_async_result_set_op_res_gboolean (result, TRUE);
+        g_simple_async_result_complete_in_idle (result);
+        g_object_unref (result);
+        return;
+    }
+
+    /* Store new state */
+    self->priv->oma_unsolicited_events_setup = enable;
+
+    /* Connect/Disconnect "Event Report" indications */
+    if (enable) {
+        g_assert (self->priv->oma_event_report_indication_id == 0);
+        self->priv->oma_event_report_indication_id =
+            g_signal_connect (client,
+                              "event-report",
+                              G_CALLBACK (oma_event_report_indication_cb),
+                              self);
+    } else {
+        g_assert (self->priv->oma_event_report_indication_id != 0);
+        g_signal_handler_disconnect (client, self->priv->oma_event_report_indication_id);
+        self->priv->oma_event_report_indication_id = 0;
+    }
+
+    g_simple_async_result_set_op_res_gboolean (result, TRUE);
+    g_simple_async_result_complete_in_idle (result);
+    g_object_unref (result);
+}
+
+static void
+oma_cleanup_unsolicited_events (MMIfaceModemOma *self,
+                                GAsyncReadyCallback callback,
+                                gpointer user_data)
+{
+    common_setup_cleanup_oma_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
+                                                 FALSE,
+                                                 callback,
+                                                 user_data);
+}
+
+static void
+oma_setup_unsolicited_events (MMIfaceModemOma *self,
+                              GAsyncReadyCallback callback,
+                              gpointer user_data)
+{
+    common_setup_cleanup_oma_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
+                                                 TRUE,
+                                                 callback,
+                                                 user_data);
+}
+
+/*****************************************************************************/
+/* Enable/Disable unsolicited events (OMA interface) */
+
+typedef struct {
+    MMBroadbandModemQmi *self;
+    GSimpleAsyncResult *result;
+    QmiClientOma *client;
+    gboolean enable;
+} EnableOmaUnsolicitedEventsContext;
+
+static void
+enable_oma_unsolicited_events_context_complete_and_free (EnableOmaUnsolicitedEventsContext *ctx)
+{
+    g_simple_async_result_complete (ctx->result);
+    g_object_unref (ctx->result);
+    g_object_unref (ctx->client);
+    g_object_unref (ctx->self);
+    g_slice_free (EnableOmaUnsolicitedEventsContext, ctx);
+}
+
+static gboolean
+common_oma_enable_disable_unsolicited_events_finish (MMIfaceModemOma *self,
+                                                     GAsyncResult *res,
+                                                     GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+ser_oma_indicator_ready (QmiClientOma *client,
+                         GAsyncResult *res,
+                         EnableOmaUnsolicitedEventsContext *ctx)
+{
+    QmiMessageOmaSetEventReportOutput *output = NULL;
+    GError *error = NULL;
+
+    output = qmi_client_oma_set_event_report_finish (client, res, &error);
+    if (!output) {
+        mm_dbg ("QMI operation failed: '%s'", error->message);
+        g_error_free (error);
+    } else if (!qmi_message_oma_set_event_report_output_get_result (output, &error)) {
+        mm_dbg ("Couldn't set event report: '%s'", error->message);
+        g_error_free (error);
+    }
+
+    if (output)
+        qmi_message_oma_set_event_report_output_unref (output);
+
+    /* Just ignore errors for now */
+    ctx->self->priv->oma_unsolicited_events_enabled = ctx->enable;
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    enable_oma_unsolicited_events_context_complete_and_free (ctx);
+}
+
+static void
+common_enable_disable_oma_unsolicited_events (MMBroadbandModemQmi *self,
+                                              gboolean enable,
+                                              GAsyncReadyCallback callback,
+                                              gpointer user_data)
+{
+    EnableOmaUnsolicitedEventsContext *ctx;
+    GSimpleAsyncResult *result;
+    QmiClient *client = NULL;
+    QmiMessageOmaSetEventReportInput *input;
+
+    if (!ensure_qmi_client (MM_BROADBAND_MODEM_QMI (self),
+                            QMI_SERVICE_OMA, &client,
+                            callback, user_data))
+        return;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        common_enable_disable_oma_unsolicited_events);
+
+    if (enable == self->priv->oma_unsolicited_events_enabled) {
+        mm_dbg ("OMA unsolicited events already %s; skipping",
+                enable ? "enabled" : "disabled");
+        g_simple_async_result_set_op_res_gboolean (result, TRUE);
+        g_simple_async_result_complete_in_idle (result);
+        g_object_unref (result);
+        return;
+    }
+
+    ctx = g_slice_new0 (EnableOmaUnsolicitedEventsContext);
+    ctx->self = g_object_ref (self);
+    ctx->client = g_object_ref (client);
+    ctx->enable = enable;
+    ctx->result = result;
+
+    input = qmi_message_oma_set_event_report_input_new ();
+    qmi_message_oma_set_event_report_input_set_session_state_reporting (
+        input,
+        ctx->enable,
+        NULL);
+    qmi_message_oma_set_event_report_input_set_network_initiated_alert_reporting (
+        input,
+        ctx->enable,
+        NULL);
+    qmi_client_oma_set_event_report (
+        ctx->client,
+        input,
+        5,
+        NULL,
+        (GAsyncReadyCallback)ser_oma_indicator_ready,
+        ctx);
+    qmi_message_oma_set_event_report_input_unref (input);
+}
+
+static void
+oma_disable_unsolicited_events (MMIfaceModemOma *self,
+                                GAsyncReadyCallback callback,
+                                gpointer user_data)
+{
+    common_enable_disable_oma_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
+                                                  FALSE,
+                                                  callback,
+                                                  user_data);
+}
+
+static void
+oma_enable_unsolicited_events (MMIfaceModemOma *self,
+                               GAsyncReadyCallback callback,
+                               gpointer user_data)
+{
+    common_enable_disable_oma_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
+                                                  TRUE,
+                                                  callback,
+                                                  user_data);
+}
+
+/*****************************************************************************/
 /* Check firmware support (Firmware interface) */
 
 typedef struct {
@@ -9324,7 +9985,8 @@ initialization_started (MMBroadbandModem *self,
     ctx->services[1] = QMI_SERVICE_NAS;
     ctx->services[2] = QMI_SERVICE_WMS;
     ctx->services[3] = QMI_SERVICE_PDS;
-    ctx->services[4] = QMI_SERVICE_UNKNOWN;
+    ctx->services[4] = QMI_SERVICE_OMA;
+    ctx->services[5] = QMI_SERVICE_UNKNOWN;
 
     /* Now open our QMI port */
     mm_qmi_port_open (ctx->qmi,
@@ -9601,6 +10263,31 @@ iface_modem_signal_init (MMIfaceModemSignal *iface)
     iface->check_support_finish = signal_check_support_finish;
     iface->load_values = signal_load_values;
     iface->load_values_finish = signal_load_values_finish;
+}
+
+static void
+iface_modem_oma_init (MMIfaceModemOma *iface)
+{
+    iface->check_support = oma_check_support;
+    iface->check_support_finish = oma_check_support_finish;
+    iface->load_features = oma_load_features;
+    iface->load_features_finish = oma_load_features_finish;
+    iface->setup = oma_setup;
+    iface->setup_finish = oma_setup_finish;
+    iface->start_client_initiated_session = oma_start_client_initiated_session;
+    iface->start_client_initiated_session_finish = oma_start_client_initiated_session_finish;
+    iface->accept_network_initiated_session = oma_accept_network_initiated_session;
+    iface->accept_network_initiated_session_finish = oma_accept_network_initiated_session_finish;
+    iface->cancel_session = oma_cancel_session;
+    iface->cancel_session_finish = oma_cancel_session_finish;
+    iface->setup_unsolicited_events = oma_setup_unsolicited_events;
+    iface->setup_unsolicited_events_finish = common_oma_setup_cleanup_unsolicited_events_finish;
+    iface->cleanup_unsolicited_events = oma_cleanup_unsolicited_events;
+    iface->cleanup_unsolicited_events_finish = common_oma_setup_cleanup_unsolicited_events_finish;
+    iface->enable_unsolicited_events = oma_enable_unsolicited_events;
+    iface->enable_unsolicited_events_finish = common_oma_enable_disable_unsolicited_events_finish;
+    iface->disable_unsolicited_events = oma_disable_unsolicited_events;
+    iface->disable_unsolicited_events_finish = common_oma_enable_disable_unsolicited_events_finish;
 }
 
 static void

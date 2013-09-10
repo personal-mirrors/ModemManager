@@ -29,9 +29,9 @@
 #include "mm-modem-helpers.h"
 #include "mm-base-modem-at.h"
 
-#include "mm-sim-sierra.h"
+#include "mm-sim-huawei.h"
 
-G_DEFINE_TYPE (MMSimSierra, mm_sim_sierra, MM_TYPE_SIM);
+G_DEFINE_TYPE (MMSimHuawei, mm_sim_huawei, MM_TYPE_SIM);
 
 /*****************************************************************************/
 /* SIM identifier loading */
@@ -52,45 +52,57 @@ load_sim_identifier_finish (MMSim *self,
 }
 
 static void
+parent_load_sim_identifier_ready (MMSimHuawei *self,
+                                  GAsyncResult *res,
+                                  GSimpleAsyncResult *simple)
+{
+    GError *error = NULL;
+    gchar *simid;
+
+    simid = MM_SIM_CLASS (mm_sim_huawei_parent_class)->load_sim_identifier_finish (MM_SIM (self), res, &error);
+    if (simid)
+        g_simple_async_result_set_op_res_gpointer (simple, simid, g_free);
+    else
+        g_simple_async_result_take_error (simple, error);
+
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
 iccid_read_ready (MMBaseModem *modem,
                   GAsyncResult *res,
                   GSimpleAsyncResult *simple)
 {
-    GError *error = NULL;
+    MMSim *self;
     const gchar *response;
     const gchar *p;
     char *parsed;
-    GError *local = NULL;
 
-    response = mm_base_modem_at_command_finish (modem, res, &error);
-    if (!response) {
-        g_simple_async_result_take_error (simple, error);
-        g_simple_async_result_complete (simple);
-        g_object_unref (simple);
-        return;
-    }
+    response = mm_base_modem_at_command_finish (modem, res, NULL);
+    if (!response)
+        goto error;
 
-    p = mm_strip_tag (response, "!ICCID:");
-    if (!p) {
-        g_simple_async_result_set_error (simple,
-                                         MM_CORE_ERROR,
-                                         MM_CORE_ERROR_FAILED,
-                                         "Failed to parse !ICCID response: '%s'",
-                                         response);
-        g_simple_async_result_complete (simple);
-        g_object_unref (simple);
-        return;
-    }
+    p = mm_strip_tag (response, "^ICCID:");
+    if (!p)
+        goto error;
 
-    /* Sierra !ICCID response is already character swapped */
-    parsed = mm_3gpp_parse_iccid (p, FALSE, &local);
-    if (parsed)
+    /* Huawei ^ICCID response must be character swapped */
+    parsed = mm_3gpp_parse_iccid (p, TRUE, NULL);
+    if (parsed) {
         g_simple_async_result_set_op_res_gpointer (simple, parsed, g_free);
-    else
-        g_simple_async_result_take_error (simple, local);
+        g_simple_async_result_complete (simple);
+        g_object_unref (simple);
+        return;
+    }
 
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+error:
+    /* Chain up to parent method; older devices don't support ^ICCID */
+    self = MM_SIM (g_async_result_get_source_object (G_ASYNC_RESULT (simple)));
+    MM_SIM_CLASS (mm_sim_huawei_parent_class)->load_sim_identifier (self,
+                                                                    (GAsyncReadyCallback) parent_load_sim_identifier_ready,
+                                                                    simple);
+    g_object_unref (self);
 }
 
 static void
@@ -104,11 +116,11 @@ load_sim_identifier (MMSim *self,
                   MM_SIM_MODEM, &modem,
                   NULL);
 
-    mm_dbg ("loading (Sierra) SIM identifier...");
+    mm_dbg ("loading (Huawei) SIM identifier...");
     mm_base_modem_at_command (
         MM_BASE_MODEM (modem),
-        "!ICCID?",
-        3,
+        "^ICCID?",
+        5,
         FALSE,
         (GAsyncReadyCallback)iccid_read_ready,
         g_simple_async_result_new (G_OBJECT (self),
@@ -121,7 +133,7 @@ load_sim_identifier (MMSim *self,
 /*****************************************************************************/
 
 MMSim *
-mm_sim_sierra_new_finish (GAsyncResult  *res,
+mm_sim_huawei_new_finish (GAsyncResult  *res,
                           GError       **error)
 {
     GObject *source;
@@ -141,12 +153,12 @@ mm_sim_sierra_new_finish (GAsyncResult  *res,
 }
 
 void
-mm_sim_sierra_new (MMBaseModem *modem,
+mm_sim_huawei_new (MMBaseModem *modem,
                    GCancellable *cancellable,
                    GAsyncReadyCallback callback,
                    gpointer user_data)
 {
-    g_async_initable_new_async (MM_TYPE_SIM_SIERRA,
+    g_async_initable_new_async (MM_TYPE_SIM_HUAWEI,
                                 G_PRIORITY_DEFAULT,
                                 cancellable,
                                 callback,
@@ -156,12 +168,12 @@ mm_sim_sierra_new (MMBaseModem *modem,
 }
 
 static void
-mm_sim_sierra_init (MMSimSierra *self)
+mm_sim_huawei_init (MMSimHuawei *self)
 {
 }
 
 static void
-mm_sim_sierra_class_init (MMSimSierraClass *klass)
+mm_sim_huawei_class_init (MMSimHuaweiClass *klass)
 {
     MMSimClass *sim_class = MM_SIM_CLASS (klass);
 
