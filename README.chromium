@@ -1,7 +1,7 @@
 DESCRIPTION="Broadband modem support daemon (new API)"
 HOMEPAGE="http://projects.gnome.org/NetworkManager/"
 UPSTREAM_REPO="git://anongit.freedesktop.org/ModemManager/ModemManager"
-LOCAL_GIT_REPO="http://git.chromium.org/chromiumos/third_party/modemmanager-next.git"
+LOCAL_GIT_REPO="https://chromium.googlesource.com/chromiumos/third_party/modemmanager-next.git"
 UPSTREAM_BUGSDB="https://bugzilla.gnome.org/enter_bug.cgi?product=NetworkManager"
 LOCAL_BUGSDB="http://crosbug.com"
 LICENSE="GPLv2"
