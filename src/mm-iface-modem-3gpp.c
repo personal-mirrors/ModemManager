@@ -968,7 +968,7 @@ mm_iface_modem_3gpp_reload_current_registration_info (MMIfaceModem3gpp *self,
     ctx->subscription_state_loaded = !(MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_subscription_state &&
                                        MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_subscription_state_finish);
     if (ctx->subscription_state_loaded)
-      mm_gdbus_modem3gpp_set_subscription_state (ctx->skeleton, MM_MODEM_3GPP_SUBSCRIPTION_STATE_UNKNOWN);
+        mm_gdbus_modem3gpp_set_subscription_state (ctx->skeleton, MM_MODEM_3GPP_SUBSCRIPTION_STATE_UNKNOWN);
 
     reload_current_registration_info_context_step (ctx);
 }

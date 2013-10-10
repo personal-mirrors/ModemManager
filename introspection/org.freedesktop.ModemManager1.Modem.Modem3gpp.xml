@@ -139,12 +139,9 @@
     <!--
         SubscriptionState:
 
-        Indicates the activation status of the SIM and whether there is any
-        data remaining.  Possible values are:
-            0 - Unknown
-            1 - Account is unprovisioned
-            2 - Account is provisioned with data available
-            3 - Account is provisioned but data exhausted
+        A <link linkend="MMModem3gppSubscriptionState">MMModem3gppSubscriptionState</link>
+        value representing the subscription status of the account and whether there
+        is any data remaining, given as an unsigned integer (signature <literal>"u"</literal>).
     -->
     <property name="SubscriptionState" type="u" access="read" />
 

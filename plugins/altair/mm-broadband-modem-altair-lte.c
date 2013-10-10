@@ -471,46 +471,49 @@ reset (MMIfaceModem *self,
 /*****************************************************************************/
 /* Run registration checks (3GPP interface) */
 
-typedef struct {
-    MMBroadbandModemAltairLte *self;
-    GSimpleAsyncResult *result;
-} RunRegistrationChecksContext;
-
-static void
-run_registration_checks_context_complete_and_free (RunRegistrationChecksContext *ctx)
+static gboolean
+modem_3gpp_run_registration_checks_finish (MMIfaceModem3gpp *self,
+                                           GAsyncResult *res,
+                                           GError **error)
 {
-    g_simple_async_result_complete_in_idle (ctx->result);
-    g_object_unref (ctx->result);
-    g_object_unref (ctx->self);
-    g_free (ctx);
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res),
+                                                   error);
 }
 
 static void
 run_registration_checks_subscription_state_ready (MMIfaceModem3gpp *self,
                                                   GAsyncResult *res,
-                                                  RunRegistrationChecksContext *ctx)
+                                                  GSimpleAsyncResult *operation_result)
 {
     GError *error = NULL;
     const gchar *at_response;
     gchar *ceer_response;
 
+    /* If the AT+CEER command fails, or we fail to obtain a valid result, we
+     * ignore the error. This allows the registration attempt to continue.
+     * So, the async response from this function is *always* True.
+     */
+    g_simple_async_result_set_op_res_gboolean (operation_result, TRUE);
+
     at_response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
     if (!at_response) {
         g_assert (error);
-        g_simple_async_result_take_error (ctx->result, error);
-        run_registration_checks_context_complete_and_free (ctx);
+        mm_warn ("AT+CEER failed: %s", error->message);
+        g_error_free (error);
+        g_simple_async_result_complete (operation_result);
+        g_object_unref (operation_result);
         return;
     }
 
     ceer_response = mm_altair_parse_ceer_response (at_response, &error);
     if (!ceer_response) {
         g_assert (error);
-        g_simple_async_result_take_error (ctx->result, error);
-        run_registration_checks_context_complete_and_free (ctx);
+        mm_warn ("Failed to parse AT+CEER response: %s", error->message);
+        g_error_free (error);
+        g_simple_async_result_complete (operation_result);
+        g_object_unref (operation_result);
         return;
     }
-
-    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
 
     if (g_strcmp0 ("EPS_AND_NON_EPS_SERVICES_NOT_ALLOWED", ceer_response) == 0) {
         mm_dbg ("Registration failed due to unprovisioned SIM.");
@@ -519,14 +522,15 @@ run_registration_checks_subscription_state_ready (MMIfaceModem3gpp *self,
         mm_dbg ("Failed to find a better reason for registration failure.");
     }
 
-    run_registration_checks_context_complete_and_free (ctx);
+    g_simple_async_result_complete (operation_result);
+    g_object_unref (operation_result);
     g_free (ceer_response);
 }
 
 static void
 run_registration_checks_ready (MMIfaceModem3gpp *self,
                                GAsyncResult *res,
-                               RunRegistrationChecksContext *ctx)
+                               GSimpleAsyncResult *operation_result)
 {
     GError *error = NULL;
     gboolean success;
@@ -536,8 +540,9 @@ run_registration_checks_ready (MMIfaceModem3gpp *self,
     success = iface_modem_3gpp_parent->run_registration_checks_finish (self, res, &error);
     if (!success) {
         g_assert (error);
-        g_simple_async_result_take_error (ctx->result, error);
-        run_registration_checks_context_complete_and_free (ctx);
+        g_simple_async_result_take_error (operation_result, error);
+        g_simple_async_result_complete (operation_result);
+        g_object_unref (operation_result);
         return;
     }
 
@@ -547,8 +552,11 @@ run_registration_checks_ready (MMIfaceModem3gpp *self,
 
     if (registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
         registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
-        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        run_registration_checks_context_complete_and_free (ctx);
+        mm_dbg ("Registration succeeded: Marking the SIM as provisioned.");
+        mm_iface_modem_3gpp_update_subscription_state (self, MM_MODEM_3GPP_SUBSCRIPTION_STATE_PROVISIONED);
+        g_simple_async_result_set_op_res_gboolean (operation_result, TRUE);
+        g_simple_async_result_complete (operation_result);
+        g_object_unref (operation_result);
         return;
     }
 
@@ -558,7 +566,7 @@ run_registration_checks_ready (MMIfaceModem3gpp *self,
                               6,
                               FALSE,
                               (GAsyncReadyCallback) run_registration_checks_subscription_state_ready,
-                              ctx);
+                              operation_result);
 }
 
 static void
@@ -569,14 +577,12 @@ modem_3gpp_run_registration_checks (MMIfaceModem3gpp *self,
                                     GAsyncReadyCallback callback,
                                     gpointer user_data)
 {
-    RunRegistrationChecksContext *ctx;
+    GSimpleAsyncResult *operation_result;
 
-    ctx = g_new0 (RunRegistrationChecksContext, 1);
-    ctx->self = g_object_ref (MM_BROADBAND_MODEM_ALTAIR_LTE (self));
-    ctx->result = g_simple_async_result_new (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             modem_3gpp_run_registration_checks);
+    operation_result = g_simple_async_result_new (G_OBJECT (self),
+                                                  callback,
+                                                  user_data,
+                                                  modem_3gpp_run_registration_checks);
 
     g_assert (iface_modem_3gpp_parent->run_registration_checks);
     iface_modem_3gpp_parent->run_registration_checks (self,
@@ -584,15 +590,7 @@ modem_3gpp_run_registration_checks (MMIfaceModem3gpp *self,
                                                       ps_supported,
                                                       eps_supported,
                                                       (GAsyncReadyCallback) run_registration_checks_ready,
-                                                      ctx);
-}
-
-static gboolean
-modem_3gpp_run_registration_checks_finish (MMIfaceModem3gpp *self,
-                                           GAsyncResult *res,
-                                           GError **error)
-{
-    return !!mm_base_modem_at_command_full_finish (MM_BASE_MODEM (self), res, error);
+                                                      operation_result);
 }
 
 /*****************************************************************************/

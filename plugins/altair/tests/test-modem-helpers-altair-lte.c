@@ -50,8 +50,8 @@ test_ceer (void)
 
         result = mm_altair_parse_ceer_response (ceer_tests[i].str, &error);
         if (ceer_tests[i].result) {
-            g_assert (g_strcmp0 (ceer_tests[i].result, result) == 0);
-            g_assert (error == NULL);
+            g_assert_cmpstr (ceer_tests[i].result, ==, result);
+            g_assert_no_error (error);
             g_free (result);
         }
         else {
