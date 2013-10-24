@@ -1743,19 +1743,16 @@ signal_quality_csq_ready (MMBroadbandModem *self,
 
         result_str = mm_strip_tag (result_str, "+CSQ:");
         if (sscanf (result_str, "%d, %d", &quality, &ber)) {
-            /* 99 means unknown */
             if (quality == 99) {
-                g_simple_async_result_take_error (
-                    ctx->result,
-                    mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_NO_NETWORK));
+                /* 99 means unknown, no service, etc */
+                quality = 0;
             } else {
                 /* Normalize the quality */
                 quality = CLAMP (quality, 0, 31) * 100 / 31;
-                g_simple_async_result_set_op_res_gpointer (ctx->result,
-                                                           GUINT_TO_POINTER (quality),
-                                                           NULL);
             }
-
+            g_simple_async_result_set_op_res_gpointer (ctx->result,
+                                                       GUINT_TO_POINTER (quality),
+                                                       NULL);
             signal_quality_context_complete_and_free (ctx);
             return;
         }
@@ -8075,7 +8072,7 @@ disable_finish (MMBaseModem *self,
                                          result,                        \
                                          &error)) {                     \
             if (FATAL_ERRORS) {                                         \
-                g_simple_async_result_take_error (G_SIMPLE_ASYNC_RESULT (ctx->result), error); \
+                g_simple_async_result_take_error (ctx->result, error);  \
                 disabling_context_complete_and_free (ctx);              \
                 return;                                                 \
             }                                                           \
@@ -8109,7 +8106,7 @@ bearer_list_disconnect_all_bearers_ready (MMBearerList *list,
     GError *error = NULL;
 
     if (!mm_bearer_list_disconnect_all_bearers_finish (list, res, &error)) {
-        g_simple_async_result_take_error (G_SIMPLE_ASYNC_RESULT (ctx->result), error);
+        g_simple_async_result_take_error (ctx->result, error);
         disabling_context_complete_and_free (ctx);
         return;
     }
@@ -8128,7 +8125,7 @@ disabling_wait_for_final_state_ready (MMIfaceModem *self,
 
     ctx->previous_state = mm_iface_modem_wait_for_final_state_finish (self, res, &error);
     if (error) {
-        g_simple_async_result_take_error (G_SIMPLE_ASYNC_RESULT (ctx->result), error);
+        g_simple_async_result_take_error (ctx->result, error);
         disabling_context_complete_and_free (ctx);
         return;
     }
@@ -8313,7 +8310,7 @@ disabling_step (DisablingContext *ctx)
     case DISABLING_STEP_LAST:
         ctx->disabled = TRUE;
         /* All disabled without errors! */
-        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (ctx->result), TRUE);
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
         disabling_context_complete_and_free (ctx);
         return;
     }
@@ -8430,7 +8427,7 @@ enable_finish (MMBaseModem *self,
                                         result,                         \
                                         &error)) {                      \
             if (FATAL_ERRORS) {                                         \
-                g_simple_async_result_take_error (G_SIMPLE_ASYNC_RESULT (ctx->result), error); \
+                g_simple_async_result_take_error (ctx->result, error);  \
                 enabling_context_complete_and_free (ctx);               \
                 return;                                                 \
             }                                                           \
@@ -8463,7 +8460,7 @@ enabling_started_ready (MMBroadbandModem *self,
     GError *error = NULL;
 
     if (!MM_BROADBAND_MODEM_GET_CLASS (self)->enabling_started_finish (self, result, &error)) {
-        g_simple_async_result_take_error (G_SIMPLE_ASYNC_RESULT (ctx->result), error);
+        g_simple_async_result_take_error (ctx->result, error);
         enabling_context_complete_and_free (ctx);
         return;
     }
@@ -8482,7 +8479,7 @@ enabling_wait_for_final_state_ready (MMIfaceModem *self,
 
     ctx->previous_state = mm_iface_modem_wait_for_final_state_finish (self, res, &error);
     if (error) {
-        g_simple_async_result_take_error (G_SIMPLE_ASYNC_RESULT (ctx->result), error);
+        g_simple_async_result_take_error (ctx->result, error);
         enabling_context_complete_and_free (ctx);
         return;
     }
@@ -8660,7 +8657,7 @@ enabling_step (EnablingContext *ctx)
     case ENABLING_STEP_LAST:
         ctx->enabled = TRUE;
         /* All enabled without errors! */
-        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (ctx->result), TRUE);
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
         enabling_context_complete_and_free (ctx);
         return;
     }
@@ -9149,7 +9146,7 @@ initialize_step (InitializeContext *ctx)
                                      MM_MODEM_STATE_DISABLED,
                                      MM_MODEM_STATE_CHANGE_REASON_UNKNOWN);
 
-        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (ctx->result), TRUE);
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
         initialize_context_complete_and_free (ctx);
         return;
     }
