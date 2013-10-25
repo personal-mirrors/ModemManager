@@ -29,6 +29,7 @@
 
 #include "mm-base-modem-at.h"
 #include "mm-broadband-bearer-altair-lte.h"
+#include "mm-iface-modem-3gpp.h"
 #include "mm-log.h"
 #include "mm-modem-helpers.h"
 
@@ -168,7 +169,7 @@ connect_3gpp_apnsettings_ready (MMBaseModem *modem,
 }
 
 static void
-connect_3gpp (MMBroadbandBearer *bearer,
+connect_3gpp (MMBroadbandBearer *self,
               MMBroadbandModem *modem,
               MMAtSerialPort *primary,
               MMAtSerialPort *secondary,
@@ -179,9 +180,31 @@ connect_3gpp (MMBroadbandBearer *bearer,
     DetailedConnectContext *ctx;
     gchar *command, *apn;
     MMBearerProperties *config;
+    MMModem3gppRegistrationState registration_state;
+    GSimpleAsyncResult *early_result;
+
+    /* There is a known firmware bug that can leave the modem unusable if a
+     * connect attempt is made when out of coverage, so fail without trying.
+     */
+    g_object_get (modem,
+                  MM_IFACE_MODEM_3GPP_REGISTRATION_STATE, &registration_state,
+                  NULL);
+    if (registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN) {
+        early_result = g_simple_async_result_new (G_OBJECT (self),
+                                                  callback,
+                                                  user_data,
+                                                  connect_3gpp);
+        g_simple_async_result_set_error (early_result,
+                                         MM_MOBILE_EQUIPMENT_ERROR,
+                                         MM_MOBILE_EQUIPMENT_ERROR_NO_NETWORK,
+                                         "Out of coverage, can't connect.");
+        g_simple_async_result_complete_in_idle (early_result);
+        g_object_unref (early_result);
+        return;
+    }
 
     ctx = detailed_connect_context_new (
-        bearer,
+        self,
         modem,
         primary,
         /* Get a 'net' data port */
@@ -201,7 +224,7 @@ connect_3gpp (MMBroadbandBearer *bearer,
         return;
     }
 
-    config = mm_bearer_peek_config (MM_BEARER (bearer));
+    config = mm_bearer_peek_config (MM_BEARER (self));
     apn = mm_at_serial_port_quote_string (mm_bearer_properties_get_apn (config));
     command = g_strdup_printf ("%%APNN=%s",apn);
     g_free (apn);
@@ -306,6 +329,28 @@ disconnect_3gpp (MMBroadbandBearer *self,
                  gpointer user_data)
 {
     DetailedDisconnectContext *ctx;
+    MMModem3gppRegistrationState registration_state;
+    GSimpleAsyncResult *early_result;
+
+    /* There is a known firmware bug that can leave the modem unusable if a
+     * disconnect attempt is made when out of coverage, so fail without trying.
+     */
+    g_object_get (modem,
+                  MM_IFACE_MODEM_3GPP_REGISTRATION_STATE, &registration_state,
+                  NULL);
+    if (registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN) {
+        early_result = g_simple_async_result_new (G_OBJECT (self),
+                                                  callback,
+                                                  user_data,
+                                                  disconnect_3gpp);
+        g_simple_async_result_set_error (early_result,
+                                         MM_MOBILE_EQUIPMENT_ERROR,
+                                         MM_MOBILE_EQUIPMENT_ERROR_NO_NETWORK,
+                                         "Out of coverage, can't disconnect.");
+        g_simple_async_result_complete_in_idle (early_result);
+        g_object_unref (early_result);
+        return;
+    }
 
     ctx = detailed_disconnect_context_new (self, modem, primary, secondary,
                                            data, callback, user_data);
