@@ -52,7 +52,8 @@ src/tests/test-modem-helpers-qmi
 src/tests/test-charsets
 src/tests/test-qcdm-serial-port
 src/tests/test-at-serial-port
-src/tests/test-sms-part
+src/tests/test-sms-part-3gpp
+src/tests/test-sms-part-cdma
 
 cli/mmcli
 
@@ -86,6 +87,7 @@ po/en@quot.header
 po/insert-header.sin
 po/quot.sed
 po/remove-potcdate.sin
+po/*.gmo
 
 docs/reference/api/version.xml
 docs/reference/api/ModemManager.args
