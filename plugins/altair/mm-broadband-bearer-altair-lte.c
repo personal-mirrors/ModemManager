@@ -181,25 +181,20 @@ connect_3gpp (MMBroadbandBearer *self,
     gchar *command, *apn;
     MMBearerProperties *config;
     MMModem3gppRegistrationState registration_state;
-    GSimpleAsyncResult *early_result;
 
     /* There is a known firmware bug that can leave the modem unusable if a
-     * connect attempt is made when out of coverage, so fail without trying.
+     * connect attempt is made when out of coverage. So, fail without trying.
      */
     g_object_get (modem,
                   MM_IFACE_MODEM_3GPP_REGISTRATION_STATE, &registration_state,
                   NULL);
     if (registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN) {
-        early_result = g_simple_async_result_new (G_OBJECT (self),
-                                                  callback,
-                                                  user_data,
-                                                  connect_3gpp);
-        g_simple_async_result_set_error (early_result,
-                                         MM_MOBILE_EQUIPMENT_ERROR,
-                                         MM_MOBILE_EQUIPMENT_ERROR_NO_NETWORK,
-                                         "Out of coverage, can't connect.");
-        g_simple_async_result_complete_in_idle (early_result);
-        g_object_unref (early_result);
+        g_simple_async_report_error_in_idle (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             MM_MOBILE_EQUIPMENT_ERROR,
+                                             MM_MOBILE_EQUIPMENT_ERROR_NO_NETWORK,
+                                             "Out of coverage, can't connect.");
         return;
     }
 
@@ -330,25 +325,20 @@ disconnect_3gpp (MMBroadbandBearer *self,
 {
     DetailedDisconnectContext *ctx;
     MMModem3gppRegistrationState registration_state;
-    GSimpleAsyncResult *early_result;
 
     /* There is a known firmware bug that can leave the modem unusable if a
-     * disconnect attempt is made when out of coverage, so fail without trying.
+     * disconnect attempt is made when out of coverage. So, fail without trying.
      */
     g_object_get (modem,
                   MM_IFACE_MODEM_3GPP_REGISTRATION_STATE, &registration_state,
                   NULL);
     if (registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN) {
-        early_result = g_simple_async_result_new (G_OBJECT (self),
-                                                  callback,
-                                                  user_data,
-                                                  disconnect_3gpp);
-        g_simple_async_result_set_error (early_result,
-                                         MM_MOBILE_EQUIPMENT_ERROR,
-                                         MM_MOBILE_EQUIPMENT_ERROR_NO_NETWORK,
-                                         "Out of coverage, can't disconnect.");
-        g_simple_async_result_complete_in_idle (early_result);
-        g_object_unref (early_result);
+        g_simple_async_report_error_in_idle (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             MM_MOBILE_EQUIPMENT_ERROR,
+                                             MM_MOBILE_EQUIPMENT_ERROR_NO_NETWORK,
+                                             "Out of coverage, can't disconnect.");
         return;
     }
 
