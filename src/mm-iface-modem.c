@@ -347,6 +347,29 @@ internal_load_unlock_required (MMIfaceModem *self,
 
 /*****************************************************************************/
 
+static void
+bearer_list_updated (MMBearerList *bearer_list,
+                     GParamSpec *pspec,
+                     MMIfaceModem *self)
+{
+    MmGdbusModem *skeleton;
+    gchar **paths;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
+                  NULL);
+    if (!skeleton)
+        return;
+
+    paths = mm_bearer_list_get_paths (bearer_list);
+    mm_gdbus_modem_set_bearers (skeleton, (const gchar *const *)paths);
+    g_strfreev (paths);
+
+    g_dbus_interface_skeleton_flush (G_DBUS_INTERFACE_SKELETON (skeleton));
+}
+
+/*****************************************************************************/
+
 static MMModemState get_current_consolidated_state (MMIfaceModem *self, MMModemState modem_state);
 
 typedef struct {
@@ -3965,6 +3988,21 @@ sim_reinit_ready (MMSim *sim,
     interface_initialization_step (ctx);
 }
 
+void
+mm_iface_modem_update_own_numbers (MMIfaceModem *self,
+                                   const GStrv own_numbers)
+{
+    MmGdbusModem *skeleton = NULL;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
+                  NULL);
+    if (skeleton) {
+        mm_gdbus_modem_set_own_numbers (skeleton, (const gchar * const *)own_numbers);
+        g_object_unref (skeleton);
+    }
+}
+
 static void
 load_own_numbers_ready (MMIfaceModem *self,
                         GAsyncResult *res,
@@ -4194,6 +4232,10 @@ interface_initialization_step (InitializationContext *ctx)
 
             /* Create new default list */
             list = mm_bearer_list_new (n, n);
+            g_signal_connect (list,
+                              "notify::" MM_BEARER_LIST_NUM_BEARERS,
+                              G_CALLBACK (bearer_list_updated),
+                              ctx->self);
             g_object_set (ctx->self,
                           MM_IFACE_MODEM_BEARER_LIST, list,
                           NULL);
