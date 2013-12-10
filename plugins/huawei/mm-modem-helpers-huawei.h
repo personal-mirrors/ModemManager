@@ -19,6 +19,7 @@
 
 #include "glib.h"
 
+/*****************************************************************************/
 /* ^NDISSTAT / ^NDISSTATQRY response parser */
 gboolean mm_huawei_parse_ndisstatqry_response (const gchar *response,
                                                gboolean *ipv4_available,
@@ -27,6 +28,7 @@ gboolean mm_huawei_parse_ndisstatqry_response (const gchar *response,
                                                gboolean *ipv6_connected,
                                                GError **error);
 
+/*****************************************************************************/
 /* ^SYSINFO response parser */
 gboolean mm_huawei_parse_sysinfo_response (const char *reply,
                                            guint *out_srv_status,
@@ -38,6 +40,7 @@ gboolean mm_huawei_parse_sysinfo_response (const char *reply,
                                            guint *out_sys_submode,
                                            GError **error);
 
+/*****************************************************************************/
 /* ^SYSINFOEX response parser */
 gboolean mm_huawei_parse_sysinfoex_response (const char *reply,
                                              guint *out_srv_status,
@@ -47,5 +50,67 @@ gboolean mm_huawei_parse_sysinfoex_response (const char *reply,
                                              guint *out_sys_mode,
                                              guint *out_sys_submode,
                                              GError **error);
+
+/*****************************************************************************/
+/* ^PREFMODE test parser */
+
+typedef struct {
+    guint prefmode;
+    MMModemMode allowed;
+    MMModemMode preferred;
+} MMHuaweiPrefmodeCombination;
+
+GArray *mm_huawei_parse_prefmode_test (const gchar *response,
+                                       GError **error);
+
+/*****************************************************************************/
+/* ^PREFMODE response parser */
+
+const MMHuaweiPrefmodeCombination *mm_huawei_parse_prefmode_response (const gchar *response,
+                                                                      const GArray *supported_mode_combinations,
+                                                                      GError **error);
+
+/*****************************************************************************/
+/* ^SYSCFG test parser */
+
+/* This is the default string we use as fallback when the modem gives
+ * an empty response to AT^SYSCFG=? */
+#define MM_HUAWEI_DEFAULT_SYSCFG_FMT "^SYSCFG:(2,13,14,16),(0-3),,,"
+
+typedef struct {
+    guint mode;
+    guint acqorder;
+    MMModemMode allowed;
+    MMModemMode preferred;
+} MMHuaweiSyscfgCombination;
+
+GArray *mm_huawei_parse_syscfg_test (const gchar *response,
+                                     GError **error);
+
+/*****************************************************************************/
+/* ^SYSCFG response parser */
+
+const MMHuaweiSyscfgCombination *mm_huawei_parse_syscfg_response (const gchar *response,
+                                                                  const GArray *supported_mode_combinations,
+                                                                  GError **error);
+
+/*****************************************************************************/
+/* ^SYSCFGEX test parser */
+
+typedef struct {
+    gchar *mode_str;
+    MMModemMode allowed;
+    MMModemMode preferred;
+} MMHuaweiSyscfgexCombination;
+
+GArray *mm_huawei_parse_syscfgex_test (const gchar *response,
+                                       GError **error);
+
+/*****************************************************************************/
+/* ^SYSCFGEX response parser */
+
+const MMHuaweiSyscfgexCombination *mm_huawei_parse_syscfgex_response (const gchar *response,
+                                                                      const GArray *supported_mode_combinations,
+                                                                      GError **error);
 
 #endif  /* MM_MODEM_HELPERS_HUAWEI_H */
