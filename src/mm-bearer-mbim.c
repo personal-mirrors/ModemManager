@@ -139,6 +139,7 @@ connect_context_complete_and_free (ConnectContext *ctx)
         mm_bearer_connect_result_unref (ctx->connect_result);
     g_object_unref (ctx->data);
     g_object_unref (ctx->cancellable);
+    g_object_unref (ctx->properties);
     g_object_unref (ctx->device);
     g_object_unref (ctx->self);
     g_slice_free (ConnectContext, ctx);
@@ -398,11 +399,18 @@ ip_configuration_query_ready (MbimDevice *device,
                                                             ipv4_config,
                                                             ipv6_config);
 
+        if (ipv4_config)
+            g_object_unref (ipv4_config);
+        if (ipv6_config)
+            g_object_unref (ipv6_config);
         mbim_ipv4_element_array_free (ipv4address);
         mbim_ipv6_element_array_free (ipv6address);
         g_free (ipv4dnsserver);
         g_free (ipv6dnsserver);
     }
+
+    if (response)
+        mbim_message_unref (response);
 
     if (error) {
         g_simple_async_result_take_error (ctx->result, error);
@@ -462,6 +470,9 @@ connect_set_ready (MbimDevice *device,
         }
     }
 
+    if (response)
+        mbim_message_unref (response);
+
     if (error) {
         g_simple_async_result_take_error (ctx->result, error);
         connect_context_complete_and_free (ctx);
@@ -514,6 +525,9 @@ provisioned_contexts_query_ready (MbimDevice *device,
         mm_dbg ("Error listing provisioned contexts: %s", error->message);
         g_error_free (error);
     }
+
+    if (response)
+        mbim_message_unref (response);
 
     /* Keep on */
     ctx->step++;
@@ -570,6 +584,9 @@ packet_service_set_ready (MbimDevice *device,
                 g_error_free (inner_error);
         }
     }
+
+    if (response)
+        mbim_message_unref (response);
 
     if (error) {
         /* Don't make NoDeviceSupport errors fatal; just try to keep on the
@@ -955,6 +972,9 @@ disconnect_set_ready (MbimDevice *device,
                 g_error_free (inner_error);
         }
     }
+
+    if (response)
+        mbim_message_unref (response);
 
     if (error) {
         g_simple_async_result_take_error (ctx->result, error);
