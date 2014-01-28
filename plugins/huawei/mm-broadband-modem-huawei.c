@@ -1658,8 +1658,10 @@ huawei_ndisstat_changed (MMAtSerialPort *port,
         mm_dbg ("Ignore invalid ^NDISSTAT unsolicited message: '%s' (error %s)",
                 str, error->message);
         g_error_free (error);
+        g_free (str);
         return;
     }
+    g_free (str);
 
     mm_dbg ("NDIS status: IPv4 %s, IPv6 %s",
             ndisstat_result.ipv4_available ?
@@ -2126,13 +2128,15 @@ huawei_modem_create_bearer (MMIfaceModem *self,
                             client,
                             "net",
                             mm_port_get_device (port)));
-            if (g_udev_device_get_property_as_boolean (net_port, "ID_MM_HUAWEI_NDISDUP_SUPPORTED")) {
+            if (net_port && g_udev_device_get_property_as_boolean (net_port, "ID_MM_HUAWEI_NDISDUP_SUPPORTED")) {
                 mm_dbg ("This device (%s) can support ndisdup feature", mm_port_get_device (port));
                 ctx->self->priv->ndisdup_support = FEATURE_SUPPORTED;
             } else {
                 mm_dbg ("This device (%s) can not support ndisdup feature", mm_port_get_device (port));
                 ctx->self->priv->ndisdup_support = FEATURE_NOT_SUPPORTED;
             }
+            if (net_port)
+                g_object_unref (net_port);
             g_object_unref (client);
         }
 

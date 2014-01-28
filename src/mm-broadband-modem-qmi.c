@@ -1878,7 +1878,7 @@ modem_load_current_bands (MMIfaceModem *self,
 
 #if defined WITH_NEWEST_QMI_COMMANDS
     /* Introduced in NAS 1.19 */
-    if (qmi_client_check_version (ctx->client, 1, 19)) {
+    if (qmi_client_check_version (client, 1, 19)) {
         qmi_client_nas_get_rf_band_information (QMI_CLIENT_NAS (client),
                                                 NULL,
                                                 5,
@@ -2290,7 +2290,7 @@ get_signal_info_ready (QmiClientNas *client,
 {
     QmiMessageNasGetSignalInfoOutput *output;
     GError *error = NULL;
-    guint quality = 0;
+    gint8 quality = 0;
 
     output = qmi_client_nas_get_signal_info_finish (client, res, &error);
     if (!output) {
@@ -4179,7 +4179,7 @@ process_gsm_info (QmiMessageNasGetSystemInfoOutput *response_output,
                 &cid_valid,            &cid,
                 NULL, NULL, NULL, /* registration_reject_info */
                 &network_id_valid,     &mcc, &mnc,
-                &egprs_support_valid,  &egprs_support,
+                NULL, NULL, /* egprs support */
                 NULL, NULL, /* dtm_support */
                 NULL)) {
             mm_dbg ("No GSM service reported");
@@ -4203,7 +4203,7 @@ process_gsm_info (QmiMessageNasGetSystemInfoOutput *response_output,
                 &cid_valid,            &cid,
                 NULL, NULL, NULL, /* registration_reject_info */
                 &network_id_valid,     &mcc, &mnc,
-                &egprs_support_valid,  &egprs_support,
+                NULL, NULL, /* egprs support */
                 NULL, NULL, /* dtm_support */
                 NULL)) {
             mm_dbg ("No GSM service reported");
