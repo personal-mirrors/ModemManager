@@ -475,15 +475,12 @@ mm_serial_port_process_command (MMSerialPort *self,
         if (errno == EAGAIN || status == 0) {
             info->eagain_count--;
             if (info->eagain_count <= 0) {
-                int ignore;
                 /* If we reach the limit of EAGAIN errors, treat as a timeout error. */
                 priv->n_consecutive_timeouts++;
                 g_signal_emit (self, signals[TIMED_OUT], 0, priv->n_consecutive_timeouts);
 
                 g_set_error (error, MM_SERIAL_ERROR, MM_SERIAL_ERROR_SEND_FAILED,
                              "Sending command failed: '%s'", strerror (errno));
-                ignore = system ("/usr/bin/metrics_client -v "
-                                 "ModemManagerCommandSendFailure");
                 return FALSE;
             }
         } else {
