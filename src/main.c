@@ -44,6 +44,10 @@ static gboolean
 quit_cb (gpointer user_data)
 {
 	mm_info ("Caught signal, shutting down...");
+
+    if (manager)
+        g_object_set (manager, MM_MANAGER_CONNECTION, NULL, NULL);
+
     if (loop)
         g_idle_add ((GSourceFunc) g_main_loop_quit, loop);
     else
@@ -62,7 +66,11 @@ bus_acquired_cb (GDBusConnection *connection,
 
     /* Create Manager object */
     g_assert (!manager);
-    manager = mm_manager_new (connection, &error);
+    manager = mm_manager_new (connection,
+                              mm_context_get_test_plugin_dir (),
+                              !mm_context_get_test_no_auto_scan (),
+                              mm_context_get_test_enable (),
+                              &error);
     if (!manager) {
         mm_warn ("Could not create manager: %s", error->message);
         g_error_free (error);
@@ -96,6 +104,9 @@ name_lost_cb (GDBusConnection *connection,
     else
         mm_warn ("Could not acquire the '%s' service name", name);
 
+    if (manager)
+        g_object_set (manager, MM_MANAGER_CONNECTION, NULL, NULL);
+
     g_main_loop_quit (loop);
 }
 
@@ -125,10 +136,11 @@ main (int argc, char *argv[])
     g_unix_signal_add (SIGTERM, quit_cb, NULL);
     g_unix_signal_add (SIGINT, quit_cb, NULL);
 
-    mm_info ("ModemManager (version " MM_DIST_VERSION ") starting...");
+    mm_info ("ModemManager (version " MM_DIST_VERSION ") starting in %s bus...",
+             mm_context_get_test_session () ? "session" : "system");
 
     /* Acquire name, don't allow replacement */
-    name_id = g_bus_own_name (G_BUS_TYPE_SYSTEM,
+    name_id = g_bus_own_name (mm_context_get_test_session () ? G_BUS_TYPE_SESSION : G_BUS_TYPE_SYSTEM,
                               MM_DBUS_SERVICE,
                               G_BUS_NAME_OWNER_FLAGS_NONE,
                               bus_acquired_cb,

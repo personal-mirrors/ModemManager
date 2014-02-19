@@ -276,6 +276,8 @@ data/Makefile
 data/ModemManager.pc
 data/mm-glib.pc
 data/org.freedesktop.ModemManager1.policy.in
+data/tests/Makefile
+data/tests/org.freedesktop.ModemManager1.service
 include/Makefile
 include/ModemManager-version.h
 build-aux/Makefile
@@ -291,6 +293,7 @@ plugins/Makefile
 uml290/Makefile
 test/Makefile
 introspection/Makefile
+introspection/tests/Makefile
 po/Makefile.in
 docs/Makefile
 docs/man/Makefile
@@ -301,6 +304,7 @@ docs/reference/libmm-glib/Makefile
 docs/reference/libmm-glib/version.xml
 libmm-glib/Makefile
 libmm-glib/generated/Makefile
+libmm-glib/generated/tests/Makefile
 libmm-glib/tests/Makefile
 vapi/Makefile
 cli/Makefile

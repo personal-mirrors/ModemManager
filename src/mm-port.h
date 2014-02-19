@@ -25,8 +25,9 @@ typedef enum { /*< underscore_name=mm_port_subsys >*/
     MM_PORT_SUBSYS_TTY,
     MM_PORT_SUBSYS_NET,
     MM_PORT_SUBSYS_USB,
+    MM_PORT_SUBSYS_UNIX,
 
-    MM_PORT_SUBSYS_LAST = MM_PORT_SUBSYS_USB /*< skip >*/
+    MM_PORT_SUBSYS_LAST = MM_PORT_SUBSYS_UNIX /*< skip >*/
 } MMPortSubsys;
 
 typedef enum { /*< underscore_name=mm_port_type >*/
@@ -55,9 +56,11 @@ typedef enum { /*< underscore_name=mm_port_type >*/
 
 typedef struct _MMPort MMPort;
 typedef struct _MMPortClass MMPortClass;
+typedef struct _MMPortPrivate MMPortPrivate;
 
 struct _MMPort {
     GObject parent;
+    MMPortPrivate *priv;
 };
 
 struct _MMPortClass {

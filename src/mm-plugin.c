@@ -30,8 +30,8 @@
 
 #include "mm-plugin.h"
 #include "mm-device.h"
-#include "mm-at-serial-port.h"
-#include "mm-qcdm-serial-port.h"
+#include "mm-port-serial-at.h"
+#include "mm-port-serial-qcdm.h"
 #include "mm-serial-parsers.h"
 #include "mm-private-boxed-types.h"
 #include "mm-log.h"
@@ -718,21 +718,27 @@ mm_plugin_supports_port (MMPlugin *self,
             probe_run_flags |= MM_PORT_PROBE_AT;
         else if (self->priv->single_at)
             probe_run_flags |= MM_PORT_PROBE_AT;
-        if (need_vendor_probing)
-            probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_VENDOR);
-        if (need_product_probing)
-            probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_PRODUCT);
         if (self->priv->qcdm)
             probe_run_flags |= MM_PORT_PROBE_QCDM;
-        if (self->priv->icera_probe || self->priv->allowed_icera || self->priv->forbidden_icera)
-            probe_run_flags |= (MM_PORT_PROBE_AT | MM_PORT_PROBE_AT_ICERA);
     } else {
         /* cdc-wdm ports... */
         probe_run_flags = MM_PORT_PROBE_NONE;
         if (self->priv->qmi && find_driver_in_device (device, "qmi_wwan"))
             probe_run_flags |= MM_PORT_PROBE_QMI;
-        if (self->priv->mbim && find_driver_in_device (device, "cdc_mbim"))
+        else if (self->priv->mbim && find_driver_in_device (device, "cdc_mbim"))
             probe_run_flags |= MM_PORT_PROBE_MBIM;
+        else
+            probe_run_flags |= MM_PORT_PROBE_AT;
+    }
+
+    /* For potential AT ports, check for more things */
+    if (probe_run_flags & MM_PORT_PROBE_AT) {
+        if (need_vendor_probing)
+            probe_run_flags |= MM_PORT_PROBE_AT_VENDOR;
+        if (need_product_probing)
+            probe_run_flags |= MM_PORT_PROBE_AT_PRODUCT;
+        if (self->priv->icera_probe || self->priv->allowed_icera || self->priv->forbidden_icera)
+            probe_run_flags |= MM_PORT_PROBE_AT_ICERA;
     }
 
     /* If no explicit probing was required, just request to grab it without probing anything.
@@ -830,10 +836,14 @@ mm_plugin_create_modem (MMPlugin  *self,
                         MMDevice *device,
                         GError   **error)
 {
-    MMBaseModem *modem = NULL;
-    GList *port_probes, *l;
+    MMBaseModem *modem;
+    GList *port_probes = NULL;
+    const gchar **virtual_ports = NULL;
 
-    port_probes = mm_device_peek_port_probe_list (device);
+    if (!mm_device_is_virtual (device))
+        port_probes = mm_device_peek_port_probe_list (device);
+    else
+        virtual_ports = mm_device_virtual_peek_ports (device);
 
     /* Let the plugin create the modem from the port probe results */
     modem = MM_PLUGIN_GET_CLASS (self)->create_modem (MM_PLUGIN (self),
@@ -843,8 +853,13 @@ mm_plugin_create_modem (MMPlugin  *self,
                                                       mm_device_get_product (device),
                                                       port_probes,
                                                       error);
-    if (modem) {
-        mm_base_modem_set_hotplugged (modem, mm_device_get_hotplugged (device));
+    if (!modem)
+        return NULL;
+
+    mm_base_modem_set_hotplugged (modem, mm_device_get_hotplugged (device));
+
+    if (port_probes) {
+        GList *l;
 
         /* Grab each port */
         for (l = port_probes; l; l = g_list_next (l)) {
@@ -895,7 +910,7 @@ mm_plugin_create_modem (MMPlugin  *self,
                                                    mm_port_probe_get_port_subsys (probe),
                                                    mm_port_probe_get_port_name (probe),
                                                    mm_port_probe_get_port_type (probe),
-                                                   MM_AT_PORT_FLAG_NONE,
+                                                   MM_PORT_SERIAL_AT_FLAG_NONE,
                                                    &inner_error);
             if (!grabbed) {
                 mm_warn ("Could not grab port (%s/%s): '%s'",
@@ -905,11 +920,29 @@ mm_plugin_create_modem (MMPlugin  *self,
                 g_clear_error (&inner_error);
             }
         }
+    } else if (virtual_ports) {
+        guint i;
 
-        /* If organizing ports fails, consider the modem invalid */
-        if (!mm_base_modem_organize_ports (modem, error))
-            g_clear_object (&modem);
+        for (i = 0; virtual_ports[i]; i++) {
+            GError *inner_error = NULL;
+
+            if (!mm_base_modem_grab_port (modem,
+                                          "virtual",
+                                          virtual_ports[i],
+                                          MM_PORT_TYPE_AT,
+                                          MM_PORT_SERIAL_AT_FLAG_NONE,
+                                          &inner_error)) {
+                mm_warn ("Could not grab port (virtual/%s): '%s'",
+                         virtual_ports[i],
+                         inner_error ? inner_error->message : "unknown error");
+                g_clear_error (&inner_error);
+            }
+        }
     }
+
+    /* If organizing ports fails, consider the modem invalid */
+    if (!mm_base_modem_organize_ports (modem, error))
+        g_clear_object (&modem);
 
     return modem;
 }

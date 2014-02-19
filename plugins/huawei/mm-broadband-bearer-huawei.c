@@ -54,7 +54,7 @@ typedef enum {
 typedef struct {
     MMBroadbandBearerHuawei *self;
     MMBaseModem *modem;
-    MMAtSerialPort *primary;
+    MMPortSerialAt *primary;
     MMPort *data;
     GCancellable *cancellable;
     GSimpleAsyncResult *result;
@@ -285,11 +285,25 @@ connect_3gpp_context_step (Connect3gppContext *ctx)
         auth = mm_bearer_properties_get_allowed_auth (mm_bearer_peek_config (MM_BEARER (ctx->self)));
         encoded_auth = huawei_parse_auth_type (auth);
 
-        command = g_strdup_printf ("AT^NDISDUP=1,1,\"%s\",\"%s\",\"%s\",%d",
-                                   apn == NULL ? "" : apn,
-                                   user == NULL ? "" : user,
-                                   passwd == NULL ? "" : passwd,
-                                   encoded_auth == MM_BEARER_HUAWEI_AUTH_UNKNOWN ? MM_BEARER_HUAWEI_AUTH_NONE : encoded_auth);
+        /* Default to no authentication if not specified */
+        if ((encoded_auth = huawei_parse_auth_type (auth)) == MM_BEARER_HUAWEI_AUTH_UNKNOWN)
+            encoded_auth = MM_BEARER_HUAWEI_AUTH_NONE;
+
+        if (!user && !passwd)
+            command = g_strdup_printf ("AT^NDISDUP=1,1,\"%s\"",
+                                       apn == NULL ? "" : apn);
+        else if (encoded_auth == MM_BEARER_HUAWEI_AUTH_NONE)
+		    command = g_strdup_printf ("AT^NDISDUP=1,1,\"%s\",\"%s\",\"%s\"",
+                                       apn == NULL ? "" : apn,
+                                       user == NULL ? "" : user,
+                                       passwd == NULL ? "" : passwd);
+        else
+            command = g_strdup_printf ("AT^NDISDUP=1,1,\"%s\",\"%s\",\"%s\",%d",
+                                       apn == NULL ? "" : apn,
+                                       user == NULL ? "" : user,
+                                       passwd == NULL ? "" : passwd,
+                                       encoded_auth);
+
         mm_base_modem_at_command_full (ctx->modem,
                                        ctx->primary,
                                        command,
@@ -369,8 +383,8 @@ connect_3gpp_context_step (Connect3gppContext *ctx)
 static void
 connect_3gpp (MMBroadbandBearer *self,
               MMBroadbandModem *modem,
-              MMAtSerialPort *primary,
-              MMAtSerialPort *secondary,
+              MMPortSerialAt *primary,
+              MMPortSerialAt *secondary,
               GCancellable *cancellable,
               GAsyncReadyCallback callback,
               gpointer user_data)
@@ -425,7 +439,7 @@ typedef enum {
 typedef struct {
     MMBroadbandBearerHuawei *self;
     MMBaseModem *modem;
-    MMAtSerialPort *primary;
+    MMPortSerialAt *primary;
     GSimpleAsyncResult *result;
     Disconnect3gppContextStep step;
     guint check_count;
@@ -626,8 +640,8 @@ disconnect_3gpp_context_step (Disconnect3gppContext *ctx)
 static void
 disconnect_3gpp (MMBroadbandBearer *self,
                  MMBroadbandModem *modem,
-                 MMAtSerialPort *primary,
-                 MMAtSerialPort *secondary,
+                 MMPortSerialAt *primary,
+                 MMPortSerialAt *secondary,
                  MMPort *data,
                  guint cid,
                  GAsyncReadyCallback callback,

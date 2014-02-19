@@ -230,7 +230,7 @@ bearer_list_report_status_foreach (MMBearer *bearer,
 }
 
 static void
-hso_connection_status_changed (MMAtSerialPort *port,
+hso_connection_status_changed (MMPortSerialAt *port,
                                GMatchInfo *match_info,
                                MMBroadbandModemHso *self)
 {
@@ -299,10 +299,10 @@ parent_setup_unsolicited_events_ready (MMIfaceModem3gpp *self,
         g_simple_async_result_take_error (simple, error);
     else {
         /* Our own setup now */
-        mm_at_serial_port_add_unsolicited_msg_handler (
+        mm_port_serial_at_add_unsolicited_msg_handler (
             mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)),
             MM_BROADBAND_MODEM_HSO (self)->priv->_owancall_regex,
-            (MMAtSerialUnsolicitedMsgFn)hso_connection_status_changed,
+            (MMPortSerialAtUnsolicitedMsgFn)hso_connection_status_changed,
             self,
             NULL);
 
@@ -360,7 +360,7 @@ modem_3gpp_cleanup_unsolicited_events (MMIfaceModem3gpp *self,
                                         modem_3gpp_cleanup_unsolicited_events);
 
     /* Our own cleanup first */
-    mm_at_serial_port_add_unsolicited_msg_handler (
+    mm_port_serial_at_add_unsolicited_msg_handler (
         mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)),
         MM_BROADBAND_MODEM_HSO (self)->priv->_owancall_regex,
         NULL, NULL, NULL);
@@ -463,7 +463,7 @@ gps_disabled_ready (MMBaseModem *self,
                     GAsyncResult *res,
                     GSimpleAsyncResult *simple)
 {
-    MMGpsSerialPort *gps_port;
+    MMPortSerialGps *gps_port;
     GError *error = NULL;
 
     if (!mm_base_modem_at_command_full_finish (self, res, &error))
@@ -474,7 +474,7 @@ gps_disabled_ready (MMBaseModem *self,
     /* Even if we get an error here, we try to close the GPS port */
     gps_port = mm_base_modem_peek_port_gps (self);
     if (gps_port)
-        mm_serial_port_close (MM_SERIAL_PORT (gps_port));
+        mm_port_serial_close (MM_PORT_SERIAL (gps_port));
 
     g_simple_async_result_complete (simple);
     g_object_unref (simple);
@@ -556,7 +556,7 @@ gps_enabled_ready (MMBaseModem *self,
                    GAsyncResult *res,
                    EnableLocationGatheringContext *ctx)
 {
-    MMGpsSerialPort *gps_port;
+    MMPortSerialGps *gps_port;
     GError *error = NULL;
 
     if (!mm_base_modem_at_command_full_finish (self, res, &error)) {
@@ -567,7 +567,7 @@ gps_enabled_ready (MMBaseModem *self,
 
     gps_port = mm_base_modem_peek_port_gps (self);
     if (!gps_port ||
-        !mm_serial_port_open (MM_SERIAL_PORT (gps_port), &error)) {
+        !mm_port_serial_open (MM_PORT_SERIAL (gps_port), &error)) {
         if (error)
             g_simple_async_result_take_error (ctx->result, error);
         else
@@ -654,7 +654,7 @@ enable_location_gathering (MMIfaceModemLocation *self,
 /* Setup ports (Broadband modem class) */
 
 static void
-trace_received (MMGpsSerialPort *port,
+trace_received (MMPortSerialGps *port,
                 const gchar *trace,
                 MMIfaceModemLocation *self)
 {
@@ -685,23 +685,23 @@ trace_received (MMGpsSerialPort *port,
 static void
 setup_ports (MMBroadbandModem *self)
 {
-    MMAtSerialPort *gps_control_port;
-    MMGpsSerialPort *gps_data_port;
+    MMPortSerialAt *gps_control_port;
+    MMPortSerialGps *gps_data_port;
 
     /* Call parent's setup ports first always */
     MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_hso_parent_class)->setup_ports (self);
 
     /* _OWANCALL unsolicited messages are only expected in the primary port. */
-    mm_at_serial_port_add_unsolicited_msg_handler (
+    mm_port_serial_at_add_unsolicited_msg_handler (
         mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)),
         MM_BROADBAND_MODEM_HSO (self)->priv->_owancall_regex,
         NULL, NULL, NULL);
 
     g_object_set (mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)),
-                  MM_SERIAL_PORT_SEND_DELAY, (guint64) 0,
+                  MM_PORT_SERIAL_SEND_DELAY, (guint64) 0,
                   /* built-in echo removal conflicts with unsolicited _OWANCALL
                    * messages, which are not <CR><LF> prefixed. */
-                  MM_AT_SERIAL_PORT_REMOVE_ECHO, FALSE,
+                  MM_PORT_SERIAL_AT_REMOVE_ECHO, FALSE,
                   NULL);
 
     gps_control_port = mm_base_modem_peek_port_gps_control (MM_BASE_MODEM (self));
@@ -716,8 +716,8 @@ setup_ports (MMBroadbandModem *self)
                                        3, FALSE, FALSE, NULL, NULL, NULL);
 
         /* Add handler for the NMEA traces */
-        mm_gps_serial_port_add_trace_handler (gps_data_port,
-                                              (MMGpsSerialTraceFn)trace_received,
+        mm_port_serial_gps_add_trace_handler (gps_data_port,
+                                              (MMPortSerialGpsTraceFn)trace_received,
                                               self,
                                               NULL);
     }

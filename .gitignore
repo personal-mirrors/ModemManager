@@ -37,6 +37,7 @@ libmm-glib/generated/mm-enums-types.[ch]
 libmm-glib/generated/mm-errors-types.[ch]
 libmm-glib/generated/mm-errors-quarks.c
 libmm-glib/generated/*.xml
+libmm-glib/generated/tests/mm-gdbus-*.[ch]
 libmm-glib/tests/test-common-helpers
 libmm-glib/*.gir
 libmm-glib/*.typelib
@@ -44,8 +45,8 @@ libmm-glib/*.typelib
 src/ModemManager
 src/mm-daemon-enums-types.c
 src/mm-daemon-enums-types.h
-src/mm-serial-enums-types.c
-src/mm-serial-enums-types.h
+src/mm-port-enums-types.c
+src/mm-port-enums-types.h
 src/mm-marshal.[ch]
 src/tests/test-modem-helpers
 src/tests/test-modem-helpers-qmi
@@ -72,6 +73,7 @@ data/ModemManager.service
 data/ModemManager.pc
 data/mm-common.pc
 data/mm-glib.pc
+data/tests/org.freedesktop.ModemManager1.service
 
 include/ModemManager-names.h
 
@@ -154,6 +156,7 @@ uml290/uml290mode
 plugins/test-suite.log
 plugins/test-modem-helpers-huawei*
 plugins/test-modem-helpers-altair*
+plugins/test-service-*
 
 TAGS
 ABOUT-NLS

@@ -21,12 +21,10 @@
 #include <unistd.h>
 #include <string.h>
 
-#include "mm-at-serial-port.h"
+#include "mm-port-serial-at.h"
 #include "mm-log.h"
 
-G_DEFINE_TYPE (MMAtSerialPort, mm_at_serial_port, MM_TYPE_SERIAL_PORT)
-
-#define MM_AT_SERIAL_PORT_GET_PRIVATE(o) (G_TYPE_INSTANCE_GET_PRIVATE ((o), MM_TYPE_AT_SERIAL_PORT, MMAtSerialPortPrivate))
+G_DEFINE_TYPE (MMPortSerialAt, mm_port_serial_at, MM_TYPE_PORT_SERIAL)
 
 enum {
     PROP_0,
@@ -37,27 +35,27 @@ enum {
     LAST_PROP
 };
 
-typedef struct {
+struct _MMPortSerialAtPrivate {
     /* Response parser data */
-    MMAtSerialResponseParserFn response_parser_fn;
+    MMPortSerialAtResponseParserFn response_parser_fn;
     gpointer response_parser_user_data;
     GDestroyNotify response_parser_notify;
 
     GSList *unsolicited_msg_handlers;
 
-    MMAtPortFlag flags;
+    MMPortSerialAtFlag flags;
 
     /* Properties */
     gboolean remove_echo;
     guint init_sequence_enabled;
     gchar **init_sequence;
     gboolean send_lf;
-} MMAtSerialPortPrivate;
+};
 
 /*****************************************************************************/
 
 gchar *
-mm_at_serial_port_quote_string (const char *string)
+mm_port_serial_at_quote_string (const char *string)
 {
     int len, i;
     gchar *quoted, *pos;
@@ -83,25 +81,23 @@ mm_at_serial_port_quote_string (const char *string)
 }
 
 void
-mm_at_serial_port_set_response_parser (MMAtSerialPort *self,
-                                       MMAtSerialResponseParserFn fn,
+mm_port_serial_at_set_response_parser (MMPortSerialAt *self,
+                                       MMPortSerialAtResponseParserFn fn,
                                        gpointer user_data,
                                        GDestroyNotify notify)
 {
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
+    g_return_if_fail (MM_IS_PORT_SERIAL_AT (self));
 
-    g_return_if_fail (MM_IS_AT_SERIAL_PORT (self));
+    if (self->priv->response_parser_notify)
+        self->priv->response_parser_notify (self->priv->response_parser_user_data);
 
-    if (priv->response_parser_notify)
-        priv->response_parser_notify (priv->response_parser_user_data);
-
-    priv->response_parser_fn = fn;
-    priv->response_parser_user_data = user_data;
-    priv->response_parser_notify = notify;
+    self->priv->response_parser_fn = fn;
+    self->priv->response_parser_user_data = user_data;
+    self->priv->response_parser_notify = notify;
 }
 
 void
-mm_at_serial_port_remove_echo (GByteArray *response)
+mm_port_serial_at_remove_echo (GByteArray *response)
 {
     guint i;
 
@@ -121,25 +117,26 @@ mm_at_serial_port_remove_echo (GByteArray *response)
 }
 
 static gboolean
-parse_response (MMSerialPort *port, GByteArray *response, GError **error)
+parse_response (MMPortSerial *port,
+                GByteArray *response,
+                GError **error)
 {
-    MMAtSerialPort *self = MM_AT_SERIAL_PORT (port);
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
+    MMPortSerialAt *self = MM_PORT_SERIAL_AT (port);
     gboolean found;
     GString *string;
 
-    g_return_val_if_fail (priv->response_parser_fn != NULL, FALSE);
+    g_return_val_if_fail (self->priv->response_parser_fn != NULL, FALSE);
 
     /* Remove echo */
-    if (priv->remove_echo)
-        mm_at_serial_port_remove_echo (response);
+    if (self->priv->remove_echo)
+        mm_port_serial_at_remove_echo (response);
 
     /* Construct the string that AT-parsing functions expect */
     string = g_string_sized_new (response->len + 1);
     g_string_append_len (string, (const char *) response->data, response->len);
 
     /* Parse it */
-    found = priv->response_parser_fn (priv->response_parser_user_data, string, error);
+    found = self->priv->response_parser_fn (self->priv->response_parser_user_data, string, error);
 
     /* And copy it back into the response array after the parser has removed
      * matches and cleaned it up.
@@ -151,31 +148,11 @@ parse_response (MMSerialPort *port, GByteArray *response, GError **error)
     return found;
 }
 
-static gsize
-handle_response (MMSerialPort *port,
-                 GByteArray *response,
-                 GError *error,
-                 GCallback callback,
-                 gpointer callback_data)
-{
-    MMAtSerialPort *self = MM_AT_SERIAL_PORT (port);
-    MMAtSerialResponseFn response_callback = (MMAtSerialResponseFn) callback;
-    GString *string;
-
-    /* Convert to a string and call the callback */
-    string = g_string_sized_new (response->len + 1);
-    g_string_append_len (string, (const char *) response->data, response->len);
-    response_callback (self, string, error, callback_data);
-    g_string_free (string, TRUE);
-
-    return response->len;
-}
-
 /*****************************************************************************/
 
 typedef struct {
     GRegex *regex;
-    MMAtSerialUnsolicitedMsgFn callback;
+    MMPortSerialAtUnsolicitedMsgFn callback;
     gboolean enable;
     gpointer user_data;
     GDestroyNotify notify;
@@ -190,22 +167,19 @@ unsolicited_msg_handler_cmp (MMAtUnsolicitedMsgHandler *handler,
 }
 
 void
-mm_at_serial_port_add_unsolicited_msg_handler (MMAtSerialPort *self,
+mm_port_serial_at_add_unsolicited_msg_handler (MMPortSerialAt *self,
                                                GRegex *regex,
-                                               MMAtSerialUnsolicitedMsgFn callback,
+                                               MMPortSerialAtUnsolicitedMsgFn callback,
                                                gpointer user_data,
                                                GDestroyNotify notify)
 {
     GSList *existing;
     MMAtUnsolicitedMsgHandler *handler;
-    MMAtSerialPortPrivate *priv;
 
-    g_return_if_fail (MM_IS_AT_SERIAL_PORT (self));
+    g_return_if_fail (MM_IS_PORT_SERIAL_AT (self));
     g_return_if_fail (regex != NULL);
 
-    priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
-
-    existing = g_slist_find_custom (priv->unsolicited_msg_handlers,
+    existing = g_slist_find_custom (self->priv->unsolicited_msg_handlers,
                                     regex,
                                     (GCompareFunc)unsolicited_msg_handler_cmp);
     if (existing) {
@@ -215,7 +189,7 @@ mm_at_serial_port_add_unsolicited_msg_handler (MMAtSerialPort *self,
             handler->notify (handler->user_data);
     } else {
         handler = g_slice_new (MMAtUnsolicitedMsgHandler);
-        priv->unsolicited_msg_handlers = g_slist_append (priv->unsolicited_msg_handlers, handler);
+        self->priv->unsolicited_msg_handlers = g_slist_append (self->priv->unsolicited_msg_handlers, handler);
         handler->regex = g_regex_ref (regex);
     }
 
@@ -226,20 +200,17 @@ mm_at_serial_port_add_unsolicited_msg_handler (MMAtSerialPort *self,
 }
 
 void
-mm_at_serial_port_enable_unsolicited_msg_handler (MMAtSerialPort *self,
+mm_port_serial_at_enable_unsolicited_msg_handler (MMPortSerialAt *self,
                                                   GRegex *regex,
                                                   gboolean enable)
 {
     GSList *existing;
     MMAtUnsolicitedMsgHandler *handler;
-    MMAtSerialPortPrivate *priv;
 
-    g_return_if_fail (MM_IS_AT_SERIAL_PORT (self));
+    g_return_if_fail (MM_IS_PORT_SERIAL_AT (self));
     g_return_if_fail (regex != NULL);
 
-    priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
-
-    existing = g_slist_find_custom (priv->unsolicited_msg_handlers,
+    existing = g_slist_find_custom (self->priv->unsolicited_msg_handlers,
                                     regex,
                                     (GCompareFunc)unsolicited_msg_handler_cmp);
     if (existing) {
@@ -264,17 +235,16 @@ remove_eval_cb (const GMatchInfo *match_info,
 }
 
 static void
-parse_unsolicited (MMSerialPort *port, GByteArray *response)
+parse_unsolicited (MMPortSerial *port, GByteArray *response)
 {
-    MMAtSerialPort *self = MM_AT_SERIAL_PORT (port);
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
+    MMPortSerialAt *self = MM_PORT_SERIAL_AT (port);
     GSList *iter;
 
     /* Remove echo */
-    if (priv->remove_echo)
-        mm_at_serial_port_remove_echo (response);
+    if (self->priv->remove_echo)
+        mm_port_serial_at_remove_echo (response);
 
-    for (iter = priv->unsolicited_msg_handlers; iter; iter = iter->next) {
+    for (iter = self->priv->unsolicited_msg_handlers; iter; iter = iter->next) {
         MMAtUnsolicitedMsgHandler *handler = (MMAtUnsolicitedMsgHandler *) iter->data;
         GMatchInfo *match_info;
         gboolean matches;
@@ -350,64 +320,98 @@ at_command_to_byte_array (const char *command, gboolean is_raw, gboolean send_lf
     return buf;
 }
 
-void
-mm_at_serial_port_queue_command (MMAtSerialPort *self,
-                                 const char *command,
-                                 guint32 timeout_seconds,
-                                 gboolean is_raw,
-                                 GCancellable *cancellable,
-                                 MMAtSerialResponseFn callback,
-                                 gpointer user_data)
+const gchar *
+mm_port_serial_at_command_finish (MMPortSerialAt *self,
+                                  GAsyncResult *res,
+                                  GError **error)
 {
-    GByteArray *buf;
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
+    GString *str;
 
-    g_return_if_fail (self != NULL);
-    g_return_if_fail (MM_IS_AT_SERIAL_PORT (self));
-    g_return_if_fail (command != NULL);
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return NULL;
 
-    buf = at_command_to_byte_array (command, is_raw, priv->send_lf);
-    g_return_if_fail (buf != NULL);
-
-    mm_serial_port_queue_command (MM_SERIAL_PORT (self),
-                                  buf,
-                                  TRUE,
-                                  timeout_seconds,
-                                  cancellable,
-                                  (MMSerialResponseFn) callback,
-                                  user_data);
-}
-
-void
-mm_at_serial_port_queue_command_cached (MMAtSerialPort *self,
-                                        const char *command,
-                                        guint32 timeout_seconds,
-                                        gboolean is_raw,
-                                        GCancellable *cancellable,
-                                        MMAtSerialResponseFn callback,
-                                        gpointer user_data)
-{
-    GByteArray *buf;
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
-
-    g_return_if_fail (self != NULL);
-    g_return_if_fail (MM_IS_AT_SERIAL_PORT (self));
-    g_return_if_fail (command != NULL);
-
-    buf = at_command_to_byte_array (command, is_raw, priv->send_lf);
-    g_return_if_fail (buf != NULL);
-
-    mm_serial_port_queue_command_cached (MM_SERIAL_PORT (self),
-                                         buf,
-                                         TRUE,
-                                         timeout_seconds,
-                                         cancellable,
-                                         (MMSerialResponseFn) callback,
-                                         user_data);
+    str = (GString *)g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
+    return str->str;
 }
 
 static void
-debug_log (MMSerialPort *port, const char *prefix, const char *buf, gsize len)
+string_free (GString *str)
+{
+    g_string_free (str, TRUE);
+}
+
+static void
+serial_command_ready (MMPortSerial *port,
+                      GAsyncResult *res,
+                      GSimpleAsyncResult *simple)
+{
+    GByteArray *response_buffer;
+    GError *error = NULL;
+    GString *response;
+
+    response_buffer = mm_port_serial_command_finish (port, res, &error);
+    if (!response_buffer) {
+        g_simple_async_result_take_error (simple, error);
+        g_simple_async_result_complete (simple);
+        g_object_unref (simple);
+        return;
+    }
+
+    /* Build a GString just with the response we need, and clear the
+     * processed range from the response buffer */
+    response = g_string_new_len ((const gchar *)response_buffer->data, response_buffer->len);
+    if (response_buffer->len > 0)
+        g_byte_array_remove_range (response_buffer, 0, response_buffer->len);
+    g_byte_array_unref (response_buffer);
+
+    g_simple_async_result_set_op_res_gpointer (simple,
+                                               response,
+                                               (GDestroyNotify)string_free);
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+void
+mm_port_serial_at_command (MMPortSerialAt *self,
+                           const char *command,
+                           guint32 timeout_seconds,
+                           gboolean is_raw,
+                           gboolean allow_cached,
+                           GCancellable *cancellable,
+                           GAsyncReadyCallback callback,
+                           gpointer user_data)
+{
+    GSimpleAsyncResult *simple;
+    GByteArray *buf;
+
+    g_return_if_fail (self != NULL);
+    g_return_if_fail (MM_IS_PORT_SERIAL_AT (self));
+    g_return_if_fail (command != NULL);
+
+    buf = at_command_to_byte_array (command,
+                                    is_raw,
+                                    (mm_port_get_subsys (MM_PORT (self)) == MM_PORT_SUBSYS_TTY ?
+                                     self->priv->send_lf :
+                                     TRUE));
+    g_return_if_fail (buf != NULL);
+
+    simple = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        mm_port_serial_at_command);
+
+    mm_port_serial_command (MM_PORT_SERIAL (self),
+                            buf,
+                            timeout_seconds,
+                            allow_cached,
+                            cancellable,
+                            (GAsyncReadyCallback)serial_command_ready,
+                            simple);
+    g_byte_array_unref (buf);
+}
+
+static void
+debug_log (MMPortSerial *port, const char *prefix, const char *buf, gsize len)
 {
     static GString *debug = NULL;
     const char *s;
@@ -438,106 +442,113 @@ debug_log (MMSerialPort *port, const char *prefix, const char *buf, gsize len)
 }
 
 void
-mm_at_serial_port_set_flags (MMAtSerialPort *self, MMAtPortFlag flags)
+mm_port_serial_at_set_flags (MMPortSerialAt *self, MMPortSerialAtFlag flags)
 {
     g_return_if_fail (self != NULL);
-    g_return_if_fail (MM_IS_AT_SERIAL_PORT (self));
-    g_return_if_fail (flags <= (MM_AT_PORT_FLAG_PRIMARY |
-                                MM_AT_PORT_FLAG_SECONDARY |
-                                MM_AT_PORT_FLAG_PPP |
-                                MM_AT_PORT_FLAG_GPS_CONTROL));
+    g_return_if_fail (MM_IS_PORT_SERIAL_AT (self));
+    g_return_if_fail (flags <= (MM_PORT_SERIAL_AT_FLAG_PRIMARY |
+                                MM_PORT_SERIAL_AT_FLAG_SECONDARY |
+                                MM_PORT_SERIAL_AT_FLAG_PPP |
+                                MM_PORT_SERIAL_AT_FLAG_GPS_CONTROL));
 
-    MM_AT_SERIAL_PORT_GET_PRIVATE (self)->flags = flags;
+    self->priv->flags = flags;
 }
 
-MMAtPortFlag
-mm_at_serial_port_get_flags (MMAtSerialPort *self)
+MMPortSerialAtFlag
+mm_port_serial_at_get_flags (MMPortSerialAt *self)
 {
-    g_return_val_if_fail (self != NULL, MM_AT_PORT_FLAG_NONE);
-    g_return_val_if_fail (MM_IS_AT_SERIAL_PORT (self), MM_AT_PORT_FLAG_NONE);
+    g_return_val_if_fail (self != NULL, MM_PORT_SERIAL_AT_FLAG_NONE);
+    g_return_val_if_fail (MM_IS_PORT_SERIAL_AT (self), MM_PORT_SERIAL_AT_FLAG_NONE);
 
-    return MM_AT_SERIAL_PORT_GET_PRIVATE (self)->flags;
+    return self->priv->flags;
 }
 
 /*****************************************************************************/
 
 void
-mm_at_serial_port_run_init_sequence (MMAtSerialPort *self)
+mm_port_serial_at_run_init_sequence (MMPortSerialAt *self)
 {
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
     guint i;
 
-    if (!priv->init_sequence)
+    if (!self->priv->init_sequence)
         return;
 
     mm_dbg ("(%s): running init sequence...", mm_port_get_device (MM_PORT (self)));
 
     /* Just queue the init commands, don't wait for reply */
-    for (i = 0; priv->init_sequence[i]; i++) {
-        mm_at_serial_port_queue_command (self,
-                                         priv->init_sequence[i],
-                                         3,
-                                         FALSE,
-                                         NULL,
-                                         NULL,
-                                         NULL);
+    for (i = 0; self->priv->init_sequence[i]; i++) {
+        mm_port_serial_at_command (self,
+                                   self->priv->init_sequence[i],
+                                   3,
+                                   FALSE,
+                                   FALSE,
+                                   NULL,
+                                   NULL,
+                                   NULL);
     }
 }
 
 static void
-config (MMSerialPort *self)
+config (MMPortSerial *_self)
 {
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
+    MMPortSerialAt *self = MM_PORT_SERIAL_AT (_self);
 
-    if (priv->init_sequence_enabled)
-        mm_at_serial_port_run_init_sequence (MM_AT_SERIAL_PORT (self));
+    if (self->priv->init_sequence_enabled)
+        mm_port_serial_at_run_init_sequence (self);
 }
 
 /*****************************************************************************/
 
-MMAtSerialPort *
-mm_at_serial_port_new (const char *name)
+MMPortSerialAt *
+mm_port_serial_at_new (const char *name,
+                       MMPortSubsys subsys)
 {
-    return MM_AT_SERIAL_PORT (g_object_new (MM_TYPE_AT_SERIAL_PORT,
+    g_return_val_if_fail (subsys == MM_PORT_SUBSYS_TTY ||
+                          subsys == MM_PORT_SUBSYS_USB ||
+                          subsys == MM_PORT_SUBSYS_UNIX, NULL);
+
+    return MM_PORT_SERIAL_AT (g_object_new (MM_TYPE_PORT_SERIAL_AT,
                                             MM_PORT_DEVICE, name,
-                                            MM_PORT_SUBSYS, MM_PORT_SUBSYS_TTY,
+                                            MM_PORT_SUBSYS, subsys,
                                             MM_PORT_TYPE, MM_PORT_TYPE_AT,
                                             NULL));
 }
 
 static void
-mm_at_serial_port_init (MMAtSerialPort *self)
+mm_port_serial_at_init (MMPortSerialAt *self)
 {
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
+    self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self, MM_TYPE_PORT_SERIAL_AT, MMPortSerialAtPrivate);
 
     /* By default, remove echo */
-    priv->remove_echo = TRUE;
+    self->priv->remove_echo = TRUE;
     /* By default, run init sequence during first port opening */
-    priv->init_sequence_enabled = TRUE;
+    self->priv->init_sequence_enabled = TRUE;
 
     /* By default, don't send line feed */
-    priv->send_lf = FALSE;
+    self->priv->send_lf = FALSE;
 }
 
 static void
-set_property (GObject *object, guint prop_id,
-              const GValue *value, GParamSpec *pspec)
+set_property (GObject *object,
+              guint prop_id,
+              const GValue *value,
+              GParamSpec *pspec)
 {
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (object);
+    MMPortSerialAt *self = MM_PORT_SERIAL_AT (object);
 
     switch (prop_id) {
     case PROP_REMOVE_ECHO:
-        priv->remove_echo = g_value_get_boolean (value);
+        self->priv->remove_echo = g_value_get_boolean (value);
         break;
     case PROP_INIT_SEQUENCE_ENABLED:
-        priv->init_sequence_enabled = g_value_get_boolean (value);
+        self->priv->init_sequence_enabled = g_value_get_boolean (value);
         break;
     case PROP_INIT_SEQUENCE:
-        g_strfreev (priv->init_sequence);
-        priv->init_sequence = g_value_dup_boxed (value);
+        g_strfreev (self->priv->init_sequence);
+        self->priv->init_sequence = g_value_dup_boxed (value);
         break;
     case PROP_SEND_LF:
-        priv->send_lf = g_value_get_boolean (value);
+        self->priv->send_lf = g_value_get_boolean (value);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -546,23 +557,25 @@ set_property (GObject *object, guint prop_id,
 }
 
 static void
-get_property (GObject *object, guint prop_id,
-              GValue *value, GParamSpec *pspec)
+get_property (GObject *object,
+              guint prop_id,
+              GValue *value,
+              GParamSpec *pspec)
 {
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (object);
+    MMPortSerialAt *self = MM_PORT_SERIAL_AT (object);
 
     switch (prop_id) {
     case PROP_REMOVE_ECHO:
-        g_value_set_boolean (value, priv->remove_echo);
+        g_value_set_boolean (value, self->priv->remove_echo);
         break;
     case PROP_INIT_SEQUENCE_ENABLED:
-        g_value_set_boolean (value, priv->init_sequence_enabled);
+        g_value_set_boolean (value, self->priv->init_sequence_enabled);
         break;
     case PROP_INIT_SEQUENCE:
-        g_value_set_boxed (value, priv->init_sequence);
+        g_value_set_boxed (value, self->priv->init_sequence);
         break;
     case PROP_SEND_LF:
-        g_value_set_boolean (value, priv->send_lf);
+        g_value_set_boolean (value, self->priv->send_lf);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -573,51 +586,49 @@ get_property (GObject *object, guint prop_id,
 static void
 finalize (GObject *object)
 {
-    MMAtSerialPort *self = MM_AT_SERIAL_PORT (object);
-    MMAtSerialPortPrivate *priv = MM_AT_SERIAL_PORT_GET_PRIVATE (self);
+    MMPortSerialAt *self = MM_PORT_SERIAL_AT (object);
 
-    while (priv->unsolicited_msg_handlers) {
-        MMAtUnsolicitedMsgHandler *handler = (MMAtUnsolicitedMsgHandler *) priv->unsolicited_msg_handlers->data;
+    while (self->priv->unsolicited_msg_handlers) {
+        MMAtUnsolicitedMsgHandler *handler = (MMAtUnsolicitedMsgHandler *) self->priv->unsolicited_msg_handlers->data;
 
         if (handler->notify)
             handler->notify (handler->user_data);
 
         g_regex_unref (handler->regex);
         g_slice_free (MMAtUnsolicitedMsgHandler, handler);
-        priv->unsolicited_msg_handlers = g_slist_delete_link (priv->unsolicited_msg_handlers,
-                                                              priv->unsolicited_msg_handlers);
+        self->priv->unsolicited_msg_handlers = g_slist_delete_link (self->priv->unsolicited_msg_handlers,
+                                                                    self->priv->unsolicited_msg_handlers);
     }
 
-    if (priv->response_parser_notify)
-        priv->response_parser_notify (priv->response_parser_user_data);
+    if (self->priv->response_parser_notify)
+        self->priv->response_parser_notify (self->priv->response_parser_user_data);
 
-    g_strfreev (priv->init_sequence);
+    g_strfreev (self->priv->init_sequence);
 
-    G_OBJECT_CLASS (mm_at_serial_port_parent_class)->finalize (object);
+    G_OBJECT_CLASS (mm_port_serial_at_parent_class)->finalize (object);
 }
 
 static void
-mm_at_serial_port_class_init (MMAtSerialPortClass *klass)
+mm_port_serial_at_class_init (MMPortSerialAtClass *klass)
 {
     GObjectClass *object_class = G_OBJECT_CLASS (klass);
-    MMSerialPortClass *port_class = MM_SERIAL_PORT_CLASS (klass);
+    MMPortSerialClass *serial_class = MM_PORT_SERIAL_CLASS (klass);
 
-    g_type_class_add_private (object_class, sizeof (MMAtSerialPortPrivate));
+    g_type_class_add_private (object_class, sizeof (MMPortSerialAtPrivate));
 
     /* Virtual methods */
     object_class->set_property = set_property;
     object_class->get_property = get_property;
     object_class->finalize = finalize;
 
-    port_class->parse_unsolicited = parse_unsolicited;
-    port_class->parse_response = parse_response;
-    port_class->handle_response = handle_response;
-    port_class->debug_log = debug_log;
-    port_class->config = config;
+    serial_class->parse_unsolicited = parse_unsolicited;
+    serial_class->parse_response = parse_response;
+    serial_class->debug_log = debug_log;
+    serial_class->config = config;
 
     g_object_class_install_property
         (object_class, PROP_REMOVE_ECHO,
-         g_param_spec_boolean (MM_AT_SERIAL_PORT_REMOVE_ECHO,
+         g_param_spec_boolean (MM_PORT_SERIAL_AT_REMOVE_ECHO,
                                "Remove echo",
                                "Built-in echo removal should be applied",
                                TRUE,
@@ -625,7 +636,7 @@ mm_at_serial_port_class_init (MMAtSerialPortClass *klass)
 
     g_object_class_install_property
         (object_class, PROP_INIT_SEQUENCE_ENABLED,
-         g_param_spec_boolean (MM_AT_SERIAL_PORT_INIT_SEQUENCE_ENABLED,
+         g_param_spec_boolean (MM_PORT_SERIAL_AT_INIT_SEQUENCE_ENABLED,
                                "Init sequence enabled",
                                "Whether the initialization sequence should be run",
                                TRUE,
@@ -633,7 +644,7 @@ mm_at_serial_port_class_init (MMAtSerialPortClass *klass)
 
     g_object_class_install_property
         (object_class, PROP_INIT_SEQUENCE,
-         g_param_spec_boxed (MM_AT_SERIAL_PORT_INIT_SEQUENCE,
+         g_param_spec_boxed (MM_PORT_SERIAL_AT_INIT_SEQUENCE,
                              "Init sequence",
                              "Initialization sequence",
                              G_TYPE_STRV,
@@ -641,7 +652,7 @@ mm_at_serial_port_class_init (MMAtSerialPortClass *klass)
 
     g_object_class_install_property
         (object_class, PROP_SEND_LF,
-         g_param_spec_boolean (MM_AT_SERIAL_PORT_SEND_LF,
+         g_param_spec_boolean (MM_PORT_SERIAL_AT_SEND_LF,
                                "Send LF",
                                "Send line-feed at the end of each AT command sent",
                                FALSE,

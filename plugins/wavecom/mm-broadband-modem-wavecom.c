@@ -1046,6 +1046,43 @@ load_access_technologies (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
+/* After SIM unlock (Modem interface) */
+
+static gboolean
+modem_after_sim_unlock_finish (MMIfaceModem *self,
+                               GAsyncResult *res,
+                               GError **error)
+{
+    return TRUE;
+}
+
+static gboolean
+after_sim_unlock_wait_cb (GSimpleAsyncResult *result)
+{
+    g_simple_async_result_complete (result);
+    g_object_unref (result);
+    return FALSE;
+}
+
+static void
+modem_after_sim_unlock (MMIfaceModem *self,
+                        GAsyncReadyCallback callback,
+                        gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    /* A short wait is necessary for SIM to become ready, otherwise reloading
+     * facility lock states may fail with a +CME ERROR: 515 error.
+     */
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        modem_after_sim_unlock);
+
+    g_timeout_add_seconds (5, (GSourceFunc)after_sim_unlock_wait_cb, result);
+}
+
+/*****************************************************************************/
 /* Flow control (Modem interface) */
 
 static gboolean
@@ -1130,7 +1167,7 @@ static void
 setup_ports (MMBroadbandModem *self)
 {
     gpointer parser;
-    MMAtSerialPort *primary;
+    MMPortSerialAt *primary;
     GRegex *regex;
 
     /* Call parent's setup ports first always */
@@ -1150,7 +1187,7 @@ setup_ports (MMBroadbandModem *self)
     mm_serial_parser_v1_set_custom_regex (parser, regex, NULL);
     g_regex_unref (regex);
 
-    mm_at_serial_port_set_response_parser (MM_AT_SERIAL_PORT (primary),
+    mm_port_serial_at_set_response_parser (MM_PORT_SERIAL_AT (primary),
                                            mm_serial_parser_v1_parse,
                                            parser,
                                            mm_serial_parser_v1_destroy);
@@ -1198,6 +1235,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface->set_current_bands_finish = set_current_bands_finish;
     iface->load_access_technologies = load_access_technologies;
     iface->load_access_technologies_finish = load_access_technologies_finish;
+    iface->modem_after_sim_unlock = modem_after_sim_unlock;
+    iface->modem_after_sim_unlock_finish = modem_after_sim_unlock_finish;
     iface->setup_flow_control = setup_flow_control;
     iface->setup_flow_control_finish = setup_flow_control_finish;
     iface->modem_power_up = modem_power_up;

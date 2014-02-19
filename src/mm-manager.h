@@ -30,7 +30,10 @@
 #define MM_IS_MANAGER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((obj), MM_TYPE_MANAGER))
 #define MM_MANAGER_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), MM_TYPE_MANAGER, MMManagerClass))
 
-#define MM_MANAGER_CONNECTION "connection" /* Construct-only */
+#define MM_MANAGER_CONNECTION  "connection"  /* Construct-only */
+#define MM_MANAGER_AUTO_SCAN   "auto-scan"   /* Construct-only */
+#define MM_MANAGER_ENABLE_TEST "enable-test" /* Construct-only */
+#define MM_MANAGER_PLUGIN_DIR  "plugin-dir"  /* Construct-only */
 
 typedef struct _MMManagerPrivate MMManagerPrivate;
 
@@ -46,6 +49,9 @@ typedef struct {
 GType mm_manager_get_type (void);
 
 MMManager       *mm_manager_new         (GDBusConnection *bus,
+                                         const gchar *plugin_dir,
+                                         gboolean auto_scan,
+                                         gboolean enable_test,
                                          GError **error);
 
 void             mm_manager_start       (MMManager *manager,
