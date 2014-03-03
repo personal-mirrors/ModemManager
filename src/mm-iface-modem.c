@@ -964,6 +964,30 @@ periodic_access_technologies_check (MMIfaceModem *self)
     return TRUE;
 }
 
+void
+mm_iface_modem_refresh_access_technologies (MMIfaceModem *self)
+{
+    AccessTechnologiesCheckContext *ctx;
+
+    if (G_UNLIKELY (!access_technologies_check_context_quark))
+        access_technologies_check_context_quark = (g_quark_from_static_string (
+                                                       ACCESS_TECHNOLOGIES_CHECK_CONTEXT_TAG));
+
+    ctx = g_object_get_qdata (G_OBJECT (self), access_technologies_check_context_quark);
+    if (!ctx)
+        return;
+
+    /* Re-set timeout */
+    if (ctx->timeout_source)
+        g_source_remove (ctx->timeout_source);
+    ctx->timeout_source = g_timeout_add_seconds (ACCESS_TECHNOLOGIES_CHECK_TIMEOUT_SEC,
+                                                 (GSourceFunc)periodic_access_technologies_check,
+                                                 self);
+
+    /* Get first access technology value */
+    periodic_access_technologies_check (self);
+}
+
 static void
 periodic_access_technologies_check_disable (MMIfaceModem *self)
 {
@@ -1011,16 +1035,13 @@ periodic_access_technologies_check_enable (MMIfaceModem *self)
     /* Create context and keep it as object data */
     mm_dbg ("Periodic access technology checks enabled");
     ctx = g_new0 (AccessTechnologiesCheckContext, 1);
-    ctx->timeout_source = g_timeout_add_seconds (ACCESS_TECHNOLOGIES_CHECK_TIMEOUT_SEC,
-                                                 (GSourceFunc)periodic_access_technologies_check,
-                                                 self);
     g_object_set_qdata_full (G_OBJECT (self),
                              access_technologies_check_context_quark,
                              ctx,
                              (GDestroyNotify)access_technologies_check_context_free);
 
-    /* Get first access technology value */
-    periodic_access_technologies_check (self);
+    /* Get first and setup timeout */
+    mm_iface_modem_refresh_access_technologies (self);
 }
 
 /*****************************************************************************/
@@ -4646,6 +4667,15 @@ interface_initialization_step (InitializationContext *ctx)
                           "handle-set-current-capabilities",
                           G_CALLBACK (handle_set_current_capabilities),
                           ctx->self);
+        /* Allow setting the power state to OFF even when the modem is in the
+         * FAILED state as this operation does not necessarily depend on the
+         * presence of a SIM. handle_set_power_state_auth_ready already ensures
+         * that the power state can only be set to OFF when the modem is in the
+         * FAILED state.  */
+        g_signal_connect (ctx->skeleton,
+                          "handle-set-power-state",
+                          G_CALLBACK (handle_set_power_state),
+                          ctx->self);
         /* Allow the reset and factory reset operation in FAILED state to rescue the modem.
          * Also, for a modem that doesn't support SIM hot swapping, a reset is needed to
          * force the modem to detect the newly inserted SIM. */
@@ -4683,10 +4713,6 @@ interface_initialization_step (InitializationContext *ctx)
             g_signal_connect (ctx->skeleton,
                               "handle-enable",
                               G_CALLBACK (handle_enable),
-                              ctx->self);
-            g_signal_connect (ctx->skeleton,
-                              "handle-set-power-state",
-                              G_CALLBACK (handle_set_power_state),
                               ctx->self);
             g_signal_connect (ctx->skeleton,
                               "handle-set-current-bands",
