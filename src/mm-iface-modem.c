@@ -4671,7 +4671,7 @@ interface_initialization_step (InitializationContext *ctx)
          * FAILED state as this operation does not necessarily depend on the
          * presence of a SIM. handle_set_power_state_auth_ready already ensures
          * that the power state can only be set to OFF when the modem is in the
-         * FAILED state.  */
+         * FAILED state. */
         g_signal_connect (ctx->skeleton,
                           "handle-set-power-state",
                           G_CALLBACK (handle_set_power_state),
