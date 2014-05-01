@@ -308,6 +308,9 @@ libmm-glib/generated/tests/Makefile
 libmm-glib/tests/Makefile
 vapi/Makefile
 cli/Makefile
+examples/Makefile
+examples/modem-watcher-python/Makefile
+examples/modem-watcher-javascript/Makefile
 ])
 AC_OUTPUT
 
