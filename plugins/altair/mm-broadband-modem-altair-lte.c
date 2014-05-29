@@ -59,6 +59,10 @@ struct _MMBroadbandModemAltairLtePrivate {
      * This indicates that there are no more SIM refreshes and we should
      * reregister the device.*/
     guint sim_refresh_timer_id;
+    /* Flag indicating that we are detaching from the network to process SIM
+     * refresh.  This is used to prevent connect requests while we're in this
+     * state.*/
+    gboolean sim_refresh_detach_in_progress;
     /* Regex for bearer related notifications */
     GRegex *statcm_regex;
     /* Regex for PCO notifications */
@@ -260,37 +264,6 @@ load_current_capabilities (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* supported/current Bands helpers*/
-
-static GArray *
-parse_bands_response (const gchar *response)
-{
-    guint32 bandval;
-    MMModemBand band;
-    gchar **split;
-    guint i, num_of_bands;
-    GArray *bands;
-
-    split = g_strsplit_set (response, ",", -1);
-    if (!split)
-        return NULL;
-
-    num_of_bands = g_strv_length (split);
-
-    bands = g_array_sized_new (FALSE, FALSE, sizeof (MMModemBand), num_of_bands);
-
-    for (i = 0; split[i]; i++) {
-        bandval = (guint32)strtoul (split[i], NULL, 10);
-        band = MM_MODEM_BAND_EUTRAN_I - 1 + bandval;
-        g_array_append_val (bands, band);
-    }
-
-    g_strfreev (split);
-
-    return bands;
-}
-
-/*****************************************************************************/
 /* Load supported bands (Modem interface) */
 
 static GArray *
@@ -330,7 +303,7 @@ load_supported_bands_done (MMIfaceModem *self,
      */
     response = mm_strip_tag (response, BANDCAP_TAG);
 
-    bands = parse_bands_response (response);
+    bands = mm_altair_parse_bands_response (response);
     if (!bands) {
         mm_dbg ("Failed to parse supported bands response");
         g_simple_async_result_set_error (
@@ -411,7 +384,7 @@ load_current_bands_done (MMIfaceModem *self,
      */
     response = mm_strip_tag (response, CFGBANDS_TAG);
 
-    bands = parse_bands_response (response);
+    bands = mm_altair_parse_bands_response (response);
     if (!bands) {
         mm_dbg ("Failed to parse current bands response");
         g_simple_async_result_set_error (
@@ -639,6 +612,7 @@ altair_reregister_ready (MMBaseModem *self,
     } else {
         mm_dbg ("Modem reregistered successfully");
     }
+    MM_BROADBAND_MODEM_ALTAIR_LTE (self)->priv->sim_refresh_detach_in_progress = FALSE;
 }
 
 static void
@@ -648,6 +622,7 @@ altair_deregister_ready (MMBaseModem *self,
 {
     if (!mm_base_modem_at_command_finish (self, res, NULL)) {
         mm_dbg ("Deregister modem failed");
+        MM_BROADBAND_MODEM_ALTAIR_LTE (self)->priv->sim_refresh_detach_in_progress = FALSE;
         return;
     }
 
@@ -681,6 +656,10 @@ altair_load_own_numbers_ready (MMIfaceModem *iface_modem,
         g_strfreev (str_list);
     }
 
+    /* Set this flag to prevent connect requests from being processed while we
+     * detach from the network.*/
+    self->priv->sim_refresh_detach_in_progress = TRUE;
+
     /* Deregister */
     mm_dbg ("Reregistering modem");
     mm_base_modem_at_command (
@@ -703,8 +682,8 @@ altair_sim_refresh_timer_expired (MMBroadbandModemAltairLte *self)
         MM_IFACE_MODEM (self),
         (GAsyncReadyCallback)altair_load_own_numbers_ready,
         self);
-
     self->priv->sim_refresh_timer_id = 0;
+
     return FALSE;
 }
 
@@ -1408,6 +1387,12 @@ mm_broadband_modem_altair_lte_new (const gchar *device,
                          NULL);
 }
 
+gboolean
+mm_broadband_modem_altair_lte_is_sim_refresh_detach_in_progress (MMBroadbandModem *self)
+{
+    return MM_BROADBAND_MODEM_ALTAIR_LTE (self)->priv->sim_refresh_detach_in_progress;
+}
+
 static void
 mm_broadband_modem_altair_lte_init (MMBroadbandModemAltairLte *self)
 {
@@ -1419,6 +1404,7 @@ mm_broadband_modem_altair_lte_init (MMBroadbandModemAltairLte *self)
 
     self->priv->sim_refresh_regex = g_regex_new ("\\r\\n\\%NOTIFYEV:\\s*SIMREFRESH,?(\\d*)\\r+\\n",
                                                  G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+    self->priv->sim_refresh_detach_in_progress = FALSE;
     self->priv->sim_refresh_timer_id = 0;
     self->priv->statcm_regex = g_regex_new ("\\r\\n\\%STATCM:\\s*(\\d*),?(\\d*)\\r+\\n",
                                             G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
