@@ -24,8 +24,8 @@
 
 #include "mm-charsets.h"
 #include "mm-port-serial-at.h"
-#include "mm-bearer.h"
-#include "mm-sim.h"
+#include "mm-base-bearer.h"
+#include "mm-base-sim.h"
 
 #define MM_TYPE_IFACE_MODEM            (mm_iface_modem_get_type ())
 #define MM_IFACE_MODEM(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_IFACE_MODEM, MMIfaceModem))
@@ -315,18 +315,18 @@ struct _MMIfaceModem {
     void (*create_sim) (MMIfaceModem *self,
                         GAsyncReadyCallback callback,
                         gpointer user_data);
-    MMSim * (*create_sim_finish) (MMIfaceModem *self,
-                                  GAsyncResult *res,
-                                  GError **error);
+    MMBaseSim * (*create_sim_finish) (MMIfaceModem *self,
+                                      GAsyncResult *res,
+                                      GError **error);
 
     /* Create bearer */
     void (*create_bearer) (MMIfaceModem *self,
                            MMBearerProperties *properties,
                            GAsyncReadyCallback callback,
                            gpointer user_data);
-    MMBearer * (*create_bearer_finish) (MMIfaceModem *self,
-                                        GAsyncResult *res,
-                                        GError **error);
+    MMBaseBearer * (*create_bearer_finish) (MMIfaceModem *self,
+                                            GAsyncResult *res,
+                                            GError **error);
 };
 
 GType mm_iface_modem_get_type (void);
@@ -462,13 +462,13 @@ gboolean mm_iface_modem_set_current_bands_finish (MMIfaceModem *self,
                                                   GError **error);
 
 /* Allow creating bearers */
-void     mm_iface_modem_create_bearer         (MMIfaceModem *self,
-                                               MMBearerProperties *properties,
-                                               GAsyncReadyCallback callback,
-                                               gpointer user_data);
-MMBearer *mm_iface_modem_create_bearer_finish (MMIfaceModem *self,
-                                               GAsyncResult *res,
-                                               GError **error);
+void          mm_iface_modem_create_bearer         (MMIfaceModem *self,
+                                                    MMBearerProperties *properties,
+                                                    GAsyncReadyCallback callback,
+                                                    gpointer user_data);
+MMBaseBearer *mm_iface_modem_create_bearer_finish  (MMIfaceModem *self,
+                                                    GAsyncResult *res,
+                                                    GError **error);
 
 /* Helper method to wait for a final state */
 void         mm_iface_modem_wait_for_final_state        (MMIfaceModem *self,

@@ -31,20 +31,24 @@
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-3gpp.h"
 #include "mm-iface-modem-messaging.h"
+#include "mm-iface-modem-location.h"
 #include "mm-base-modem-at.h"
 #include "mm-broadband-modem-cinterion.h"
 #include "mm-modem-helpers-cinterion.h"
+#include "mm-common-cinterion.h"
 
 static void iface_modem_init      (MMIfaceModem *iface);
 static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
 static void iface_modem_messaging_init (MMIfaceModemMessaging *iface);
+static void iface_modem_location_init (MMIfaceModemLocation *iface);
 
 static MMIfaceModem *iface_modem_parent;
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemCinterion, mm_broadband_modem_cinterion, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init))
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_LOCATION, iface_modem_location_init))
 
 struct _MMBroadbandModemCinterionPrivate {
     /* Flag to know if we should try AT^SIND or not to get psinfo */
@@ -1656,6 +1660,18 @@ after_sim_unlock (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
+/* Setup ports (Broadband modem class) */
+
+static void
+setup_ports (MMBroadbandModem *self)
+{
+    /* Call parent's setup ports first always */
+    MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_cinterion_parent_class)->setup_ports (self);
+
+    mm_common_cinterion_setup_gps_port (self);
+}
+
+/*****************************************************************************/
 
 MMBroadbandModemCinterion *
 mm_broadband_modem_cinterion_new (const gchar *device,
@@ -1755,12 +1771,27 @@ iface_modem_messaging_init (MMIfaceModemMessaging *iface)
 }
 
 static void
+iface_modem_location_init (MMIfaceModemLocation *iface)
+{
+    mm_common_cinterion_peek_parent_location_interface (iface);
+
+    iface->load_capabilities = mm_common_cinterion_location_load_capabilities;
+    iface->load_capabilities_finish = mm_common_cinterion_location_load_capabilities_finish;
+    iface->enable_location_gathering = mm_common_cinterion_enable_location_gathering;
+    iface->enable_location_gathering_finish = mm_common_cinterion_enable_location_gathering_finish;
+    iface->disable_location_gathering = mm_common_cinterion_disable_location_gathering;
+    iface->disable_location_gathering_finish = mm_common_cinterion_disable_location_gathering_finish;
+}
+
+static void
 mm_broadband_modem_cinterion_class_init (MMBroadbandModemCinterionClass *klass)
 {
     GObjectClass *object_class = G_OBJECT_CLASS (klass);
+    MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
 
     g_type_class_add_private (object_class, sizeof (MMBroadbandModemCinterionPrivate));
 
     /* Virtual methods */
     object_class->finalize = finalize;
+    broadband_modem_class->setup_ports = setup_ports;
 }

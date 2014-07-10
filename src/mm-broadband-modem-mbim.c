@@ -1054,15 +1054,15 @@ modem_power_up (MMIfaceModem *self,
 /*****************************************************************************/
 /* Create Bearer (Modem interface) */
 
-static MMBearer *
+static MMBaseBearer *
 modem_create_bearer_finish (MMIfaceModem *self,
                             GAsyncResult *res,
                             GError **error)
 {
-    MMBearer *bearer;
+    MMBaseBearer *bearer;
 
     bearer = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
-    mm_dbg ("New bearer created at DBus path '%s'", mm_bearer_get_path (bearer));
+    mm_dbg ("New bearer created at DBus path '%s'", mm_base_bearer_get_path (bearer));
 
     return g_object_ref (bearer);
 }
@@ -1073,7 +1073,7 @@ typedef struct {
 } FindSessionId;
 
 static void
-bearer_list_session_id_foreach (MMBearer *bearer,
+bearer_list_session_id_foreach (MMBaseBearer *bearer,
                                 gpointer user_data)
 {
     FindSessionId *ctx = user_data;
@@ -1124,7 +1124,7 @@ modem_create_bearer (MMIfaceModem *self,
                      GAsyncReadyCallback callback,
                      gpointer user_data)
 {
-    MMBearer *bearer;
+    MMBaseBearer *bearer;
     GSimpleAsyncResult *result;
     gint session_id;
 
@@ -1161,7 +1161,7 @@ modem_create_bearer (MMIfaceModem *self,
 /*****************************************************************************/
 /* Create SIM (Modem interface) */
 
-static MMSim *
+static MMBaseSim *
 create_sim_finish (MMIfaceModem *self,
                    GAsyncResult *res,
                    GError **error)
@@ -1562,7 +1562,7 @@ update_registration_info (MMBroadbandModemMbim *self,
 
     if (reg_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
         reg_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
-        if (self->priv->current_operator_id &&
+        if (self->priv->current_operator_id && operator_id_take &&
             g_str_equal (self->priv->current_operator_id, operator_id_take)) {
             g_free (operator_id_take);
         } else {
@@ -1570,7 +1570,7 @@ update_registration_info (MMBroadbandModemMbim *self,
             self->priv->current_operator_id = operator_id_take;
         }
 
-        if (self->priv->current_operator_name &&
+        if (self->priv->current_operator_name && operator_name_take &&
             g_str_equal (self->priv->current_operator_name, operator_name_take)) {
             g_free (operator_name_take);
         } else {
@@ -1580,11 +1580,11 @@ update_registration_info (MMBroadbandModemMbim *self,
     } else {
         if (self->priv->current_operator_id) {
             g_free (self->priv->current_operator_id);
-            self->priv->current_operator_id = 0;
+            self->priv->current_operator_id = NULL;
         }
         if (self->priv->current_operator_name) {
             g_free (self->priv->current_operator_name);
-            self->priv->current_operator_name = 0;
+            self->priv->current_operator_name = NULL;
         }
         g_free (operator_id_take);
         g_free (operator_name_take);
@@ -1632,15 +1632,15 @@ typedef struct {
 } ReportDisconnectedStatusContext;
 
 static void
-bearer_list_report_disconnected_status (MMBearer *bearer,
+bearer_list_report_disconnected_status (MMBaseBearer *bearer,
                                         gpointer user_data)
 {
     ReportDisconnectedStatusContext *ctx = user_data;
 
     if (MM_IS_BEARER_MBIM (bearer) &&
         mm_bearer_mbim_get_session_id (MM_BEARER_MBIM (bearer)) == ctx->session_id) {
-        mm_dbg ("Bearer '%s' was disconnected.", mm_bearer_get_path (bearer));
-        mm_bearer_report_connection_status (bearer, MM_BEARER_CONNECTION_STATUS_DISCONNECTED);
+        mm_dbg ("Bearer '%s' was disconnected.", mm_base_bearer_get_path (bearer));
+        mm_base_bearer_report_connection_status (bearer, MM_BEARER_CONNECTION_STATUS_DISCONNECTED);
     }
 }
 
@@ -2811,7 +2811,7 @@ enable_unsolicited_events_messaging (MMIfaceModemMessaging *self,
 /*****************************************************************************/
 /* Create SMS (Messaging interface) */
 
-static MMSms *
+static MMBaseSms *
 messaging_create_sms (MMIfaceModemMessaging *self)
 {
     return mm_sms_mbim_new (MM_BASE_MODEM (self));

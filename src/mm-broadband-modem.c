@@ -43,7 +43,7 @@
 #include "mm-bearer-list.h"
 #include "mm-sms-list.h"
 #include "mm-sms-part-3gpp.h"
-#include "mm-sim.h"
+#include "mm-base-sim.h"
 #include "mm-log.h"
 #include "mm-modem-helpers.h"
 #include "mm-error-helpers.h"
@@ -122,7 +122,7 @@ struct _MMBroadbandModemPrivate {
     /*<--- Modem interface --->*/
     /* Properties */
     GObject *modem_dbus_skeleton;
-    MMSim *modem_sim;
+    MMBaseSim *modem_sim;
     MMBearerList *modem_bearer_list;
     MMModemState modem_state;
     /* Implementation helpers */
@@ -233,18 +233,18 @@ response_processor_string_ignore_at_errors (MMBaseModem *self,
 /*****************************************************************************/
 /* Create Bearer (Modem interface) */
 
-static MMBearer *
+static MMBaseBearer *
 modem_create_bearer_finish (MMIfaceModem *self,
                             GAsyncResult *res,
                             GError **error)
 {
-    MMBearer *bearer;
+    MMBaseBearer *bearer;
 
     if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
         return NULL;
 
     bearer = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
-    mm_dbg ("New bearer created at DBus path '%s'", mm_bearer_get_path (bearer));
+    mm_dbg ("New bearer created at DBus path '%s'", mm_base_bearer_get_path (bearer));
 
     return g_object_ref (bearer);
 }
@@ -254,7 +254,7 @@ broadband_bearer_new_ready (GObject *source,
                             GAsyncResult *res,
                             GSimpleAsyncResult *simple)
 {
-    MMBearer *bearer = NULL;
+    MMBaseBearer *bearer = NULL;
     GError *error = NULL;
 
     bearer = mm_broadband_bearer_new_finish (res, &error);
@@ -294,12 +294,12 @@ modem_create_bearer (MMIfaceModem *self,
 /*****************************************************************************/
 /* Create SIM (Modem interface) */
 
-static MMSim *
+static MMBaseSim *
 modem_create_sim_finish (MMIfaceModem *self,
-                            GAsyncResult *res,
-                            GError **error)
+                         GAsyncResult *res,
+                         GError **error)
 {
-    return mm_sim_new_finish (res, error);
+    return mm_base_sim_new_finish (res, error);
 }
 
 static void
@@ -308,10 +308,10 @@ modem_create_sim (MMIfaceModem *self,
                   gpointer user_data)
 {
     /* New generic SIM */
-    mm_sim_new (MM_BASE_MODEM (self),
-                NULL, /* cancellable */
-                callback,
-                user_data);
+    mm_base_sim_new (MM_BASE_MODEM (self),
+                     NULL, /* cancellable */
+                     callback,
+                     user_data);
 }
 
 /*****************************************************************************/
@@ -6193,10 +6193,10 @@ modem_messaging_load_initial_sms_parts (MMIfaceModemMessaging *self,
 /*****************************************************************************/
 /* Create SMS (Messaging interface) */
 
-static MMSms *
+static MMBaseSms *
 modem_messaging_create_sms (MMIfaceModemMessaging *self)
 {
-    return mm_sms_new (MM_BASE_MODEM (self));
+    return mm_base_sms_new (MM_BASE_MODEM (self));
 }
 
 /*****************************************************************************/

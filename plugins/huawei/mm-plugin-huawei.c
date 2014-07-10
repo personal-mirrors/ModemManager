@@ -250,6 +250,7 @@ static void
 huawei_custom_init_step (HuaweiCustomInitContext *ctx)
 {
     FirstInterfaceContext *fi_ctx;
+    GUdevDevice *port;
 
     /* If cancelled, end */
     if (g_cancellable_is_cancelled (ctx->cancellable)) {
@@ -286,7 +287,8 @@ huawei_custom_init_step (HuaweiCustomInitContext *ctx)
     }
 
     /* Try to get a port map from the modem */
-    if (!ctx->getportmode_done) {
+    port = mm_port_probe_peek_port (ctx->probe);
+    if (!ctx->getportmode_done && !g_udev_device_get_property_as_boolean (port, "ID_MM_HUAWEI_DISABLE_GETPORTMODE")) {
         if (ctx->getportmode_retries == 0) {
             g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
             huawei_custom_init_context_complete_and_free (ctx);
@@ -519,10 +521,13 @@ grab_port (MMPlugin *self,
            MMPortProbe *probe,
            GError **error)
 {
-    MMPortSerialAtFlag pflags;
+    MMPortSerialAtFlag pflags = MM_PORT_SERIAL_AT_FLAG_NONE;
     GUdevDevice *port;
+    MMPortType port_type;
 
+    port_type = mm_port_probe_get_port_type (probe);
     port = mm_port_probe_peek_port (probe);
+
     if (g_udev_device_get_property_as_boolean (port, "ID_MM_HUAWEI_AT_PORT")) {
         mm_dbg ("(%s/%s)' Port flagged as primary",
                 mm_port_probe_get_port_subsys (probe),
@@ -533,6 +538,11 @@ grab_port (MMPlugin *self,
                 mm_port_probe_get_port_subsys (probe),
                 mm_port_probe_get_port_name (probe));
         pflags = MM_PORT_SERIAL_AT_FLAG_PPP;
+    } else if (g_udev_device_get_property_as_boolean (port, "ID_MM_HUAWEI_GPS_PORT")) {
+        mm_dbg ("(%s/%s) Port flagged as GPS",
+                mm_port_probe_get_port_subsys (probe),
+                mm_port_probe_get_port_name (probe));
+        port_type = MM_PORT_TYPE_GPS;
     } else {
         gchar *str;
 
@@ -549,7 +559,7 @@ grab_port (MMPlugin *self,
                                     mm_port_probe_get_port_subsys (probe),
                                     mm_port_probe_get_port_name (probe),
                                     mm_port_probe_get_parent_path (probe),
-                                    mm_port_probe_get_port_type (probe),
+                                    port_type,
                                     pflags,
                                     error);
 }
