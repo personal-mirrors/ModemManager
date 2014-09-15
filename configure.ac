@@ -2,7 +2,7 @@ AC_PREREQ([2.63])
 
 dnl The MM version number
 m4_define([mm_major_version], [1])
-m4_define([mm_minor_version], [3])
+m4_define([mm_minor_version], [5])
 m4_define([mm_micro_version], [0])
 m4_define([mm_version],
           [mm_major_version.mm_minor_version.mm_micro_version])
@@ -15,9 +15,9 @@ dnl        If the interface has grown (that is, the new library is compatible
 dnl            with old code), increment a.
 dnl        If the interface has changed in an incompatible way (that is,
 dnl            functions have changed or been removed), then zero a.
-m4_define([mm_glib_lt_current],  [1])
+m4_define([mm_glib_lt_current],  [2])
 m4_define([mm_glib_lt_revision], [0])
-m4_define([mm_glib_lt_age],      [1])
+m4_define([mm_glib_lt_age],      [2])
 
 
 AC_INIT([ModemManager],[mm_version],[modemmanager-devel@lists.freedesktop.org],[ModemManager])
@@ -201,7 +201,7 @@ AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support])
 AM_CONDITIONAL(WITH_MBIM, test "x$with_mbim" = "xyes")
 case $with_mbim in
     yes)
-        PKG_CHECK_MODULES(MBIM, [mbim-glib >= 1.9], [have_mbim=yes],[have_mbim=no])
+        PKG_CHECK_MODULES(MBIM, [mbim-glib >= 1.10], [have_mbim=yes],[have_mbim=no])
         if test "x$have_mbim" = "xno"; then
             AC_MSG_ERROR([Couldn't find libmbim-glib. Install it, or otherwise configure using --without-mbim to disable MBIM support.])
         else
