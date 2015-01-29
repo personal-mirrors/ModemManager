@@ -110,6 +110,9 @@ AC_SUBST(GLIB_MKENUMS)
 GDBUS_CODEGEN=`$PKG_CONFIG --variable=gdbus_codegen gio-2.0`
 AC_SUBST(GDBUS_CODEGEN)
 
+# Code coverage (disabled by default)
+AX_CODE_COVERAGE
+
 # GObject Introspection
 GOBJECT_INTROSPECTION_CHECK([0.9.6])
 
@@ -201,7 +204,7 @@ AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support])
 AM_CONDITIONAL(WITH_MBIM, test "x$with_mbim" = "xyes")
 case $with_mbim in
     yes)
-        PKG_CHECK_MODULES(MBIM, [mbim-glib >= 1.10], [have_mbim=yes],[have_mbim=no])
+        PKG_CHECK_MODULES(MBIM, [mbim-glib >= 1.11.1], [have_mbim=yes],[have_mbim=no])
         if test "x$have_mbim" = "xno"; then
             AC_MSG_ERROR([Couldn't find libmbim-glib. Install it, or otherwise configure using --without-mbim to disable MBIM support.])
         else
@@ -302,7 +305,13 @@ echo "
     compiler:                ${CC}
     cflags:                  ${CFLAGS}
     Maintainer mode:         ${USE_MAINTAINER_MODE}
+    Code coverage:           ${CODE_COVERAGE_ENABLED}"
+if test "x${CODE_COVERAGE_ENABLED}" = "xyes"; then
+	echo "    Code coverage cflags:    ${CODE_COVERAGE_CFLAGS}"
+	echo "    Code coverage ldflags:   ${CODE_COVERAGE_LDFLAGS}"
+fi
 
+echo "
     D-Bus system directory:  ${DBUS_SYS_DIR}
     udev base directory:     ${UDEV_BASE_DIR}
     systemd unit directory:  ${with_systemdsystemunitdir}

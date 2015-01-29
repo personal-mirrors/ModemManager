@@ -3,6 +3,9 @@ include $(top_srcdir)/gtester.make
 
 # Common CPPFLAGS and LDFLAGS
 
+AM_CFLAGS = $(CODE_COVERAGE_CFLAGS)
+AM_LDFLAGS = $(CODE_COVERAGE_LDFLAGS)
+
 PLUGIN_COMMON_COMPILER_FLAGS = \
 	$(MM_CFLAGS) \
 	$(GUDEV_CFLAGS)	\
@@ -13,13 +16,15 @@ PLUGIN_COMMON_COMPILER_FLAGS = \
 	-I$(top_builddir)/include \
 	-I$(top_srcdir)/libmm-glib \
 	-I$(top_srcdir)/libmm-glib/generated \
-	-I$(top_builddir)/libmm-glib/generated
+	-I$(top_builddir)/libmm-glib/generated \
+	$(AM_CFLAGS)
 
 PLUGIN_COMMON_LINKER_FLAGS = \
 	$(GUDEV_LIBS) \
 	$(MM_LIBS) \
 	-module \
-	-avoid-version
+	-avoid-version \
+	$(AM_LDFLAGS)
 
 if WITH_QMI
 PLUGIN_COMMON_COMPILER_FLAGS += $(QMI_CFLAGS)
@@ -142,7 +147,8 @@ pkglib_LTLIBRARIES = \
 	libmm-plugin-mbm.la \
 	libmm-plugin-via.la \
 	libmm-plugin-telit.la \
-	libmm-plugin-mtk.la
+	libmm-plugin-mtk.la \
+	libmm-plugin-haier.la
 
 # Generic
 libmm_plugin_generic_la_SOURCES = \
@@ -510,6 +516,14 @@ libmm_plugin_mtk_la_SOURCES = \
 libmm_plugin_mtk_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
 libmm_plugin_mtk_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
 udevrules_DATA += mtk/77-mm-mtk-port-types.rules
+
+# Haier
+libmm_plugin_haier_la_SOURCES = \
+	haier/mm-plugin-haier.c \
+	haier/mm-plugin-haier.h
+libmm_plugin_haier_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+libmm_plugin_haier_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
+udevrules_DATA += haier/77-mm-haier-port-types.rules
 
 
 # Additional files to include in the distribution
