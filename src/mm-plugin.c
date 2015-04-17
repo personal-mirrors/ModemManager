@@ -214,9 +214,20 @@ apply_pre_probing_filters (MMPlugin *self,
     }
 
     /* The plugin may specify that only some drivers are supported, or that some
-     * drivers are not supported. If that is the case, filter by driver */
+     * drivers are not supported. If that is the case, filter by driver.
+     *
+     * The QMI and MBIM *forbidden* drivers filter is implicit. This is, if the
+     * plugin doesn't explicitly specify that QMI is allowed and we find a QMI
+     * port, the plugin will filter the device. Same for MBIM.
+     *
+     * The opposite, though, is not applicable. If the plugin specifies that QMI
+     * is allowed, we won't take that as a mandatory requirement to look for the
+     * QMI driver (as the plugin may handle non-QMI modems as well)
+     */
     if (self->priv->drivers ||
-        self->priv->forbidden_drivers) {
+        self->priv->forbidden_drivers ||
+        !self->priv->qmi ||
+        !self->priv->mbim) {
         static const gchar *virtual_drivers [] = { "virtual", NULL };
         const gchar **drivers;
 
@@ -254,8 +265,9 @@ apply_pre_probing_filters (MMPlugin *self,
                 return TRUE;
             }
         }
+
         /* Filtering by forbidden drivers */
-        else {
+        if (self->priv->forbidden_drivers) {
             for (i = 0; self->priv->forbidden_drivers[i]; i++) {
                 guint j;
 
@@ -267,6 +279,36 @@ apply_pre_probing_filters (MMPlugin *self,
                                 g_udev_device_get_name (port));
                         return TRUE;
                     }
+                }
+            }
+        }
+
+        /* Implicit filter for forbidden QMI driver */
+        if (!self->priv->qmi) {
+            guint j;
+
+            for (j = 0; drivers[j]; j++) {
+                /* If we match the QMI driver: unsupported */
+                if (g_str_equal (drivers[j], "qmi_wwan")) {
+                    mm_dbg ("(%s) [%s] filtered by implicit QMI driver",
+                            self->priv->name,
+                            g_udev_device_get_name (port));
+                    return TRUE;
+                }
+            }
+        }
+
+        /* Implicit filter for forbidden MBIM driver */
+        if (!self->priv->mbim) {
+            guint j;
+
+            for (j = 0; drivers[j]; j++) {
+                /* If we match the MBIM driver: unsupported */
+                if (g_str_equal (drivers[j], "cdc_mbim")) {
+                    mm_dbg ("(%s) [%s] filtered by implicit MBIM driver",
+                            self->priv->name,
+                            g_udev_device_get_name (port));
+                    return TRUE;
                 }
             }
         }
@@ -308,6 +350,14 @@ apply_pre_probing_filters (MMPlugin *self,
             if (!self->priv->product_ids[i].l)
                 product_filtered = TRUE;
         }
+
+        /* When both vendor ids and product ids are given, it may be the case that
+         * we're allowing a full VID1 and only a subset of another VID2, so try to
+         * handle that properly. */
+        if (vendor_filtered && !product_filtered)
+            vendor_filtered = FALSE;
+        if (product_filtered && self->priv->vendor_ids && !vendor_filtered)
+            product_filtered = FALSE;
     }
 
     /* If we got filtered by vendor or product IDs; mark it as unsupported only if:

@@ -96,7 +96,9 @@ libport_la_SOURCES = \
 	mm-port-serial-qcdm.c \
 	mm-port-serial-qcdm.h \
 	mm-port-serial-gps.c \
-	mm-port-serial-gps.h
+	mm-port-serial-gps.h \
+	mm-serial-parsers.c \
+	mm-serial-parsers.h
 
 # Additional QMI support in libserial
 if WITH_QMI
@@ -166,6 +168,7 @@ ModemManager_SOURCES = \
 	mm-context.c \
 	mm-log.c \
 	mm-log.h \
+	mm-utils.h \
 	mm-private-boxed-types.h \
 	mm-private-boxed-types.c \
 	mm-auth.h \
@@ -218,8 +221,6 @@ ModemManager_SOURCES = \
 	mm-iface-modem-oma.c \
 	mm-broadband-modem.h \
 	mm-broadband-modem.c \
-	mm-serial-parsers.c \
-	mm-serial-parsers.h \
 	mm-port-probe.h \
 	mm-port-probe.c \
 	mm-port-probe-at.h \
@@ -237,6 +238,16 @@ ModemManager_SOURCES += \
 	mm-auth-provider-polkit.h
 ModemManager_LDADD += $(POLKIT_LIBS)
 ModemManager_CPPFLAGS += $(POLKIT_CFLAGS)
+endif
+
+# Additional suspend/resume support via systemd
+if SUSPEND_RESUME_SYSTEMD
+ModemManager_SOURCES += mm-sleep-monitor.h mm-sleep-monitor-systemd.c
+endif
+
+# Additional suspend/resume support via upower
+if SUSPEND_RESUME_UPOWER
+ModemManager_SOURCES += mm-sleep-monitor.h mm-sleep-monitor-upower.c
 endif
 
 # Additional QMI support in ModemManager

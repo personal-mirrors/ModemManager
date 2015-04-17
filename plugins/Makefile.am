@@ -126,10 +126,10 @@ pkglib_LTLIBRARIES = \
 	libmm-plugin-nokia-icera.la \
 	libmm-plugin-cinterion.la \
 	libmm-plugin-iridium.la \
-	libmm-plugin-gobi.la \
 	libmm-plugin-motorola.la \
 	libmm-plugin-novatel.la \
 	libmm-plugin-novatel-lte.la \
+	libmm-plugin-dell.la \
 	libmm-plugin-altair-lte.la \
 	libmm-plugin-samsung.la \
 	libmm-plugin-option.la \
@@ -144,6 +144,7 @@ pkglib_LTLIBRARIES = \
 	libmm-plugin-pantech.la \
 	libmm-plugin-zte.la \
 	libmm-plugin-sierra.la \
+	libmm-plugin-sierra-legacy.la \
 	libmm-plugin-mbm.la \
 	libmm-plugin-via.la \
 	libmm-plugin-telit.la \
@@ -171,15 +172,6 @@ libmm_plugin_motorola_la_SOURCES = \
 	motorola/mm-broadband-modem-motorola.h
 libmm_plugin_motorola_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
 libmm_plugin_motorola_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
-
-# Gobi
-libmm_plugin_gobi_la_SOURCES = \
-	gobi/mm-plugin-gobi.c \
-	gobi/mm-plugin-gobi.h \
-	gobi/mm-broadband-modem-gobi.c \
-	gobi/mm-broadband-modem-gobi.h
-libmm_plugin_gobi_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
-libmm_plugin_gobi_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
 
 # Huawei
 libmm_plugin_huawei_la_SOURCES = \
@@ -211,10 +203,9 @@ test_modem_helpers_huawei_LDADD = \
        $(top_builddir)/src/libmodem-helpers.la
 test_modem_helpers_huawei_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
 
-# MBM
-libmm_plugin_mbm_la_SOURCES = \
-	mbm/mm-plugin-mbm.c \
-	mbm/mm-plugin-mbm.h \
+# Common Mbm modem support library
+noinst_LTLIBRARIES += libmm-utils-mbm.la
+libmm_utils_mbm_la_SOURCES = \
 	mbm/mm-broadband-modem-mbm.c \
 	mbm/mm-broadband-modem-mbm.h \
 	mbm/mm-broadband-bearer-mbm.c \
@@ -223,8 +214,20 @@ libmm_plugin_mbm_la_SOURCES = \
 	mbm/mm-modem-helpers-mbm.h \
 	mbm/mm-sim-mbm.c \
 	mbm/mm-sim-mbm.h
-libmm_plugin_mbm_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+libmm_utils_mbm_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+libmm_utils_mbm_la_LIBADD = $(GUDEV_LIBS) $(MM_LIBS)
+
+MBM_COMMON_COMPILER_FLAGS = -I$(top_srcdir)/plugins/mbm
+MBM_COMMON_LIBADD_FLAGS = $(builddir)/libmm-utils-mbm.la
+
+# MBM
+libmm_plugin_mbm_la_SOURCES = \
+	mbm/mm-plugin-mbm.c \
+	mbm/mm-plugin-mbm.h
+libmm_plugin_mbm_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS) $(MBM_COMMON_COMPILER_FLAGS)
 libmm_plugin_mbm_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
+libmm_plugin_mbm_la_LIBADD = $(MBM_COMMON_LIBADD_FLAGS)
+
 udevrules_DATA += mbm/77-mm-ericsson-mbm.rules
 
 noinst_PROGRAMS += test-modem-helpers-mbm
@@ -262,10 +265,9 @@ libmm_plugin_hso_la_SOURCES = \
 libmm_plugin_hso_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
 libmm_plugin_hso_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
 
-# Sierra
-libmm_plugin_sierra_la_SOURCES = \
-	sierra/mm-plugin-sierra.c \
-	sierra/mm-plugin-sierra.h \
+# Common Sierra modem support library
+noinst_LTLIBRARIES += libmm-utils-sierra.la
+libmm_utils_sierra_la_SOURCES = \
 	sierra/mm-common-sierra.c \
 	sierra/mm-common-sierra.h \
 	sierra/mm-sim-sierra.c \
@@ -273,12 +275,29 @@ libmm_plugin_sierra_la_SOURCES = \
 	sierra/mm-broadband-bearer-sierra.c \
 	sierra/mm-broadband-bearer-sierra.h \
 	sierra/mm-broadband-modem-sierra.c \
-	sierra/mm-broadband-modem-sierra.h \
+	sierra/mm-broadband-modem-sierra.h
+libmm_utils_sierra_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+libmm_utils_sierra_la_LIBADD = $(GUDEV_LIBS) $(MM_LIBS)
+
+SIERRA_COMMON_COMPILER_FLAGS = -I$(top_srcdir)/plugins/sierra
+SIERRA_COMMON_LIBADD_FLAGS = $(builddir)/libmm-utils-sierra.la
+
+# Sierra (new QMI or MBIM modems)
+libmm_plugin_sierra_la_SOURCES = \
+	sierra/mm-plugin-sierra.c \
+	sierra/mm-plugin-sierra.h
+libmm_plugin_sierra_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+libmm_plugin_sierra_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
+
+# Sierra (legacy)
+libmm_plugin_sierra_legacy_la_SOURCES = \
+	sierra/mm-plugin-sierra-legacy.c \
+	sierra/mm-plugin-sierra-legacy.h \
 	sierra/mm-broadband-modem-sierra-icera.c \
 	sierra/mm-broadband-modem-sierra-icera.h
-libmm_plugin_sierra_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS) $(ICERA_COMMON_COMPILER_FLAGS)
-libmm_plugin_sierra_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
-libmm_plugin_sierra_la_LIBADD = $(ICERA_COMMON_LIBADD_FLAGS)
+libmm_plugin_sierra_legacy_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS) $(ICERA_COMMON_COMPILER_FLAGS) $(SIERRA_COMMON_COMPILER_FLAGS)
+libmm_plugin_sierra_legacy_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
+libmm_plugin_sierra_legacy_la_LIBADD = $(ICERA_COMMON_LIBADD_FLAGS) $(SIERRA_COMMON_LIBADD_FLAGS)
 
 # Wavecom (Sierra Airlink)
 libmm_plugin_wavecom_la_SOURCES = \
@@ -441,6 +460,19 @@ libmm_plugin_iridium_la_SOURCES = \
 libmm_plugin_iridium_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
 libmm_plugin_iridium_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
 
+# Common Novatel modem support library
+noinst_LTLIBRARIES += libmm-utils-novatel.la
+libmm_utils_novatel_la_SOURCES = \
+	novatel/mm-common-novatel.c \
+	novatel/mm-common-novatel.h \
+	novatel/mm-broadband-modem-novatel.c \
+	novatel/mm-broadband-modem-novatel.h
+libmm_utils_novatel_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+libmm_utils_novatel_la_LIBADD = $(GUDEV_LIBS) $(MM_LIBS)
+
+NOVATEL_COMMON_COMPILER_FLAGS = -I$(top_srcdir)/plugins/novatel
+NOVATEL_COMMON_LIBADD_FLAGS = $(builddir)/libmm-utils-novatel.la
+
 # Novatel LTE modem
 libmm_plugin_novatel_lte_la_SOURCES = \
 	novatel/mm-plugin-novatel-lte.c \
@@ -457,11 +489,18 @@ libmm_plugin_novatel_lte_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
 # Novatel non-LTE modem
 libmm_plugin_novatel_la_SOURCES = \
 	novatel/mm-plugin-novatel.c \
-	novatel/mm-plugin-novatel.h \
-	novatel/mm-broadband-modem-novatel.c \
-	novatel/mm-broadband-modem-novatel.h
-libmm_plugin_novatel_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+	novatel/mm-plugin-novatel.h
+libmm_plugin_novatel_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS) $(NOVATEL_COMMON_COMPILER_FLAGS)
 libmm_plugin_novatel_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
+libmm_plugin_novatel_la_LIBADD = $(NOVATEL_COMMON_LIBADD_FLAGS)
+
+# Dell (e.g. Novatel or Sierra) modem
+libmm_plugin_dell_la_SOURCES = \
+	dell/mm-plugin-dell.c \
+	dell/mm-plugin-dell.h
+libmm_plugin_dell_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS) $(NOVATEL_COMMON_COMPILER_FLAGS) $(SIERRA_COMMON_COMPILER_FLAGS) $(MBM_COMMON_COMPILER_FLAGS)
+libmm_plugin_dell_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
+libmm_plugin_dell_la_LIBADD = $(NOVATEL_COMMON_LIBADD_FLAGS) $(SIERRA_COMMON_LIBADD_FLAGS) $(MBM_COMMON_LIBADD_FLAGS)
 
 # Altair LTE modem
 libmm_plugin_altair_lte_la_SOURCES = \

@@ -101,6 +101,10 @@ static const NdisstatqryTest ndisstatqry_tests[] = {
     { "^NDISSTATQRY: 1,,,\"IPV4\",0,,,\"IPV6\"\r\n", TRUE,  TRUE,  TRUE,  FALSE },
     { "^NDISSTATQRY: 0,,,\"IPV4\",1,,,\"IPV6\"\r\n", TRUE,  FALSE, TRUE,  TRUE  },
     { "^NDISSTATQRY: 0,,,\"IPV4\",0,,,\"IPV6\"\r\n", TRUE,  FALSE, TRUE,  FALSE },
+    { "^NDISSTATQry:1",     TRUE, TRUE,  FALSE, FALSE },
+    { "^NDISSTATQry:1\r\n", TRUE, TRUE,  FALSE, FALSE },
+    { "^NDISSTATQry:0",     TRUE, FALSE, FALSE, FALSE },
+    { "^NDISSTATQry:0\r\n", TRUE, FALSE, FALSE, FALSE },
     { NULL, FALSE, FALSE, FALSE, FALSE }
 };
 
@@ -420,6 +424,7 @@ test_prefmode_response (void)
         found = mm_huawei_parse_prefmode_response (prefmode_response_tests[i].str,
                                                    combinations,
                                                    &error);
+        g_assert_no_error (error);
         g_assert (found != NULL);
         g_assert_cmpuint (found->allowed, ==, prefmode_response_tests[i].allowed);
         g_assert_cmpuint (found->preferred, ==, prefmode_response_tests[i].preferred);
@@ -672,6 +677,7 @@ test_syscfg_response (void)
                                                  combinations,
                                                  &error);
 
+        g_assert_no_error (error);
         g_assert (found != NULL);
         g_assert_cmpuint (found->allowed, ==, syscfg_response_tests[i].allowed);
         g_assert_cmpuint (found->preferred, ==, syscfg_response_tests[i].preferred);
@@ -993,6 +999,7 @@ test_syscfgex_response (void)
                                                    combinations,
                                                    &error);
 
+        g_assert_no_error (error);
         g_assert (found != NULL);
         g_assert_cmpuint (found->allowed, ==, syscfgex_response_tests[i].allowed);
         g_assert_cmpuint (found->preferred, ==, syscfgex_response_tests[i].preferred);
@@ -1085,8 +1092,10 @@ test_nwtime (void)
             g_assert (nwtime_tests[i].leap_seconds == mm_network_timezone_get_leap_seconds (tz));
         }
 
-        if (iso8601)
-            g_free (iso8601);
+        g_free (iso8601);
+
+        if (tz)
+            g_object_unref (tz);
     }
 }
 
@@ -1125,11 +1134,10 @@ test_time (void)
 
         g_assert (ret == time_tests[i].ret);
         g_assert (ret == (error ? FALSE : TRUE));
+        g_clear_error (&error);
 
         g_assert_cmpstr (time_tests[i].iso8601, ==, iso8601);
-
-        if (iso8601)
-            g_free (iso8601);
+        g_free (iso8601);
     }
 }
 
