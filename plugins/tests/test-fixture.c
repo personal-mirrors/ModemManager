@@ -15,6 +15,9 @@
 
 #include "test-fixture.h"
 
+/* Generic timeout for property updates. */
+static const guint wait_timeout = 120;
+
 void
 test_fixture_setup (TestFixture *fixture)
 {
@@ -127,7 +130,7 @@ test_fixture_get_modem (TestFixture *fixture)
             /* Wait a bit before re-checking. We can do this kind of wait
              * because properties in the manager are updated in another
              * thread */
-            g_assert_cmpuint (wait_time, <=, 20);
+            g_assert_cmpuint (wait_time, <=, wait_timeout);
             wait_time++;
             sleep (1);
         } else
@@ -173,7 +176,7 @@ test_fixture_no_modem (TestFixture *fixture)
             /* Wait a bit before re-checking. We can do this kind of wait
              * because properties in the manager are updated in another
              * thread */
-            g_assert_cmpuint (wait_time, <=, 20);
+            g_assert_cmpuint (wait_time, <=, wait_timeout);
             wait_time++;
             sleep (1);
         } else
