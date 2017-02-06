@@ -33,6 +33,8 @@
 #include "mm-common-novatel.h"
 #include "mm-broadband-modem-sierra.h"
 #include "mm-common-sierra.h"
+#include "mm-broadband-modem-telit.h"
+#include "mm-common-telit.h"
 #include "mm-log.h"
 
 #if defined WITH_QMI
@@ -45,15 +47,16 @@
 
 G_DEFINE_TYPE (MMPluginDell, mm_plugin_dell, MM_TYPE_PLUGIN)
 
-int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
-int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
+MM_PLUGIN_DEFINE_MAJOR_VERSION
+MM_PLUGIN_DEFINE_MINOR_VERSION
 
 #define TAG_DELL_MANUFACTURER   "dell-manufacturer"
 typedef enum {
     DELL_MANUFACTURER_UNKNOWN  = 0,
     DELL_MANUFACTURER_NOVATEL  = 1,
     DELL_MANUFACTURER_SIERRA   = 2,
-    DELL_MANUFACTURER_ERICSSON = 3
+    DELL_MANUFACTURER_ERICSSON = 3,
+    DELL_MANUFACTURER_TELIT    = 4
 } DellManufacturer;
 
 /*****************************************************************************/
@@ -118,6 +121,20 @@ sierra_custom_init_ready (MMPortProbe       *probe,
     custom_init_context_complete_and_free (ctx);
 }
 
+static void
+telit_custom_init_ready (MMPortProbe       *probe,
+                         GAsyncResult      *res,
+                         CustomInitContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!telit_custom_init_finish (probe, res, &error))
+        g_simple_async_result_take_error (ctx->result, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    custom_init_context_complete_and_free (ctx);
+}
+
 static void custom_init_step (CustomInitContext *ctx);
 
 static void
@@ -165,6 +182,8 @@ response_ready (MMPortSerialAt *port,
         manufacturer = DELL_MANUFACTURER_SIERRA;
     else if (strstr (lower, "ericsson"))
         manufacturer = DELL_MANUFACTURER_ERICSSON;
+    else if (strstr (lower, "telit"))
+        manufacturer = DELL_MANUFACTURER_TELIT;
     else
         manufacturer = DELL_MANUFACTURER_UNKNOWN;
     g_free (lower);
@@ -190,6 +209,15 @@ response_ready (MMPortSerialAt *port,
                                           ctx->cancellable,
                                           (GAsyncReadyCallback) sierra_custom_init_ready,
                                           ctx);
+            return;
+        }
+
+        if (manufacturer == DELL_MANUFACTURER_TELIT) {
+            telit_custom_init (ctx->probe,
+                               ctx->port,
+                               ctx->cancellable,
+                               (GAsyncReadyCallback) telit_custom_init_ready,
+                               ctx);
             return;
         }
 
@@ -296,8 +324,11 @@ dell_custom_init (MMPortProbe *probe,
                   gpointer user_data)
 {
     CustomInitContext *ctx;
+    MMKernelDevice *port_device;
 
-    ctx = g_slice_new (CustomInitContext);
+    port_device = mm_port_probe_peek_port (probe);
+
+    ctx = g_slice_new0 (CustomInitContext);
     ctx->result = g_simple_async_result_new (G_OBJECT (probe),
                                              callback,
                                              user_data,
@@ -306,7 +337,15 @@ dell_custom_init (MMPortProbe *probe,
     ctx->port = g_object_ref (port);
     ctx->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
     ctx->gmi_retries = 3;
+    ctx->cgmi_retries = 3;
     ctx->ati_retries = 3;
+
+    /* Dell-branded Telit modems always answer to +GMI
+     * Avoid +CGMI and ATI sending for minimizing port probing time */
+    if (mm_kernel_device_get_property_as_boolean (port_device, "ID_MM_TELIT_PORTS_TAGGED")) {
+        ctx->cgmi_retries = 0;
+        ctx->ati_retries = 0;
+    }
 
     custom_init_step (ctx);
 }
@@ -328,7 +367,7 @@ port_probe_list_has_manufacturer_port (GList *probes,
 
 static MMBaseModem *
 create_modem (MMPlugin *self,
-              const gchar *sysfs_path,
+              const gchar *uid,
               const gchar **drivers,
               guint16 vendor,
               guint16 product,
@@ -342,7 +381,7 @@ create_modem (MMPlugin *self,
 #if defined WITH_QMI
     if (mm_port_probe_list_has_qmi_port (probes)) {
         mm_dbg ("QMI-powered Dell-branded modem found...");
-        return MM_BASE_MODEM (mm_broadband_modem_qmi_new (sysfs_path,
+        return MM_BASE_MODEM (mm_broadband_modem_qmi_new (uid,
                                                           drivers,
                                                           mm_plugin_get_name (self),
                                                           vendor,
@@ -353,7 +392,7 @@ create_modem (MMPlugin *self,
 #if defined WITH_MBIM
     if (mm_port_probe_list_has_mbim_port (probes)) {
         mm_dbg ("MBIM-powered Dell-branded modem found...");
-        return MM_BASE_MODEM (mm_broadband_modem_mbim_new (sysfs_path,
+        return MM_BASE_MODEM (mm_broadband_modem_mbim_new (uid,
                                                            drivers,
                                                            mm_plugin_get_name (self),
                                                            vendor,
@@ -363,7 +402,7 @@ create_modem (MMPlugin *self,
 
     if (port_probe_list_has_manufacturer_port (probes, DELL_MANUFACTURER_NOVATEL)) {
         mm_dbg ("Novatel-powered Dell-branded modem found...");
-        return MM_BASE_MODEM (mm_broadband_modem_novatel_new (sysfs_path,
+        return MM_BASE_MODEM (mm_broadband_modem_novatel_new (uid,
                                                               drivers,
                                                               mm_plugin_get_name (self),
                                                               vendor,
@@ -372,15 +411,24 @@ create_modem (MMPlugin *self,
 
     if (port_probe_list_has_manufacturer_port (probes, DELL_MANUFACTURER_SIERRA)) {
         mm_dbg ("Sierra-powered Dell-branded modem found...");
-        return MM_BASE_MODEM (mm_broadband_modem_sierra_new (sysfs_path,
+        return MM_BASE_MODEM (mm_broadband_modem_sierra_new (uid,
                                                              drivers,
                                                              mm_plugin_get_name (self),
                                                              vendor,
                                                              product));
     }
 
+    if (port_probe_list_has_manufacturer_port (probes, DELL_MANUFACTURER_TELIT)) {
+        mm_dbg ("Telit-powered Dell-branded modem found...");
+        return MM_BASE_MODEM (mm_broadband_modem_telit_new (uid,
+                                                            drivers,
+                                                            mm_plugin_get_name (self),
+                                                            vendor,
+                                                            product));
+    }
+
     mm_dbg ("Dell-branded generic modem found...");
-    return MM_BASE_MODEM (mm_broadband_modem_new (sysfs_path,
+    return MM_BASE_MODEM (mm_broadband_modem_new (uid,
                                                   drivers,
                                                   mm_plugin_get_name (self),
                                                   vendor,
@@ -395,14 +443,14 @@ grab_port (MMPlugin *self,
            MMPortProbe *probe,
            GError **error)
 {
-    /* Only Sierra needs custom grab port, due to the port type hints */
     if (MM_IS_BROADBAND_MODEM_SIERRA (modem))
         return mm_common_sierra_grab_port (self, modem, probe, error);
 
+    if (MM_IS_BROADBAND_MODEM_TELIT (modem))
+        return telit_grab_port (self, modem, probe, error);
+
     return mm_base_modem_grab_port (modem,
-                                    mm_port_probe_get_port_subsys (probe),
-                                    mm_port_probe_get_port_name (probe),
-                                    mm_port_probe_get_parent_path (probe),
+                                    mm_port_probe_peek_port (probe),
                                     mm_port_probe_get_port_type (probe),
                                     MM_PORT_SERIAL_AT_FLAG_NONE,
                                     error);

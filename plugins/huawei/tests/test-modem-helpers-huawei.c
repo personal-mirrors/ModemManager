@@ -16,6 +16,7 @@
 #include <glib.h>
 #include <glib-object.h>
 #include <locale.h>
+#include <arpa/inet.h>
 
 #include <ModemManager.h>
 #define _LIBMM_INSIDE_MM
@@ -135,6 +136,55 @@ test_ndisstatqry (void)
         g_assert (ipv6_available == ndisstatqry_tests[i].expected_ipv6_available);
         if (ipv6_available)
             g_assert (ipv6_connected == ndisstatqry_tests[i].expected_ipv6_connected);
+    }
+}
+
+/*****************************************************************************/
+/* Test ^DHCP responses */
+
+typedef struct {
+    const gchar *str;
+    const gchar *expected_addr;
+    guint expected_prefix;
+    const gchar *expected_gateway;
+    const gchar *expected_dns1;
+    const gchar *expected_dns2;
+} DhcpTest;
+
+static const DhcpTest dhcp_tests[] = {
+    { "^DHCP:a3ec5c64,f8ffffff,a1ec5c64,a1ec5c64,2200b10a,74bba80a,236800,236800\r\n",
+      "100.92.236.163", 29, "100.92.236.161", "10.177.0.34", "10.168.187.116" },
+    { "^DHCP: 1010A0A,FCFFFFFF,2010A0A,2010A0A,0,0,150000000,150000000\r\n",
+      "10.10.1.1", 30, "10.10.1.2", "0.0.0.0", "0.0.0.0" },
+    { "^DHCP: CCDB080A,F8FFFFFF,C9DB080A,C9DB080A,E67B59C0,E77B59C0,85600,85600\r\n",
+      "10.8.219.204", 29, "10.8.219.201", "192.89.123.230", "192.89.123.231" },
+    { NULL }
+};
+
+static void
+test_dhcp (void)
+{
+    guint i;
+
+    for (i = 0; dhcp_tests[i].str; i++) {
+        GError *error = NULL;
+        guint addr, prefix, gateway, dns1, dns2;
+
+        g_assert (mm_huawei_parse_dhcp_response (
+                      dhcp_tests[i].str,
+                      &addr,
+                      &prefix,
+                      &gateway,
+                      &dns1,
+                      &dns2,
+                      &error) == TRUE);
+        g_assert_no_error (error);
+
+        g_assert_cmpstr (inet_ntoa (*((struct in_addr *) &addr)), ==, dhcp_tests[i].expected_addr);
+        g_assert_cmpint (prefix, ==, dhcp_tests[i].expected_prefix);
+        g_assert_cmpstr (inet_ntoa (*((struct in_addr *) &gateway)), ==, dhcp_tests[i].expected_gateway);
+        g_assert_cmpstr (inet_ntoa (*((struct in_addr *) &dns1)), ==, dhcp_tests[i].expected_dns1);
+        g_assert_cmpstr (inet_ntoa (*((struct in_addr *) &dns2)), ==, dhcp_tests[i].expected_dns2);
     }
 }
 
@@ -657,6 +707,20 @@ static const SyscfgResponseTest syscfg_response_tests[] = {
         .format = "^SYSCFG:(2,13,14,16),(0-3),((400000,\"WCDMA2100\")),(0-2),(0-4)\r\n",
         .allowed = MM_MODEM_MODE_3G,
         .preferred = MM_MODEM_MODE_NONE
+    },
+    {
+        /* Non-sensical acquisition order (WCDMA-only but acquire WCDMA-then-GSM */
+        .str = "^SYSCFG: 14,2,400000,0,3\r\n",
+        .format = "^SYSCFG:(2,13,14,16),(0-3),((400000,\"WCDMA2100\")),(0-2),(0-4)\r\n",
+        .allowed = MM_MODEM_MODE_3G,
+        .preferred = MM_MODEM_MODE_NONE
+    },
+    {
+        /* Non-sensical acquisition order (GSM-only but acquire GSM-then-WCDMA */
+        .str = "^SYSCFG: 13,1,400000,0,3\r\n",
+        .format = "^SYSCFG:(2,13,14,16),(0-3),((400000,\"WCDMA2100\")),(0-2),(0-4)\r\n",
+        .allowed = MM_MODEM_MODE_2G,
+        .preferred = MM_MODEM_MODE_NONE
     }
 };
 
@@ -1142,6 +1206,66 @@ test_time (void)
 }
 
 /*****************************************************************************/
+/* Test ^HCSQ responses */
+
+typedef struct {
+    const gchar *str;
+    gboolean ret;
+    MMModemAccessTechnology act;
+    guint value1;
+    guint value2;
+    guint value3;
+    guint value4;
+    guint value5;
+} HcsqTest;
+
+static const HcsqTest hcsq_tests[] = {
+    { "^HCSQ:\"LTE\",30,19,66,0\r\n",  TRUE,  MM_MODEM_ACCESS_TECHNOLOGY_LTE,     30, 19,  66, 0, 0 },
+    { "^HCSQ: \"WCDMA\",30,30,58\r\n", TRUE,  MM_MODEM_ACCESS_TECHNOLOGY_UMTS,    30, 30,  58, 0, 0 },
+    { "^HCSQ: \"GSM\",36,255\r\n",     TRUE,  MM_MODEM_ACCESS_TECHNOLOGY_GSM,     36, 255,  0, 0, 0 },
+    { "^HCSQ: \"NOSERVICE\"\r\n",      FALSE, MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN,  0,   0,  0, 0, 0 },
+    { NULL,                            FALSE, MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN,  0,   0,  0, 0, 0 }
+};
+
+static void
+test_hcsq (void)
+{
+    guint i;
+
+    for (i = 0; hcsq_tests[i].str; i++) {
+        GError *error = NULL;
+        MMModemAccessTechnology act;
+        guint value1 = 0;
+        guint value2 = 0;
+        guint value3 = 0;
+        guint value4 = 0;
+        guint value5 = 0;
+        gboolean ret;
+
+        ret = mm_huawei_parse_hcsq_response (hcsq_tests[i].str,
+                                             &act,
+                                             &value1,
+                                             &value2,
+                                             &value3,
+                                             &value4,
+                                             &value5,
+                                             &error);
+        g_assert (ret == hcsq_tests[i].ret);
+        if (ret) {
+            g_assert_no_error (error);
+            g_assert_cmpint (hcsq_tests[i].act, ==, act);
+            g_assert_cmpint (hcsq_tests[i].value1, ==, value1);
+            g_assert_cmpint (hcsq_tests[i].value2, ==, value2);
+            g_assert_cmpint (hcsq_tests[i].value3, ==, value3);
+            g_assert_cmpint (hcsq_tests[i].value4, ==, value4);
+            g_assert_cmpint (hcsq_tests[i].value5, ==, value5);
+        } else
+            g_assert (error);
+        g_clear_error (&error);
+    }
+}
+
+/*****************************************************************************/
 
 void
 _mm_log (const char *loc,
@@ -1167,10 +1291,10 @@ int main (int argc, char **argv)
 {
     setlocale (LC_ALL, "");
 
-    g_type_init ();
     g_test_init (&argc, &argv, NULL);
 
     g_test_add_func ("/MM/huawei/ndisstatqry", test_ndisstatqry);
+    g_test_add_func ("/MM/huawei/dhcp", test_dhcp);
     g_test_add_func ("/MM/huawei/sysinfo", test_sysinfo);
     g_test_add_func ("/MM/huawei/sysinfoex", test_sysinfoex);
     g_test_add_func ("/MM/huawei/prefmode", test_prefmode);
@@ -1181,6 +1305,7 @@ int main (int argc, char **argv)
     g_test_add_func ("/MM/huawei/syscfgex/response", test_syscfgex_response);
     g_test_add_func ("/MM/huawei/nwtime", test_nwtime);
     g_test_add_func ("/MM/huawei/time", test_time);
+    g_test_add_func ("/MM/huawei/hcsq", test_hcsq);
 
     return g_test_run ();
 }

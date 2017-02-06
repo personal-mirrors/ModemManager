@@ -10,10 +10,12 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details:
  *
- * Copyright (C) 2013 Aleksander Morgado <aleksander@gnu.org>
+ * Copyright (C) 2016 Aleksander Morgado <aleksander@gnu.org>
  */
 
+#include <sys/types.h>
 #include <unistd.h>
+
 #include <glib.h>
 #include <glib-object.h>
 
@@ -25,16 +27,18 @@
 /*****************************************************************************/
 
 static void
-test_something (TestFixture *fixture)
+test_enable_disable (TestFixture *fixture)
 {
     GError *error = NULL;
     MMObject *obj;
     MMModem *modem;
     TestPortContext *port0;
-    const gchar *ports [] = {
-        "abstract:port0",
-        NULL
-    };
+    gchar *ports [] = { NULL, NULL };
+
+    /* Create port name, and add process ID so that multiple runs of this test
+     * in the same system don't clash with each other */
+	ports[0] = g_strdup_printf ("abstract:port0:%ld", (glong) getpid ());
+    g_debug ("test service generic: using abstract port at '%s'", ports[0]);
 
     /* Setup new port context */
     port0 = test_port_context_new (ports[0]);
@@ -46,7 +50,7 @@ test_something (TestFixture *fixture)
 
     /* Set the test profile */
     test_fixture_set_profile (fixture,
-                              "test-something",
+                              "test-enable-disable",
                               "Generic",
                               (const gchar *const *)ports);
 
@@ -69,6 +73,8 @@ test_something (TestFixture *fixture)
     /* Stop port context */
     test_port_context_stop (port0);
     test_port_context_free (port0);
+
+    g_free (ports[0]);
 }
 
 /*****************************************************************************/
@@ -76,10 +82,9 @@ test_something (TestFixture *fixture)
 int main (int   argc,
           char *argv[])
 {
-    g_type_init ();
     g_test_init (&argc, &argv, NULL);
 
-    TEST_ADD ("/MM/Service/Generic", test_something);
+    TEST_ADD ("/MM/Service/Generic/enable-disable", test_enable_disable);
 
     return g_test_run ();
 }

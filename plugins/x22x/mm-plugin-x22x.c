@@ -32,8 +32,8 @@
 
 G_DEFINE_TYPE (MMPluginX22x, mm_plugin_x22x, MM_TYPE_PLUGIN)
 
-int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
-int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
+MM_PLUGIN_DEFINE_MAJOR_VERSION
+MM_PLUGIN_DEFINE_MINOR_VERSION
 
 /*****************************************************************************/
 /* Custom init */
@@ -189,7 +189,7 @@ x22x_custom_init (MMPortProbe *probe,
 
 static MMBaseModem *
 create_modem (MMPlugin *self,
-              const gchar *sysfs_path,
+              const gchar *uid,
               const gchar **drivers,
               guint16 vendor,
               guint16 product,
@@ -199,7 +199,7 @@ create_modem (MMPlugin *self,
 #if defined WITH_QMI
     if (mm_port_probe_list_has_qmi_port (probes)) {
         mm_dbg ("QMI-powered X22X modem found...");
-        return MM_BASE_MODEM (mm_broadband_modem_qmi_new (sysfs_path,
+        return MM_BASE_MODEM (mm_broadband_modem_qmi_new (uid,
                                                           drivers,
                                                           mm_plugin_get_name (self),
                                                           vendor,
@@ -207,7 +207,7 @@ create_modem (MMPlugin *self,
     }
 #endif
 
-    return MM_BASE_MODEM (mm_broadband_modem_x22x_new (sysfs_path,
+    return MM_BASE_MODEM (mm_broadband_modem_x22x_new (uid,
                                                        drivers,
                                                        mm_plugin_get_name (self),
                                                        vendor,
@@ -220,7 +220,7 @@ grab_port (MMPlugin *self,
            MMPortProbe *probe,
            GError **error)
 {
-    GUdevDevice *port;
+    MMKernelDevice *port;
     MMPortType ptype;
     MMPortSerialAtFlag pflags = MM_PORT_SERIAL_AT_FLAG_NONE;
 
@@ -232,12 +232,12 @@ grab_port (MMPlugin *self,
          * be the data/primary port on these devices.  We have to tag them based on
          * what the Windows .INF files say the port layout should be.
          */
-        if (g_udev_device_get_property_as_boolean (port, "ID_MM_X22X_PORT_TYPE_MODEM")) {
+        if (mm_kernel_device_get_property_as_boolean (port, "ID_MM_X22X_PORT_TYPE_MODEM")) {
             mm_dbg ("x22x: AT port '%s/%s' flagged as primary",
                     mm_port_probe_get_port_subsys (probe),
                     mm_port_probe_get_port_name (probe));
             pflags = MM_PORT_SERIAL_AT_FLAG_PRIMARY;
-        } else if (g_udev_device_get_property_as_boolean (port, "ID_MM_X22X_PORT_TYPE_AUX")) {
+        } else if (mm_kernel_device_get_property_as_boolean (port, "ID_MM_X22X_PORT_TYPE_AUX")) {
             mm_dbg ("x22x: AT port '%s/%s' flagged as secondary",
                     mm_port_probe_get_port_subsys (probe),
                     mm_port_probe_get_port_name (probe));
@@ -252,9 +252,7 @@ grab_port (MMPlugin *self,
     }
 
     return mm_base_modem_grab_port (modem,
-                                    mm_port_probe_get_port_subsys (probe),
-                                    mm_port_probe_get_port_name (probe),
-                                    mm_port_probe_get_parent_path (probe),
+                                    port,
                                     ptype,
                                     pflags,
                                     error);

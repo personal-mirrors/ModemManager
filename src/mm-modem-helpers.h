@@ -51,6 +51,11 @@ gchar       *mm_strip_quotes (gchar *str);
 const gchar *mm_strip_tag    (const gchar *str,
                               const gchar *cmd);
 
+gchar **mm_split_string_groups (const gchar *str);
+
+GArray *mm_parse_uint_list (const gchar  *str,
+                            GError      **error);
+
 guint mm_count_bits_set (gulong number);
 
 gchar *mm_create_device_identifier (guint vid,
@@ -83,6 +88,13 @@ GArray *mm_filter_supported_capabilities (MMModemCapability all,
                                           const GArray *supported_combinations);
 
 /*****************************************************************************/
+/* VOICE specific helpers and utilities */
+/*****************************************************************************/
+GRegex *mm_voice_ring_regex_get (void);
+GRegex *mm_voice_cring_regex_get(void);
+GRegex *mm_voice_clip_regex_get (void);
+
+/*****************************************************************************/
 /* 3GPP specific helpers and utilities */
 /*****************************************************************************/
 
@@ -107,6 +119,18 @@ void mm_3gpp_network_info_list_free (GList *info_list);
 GList *mm_3gpp_parse_cops_test_response (const gchar *reply,
                                          GError **error);
 
+/* AT+COPS? (current operator) response parser */
+gboolean mm_3gpp_parse_cops_read_response (const gchar              *response,
+                                           guint                    *out_mode,
+                                           guint                    *out_format,
+                                           gchar                   **out_operator,
+                                           MMModemAccessTechnology  *out_act,
+                                           GError                  **error);
+
+/* Logic to compare two APN names */
+gboolean mm_3gpp_cmp_apn_name (const gchar *requested,
+                               const gchar *existing);
+
 /* AT+CGDCONT=? (PDP context format) test parser */
 typedef struct {
     guint min_cid;
@@ -126,6 +150,15 @@ typedef struct {
 void mm_3gpp_pdp_context_list_free (GList *pdp_list);
 GList *mm_3gpp_parse_cgdcont_read_response (const gchar *reply,
                                             GError **error);
+
+/* AT+CGACT? (active PDP context query) response parser */
+typedef struct {
+    guint cid;
+    gboolean active;
+} MM3gppPdpContextActive;
+void mm_3gpp_pdp_context_active_list_free (GList *pdp_active_list);
+GList *mm_3gpp_parse_cgact_read_response (const gchar *reply,
+                                          GError **error);
 
 /* CREG/CGREG response/unsolicited message parser */
 gboolean mm_3gpp_parse_creg_response (GMatchInfo *info,
@@ -148,6 +181,16 @@ gboolean mm_3gpp_parse_cpms_test_response (const gchar *reply,
                                            GArray **mem1,
                                            GArray **mem2,
                                            GArray **mem3);
+
+/* AT+CPMS? (Current SMS storage) response parser */
+gboolean mm_3gpp_parse_cpms_query_response (const gchar *reply,
+                                            MMSmsStorage *mem1,
+                                            MMSmsStorage *mem2,
+                                            GError** error);
+gboolean mm_3gpp_get_cpms_storage_match (GMatchInfo *match_info,
+                                         const gchar *match_name,
+                                         MMSmsStorage *storage,
+                                         GError **error);
 
 /* AT+CSCS=? (Supported charsets) response parser */
 gboolean mm_3gpp_parse_cscs_test_response (const gchar *reply,
@@ -184,10 +227,62 @@ typedef struct {
     gint status;
     gchar *pdu;
 } MM3gppPduInfo;
+void   mm_3gpp_pdu_info_free           (MM3gppPduInfo *info);
 void   mm_3gpp_pdu_info_list_free      (GList *info_list);
 GList *mm_3gpp_parse_pdu_cmgl_response (const gchar *str,
                                         GError **error);
 
+/* AT+CMGR (Read message) response parser */
+MM3gppPduInfo *mm_3gpp_parse_cmgr_read_response (const gchar *reply,
+                                                 guint index,
+                                                 GError **error);
+
+
+/* AT+CRSM response parser */
+gboolean mm_3gpp_parse_crsm_response (const gchar *reply,
+                                      guint *sw1,
+                                      guint *sw2,
+                                      gchar **hex,
+                                      GError **error);
+
+/* AT+CGCONTRDP=N response parser */
+gboolean mm_3gpp_parse_cgcontrdp_response (const gchar  *response,
+                                           guint        *out_cid,
+                                           guint        *out_bearer_id,
+                                           gchar       **out_apn,
+                                           gchar       **out_local_address,
+                                           gchar       **out_subnet,
+                                           gchar       **out_gateway_address,
+                                           gchar       **out_dns_primary_address,
+                                           gchar       **out_dns_secondary_address,
+                                           GError      **error);
+
+/* CFUN? response parser
+ * Note: a custom method with values not translated into MMModemPowerState is
+ * provided, because they may be vendor specific.
+ */
+gboolean mm_3gpp_parse_cfun_query_response         (const gchar        *response,
+                                                    guint              *out_state,
+                                                    GError            **error);
+gboolean mm_3gpp_parse_cfun_query_generic_response (const gchar        *response,
+                                                    MMModemPowerState  *out_state,
+                                                    GError            **error);
+
+/* +CESQ response parser */
+gboolean mm_3gpp_parse_cesq_response (const gchar  *response,
+                                      guint        *out_rxlev,
+                                      guint        *out_ber,
+                                      guint        *out_rscp,
+                                      guint        *out_ecn0,
+                                      guint        *out_rsrq,
+                                      guint        *out_rsrp,
+                                      GError      **error);
+
+gboolean mm_3gpp_cesq_response_to_signal_info (const gchar  *response,
+                                               MMSignal    **out_gsm,
+                                               MMSignal    **out_umts,
+                                               MMSignal    **out_lte,
+                                               GError      **error);
 
 /* Additional 3GPP-specific helpers */
 
@@ -196,8 +291,8 @@ gchar *mm_3gpp_facility_to_acronym (MMModem3gppFacility facility);
 
 MMModemAccessTechnology mm_string_to_access_tech (const gchar *string);
 
-gchar *mm_3gpp_parse_operator (const gchar *reply,
-                               MMModemCharset cur_charset);
+void mm_3gpp_normalize_operator_name (gchar          **operator,
+                                      MMModemCharset   cur_charset);
 
 gboolean mm_3gpp_parse_operator_id (const gchar *operator_id,
                                     guint16 *mcc,

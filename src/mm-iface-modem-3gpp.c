@@ -137,12 +137,11 @@ get_consolidated_reg_state (RegistrationStateContext *ctx)
         ctx->eps == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING)
         return ctx->eps;
 
-    if (ctx->cs == MM_MODEM_3GPP_REGISTRATION_STATE_SEARCHING)
-        return ctx->cs;
-    if (ctx->ps == MM_MODEM_3GPP_REGISTRATION_STATE_SEARCHING)
-        return ctx->ps;
-    if (ctx->eps == MM_MODEM_3GPP_REGISTRATION_STATE_SEARCHING)
-        return ctx->eps;
+    /* Searching? */
+    if (ctx->cs  == MM_MODEM_3GPP_REGISTRATION_STATE_SEARCHING ||
+        ctx->ps  == MM_MODEM_3GPP_REGISTRATION_STATE_SEARCHING ||
+        ctx->eps == MM_MODEM_3GPP_REGISTRATION_STATE_SEARCHING)
+         return MM_MODEM_3GPP_REGISTRATION_STATE_SEARCHING;
 
     /* If one state is DENIED and the others are UNKNOWN, use DENIED */
     if (ctx->cs == MM_MODEM_3GPP_REGISTRATION_STATE_DENIED &&
@@ -158,7 +157,41 @@ get_consolidated_reg_state (RegistrationStateContext *ctx)
         ctx->eps == MM_MODEM_3GPP_REGISTRATION_STATE_DENIED)
         return ctx->eps;
 
-    return ctx->cs;
+    /* Emergency services? */
+    if (ctx->cs  == MM_MODEM_3GPP_REGISTRATION_STATE_EMERGENCY_ONLY ||
+        ctx->ps  == MM_MODEM_3GPP_REGISTRATION_STATE_EMERGENCY_ONLY ||
+        ctx->eps == MM_MODEM_3GPP_REGISTRATION_STATE_EMERGENCY_ONLY)
+         return MM_MODEM_3GPP_REGISTRATION_STATE_EMERGENCY_ONLY;
+
+    /* Support for additional registration states reported when on LTE.
+     *
+     * For example, we may see the modem registered in LTE (EPS==HOME), and we
+     * may get "SMS only" reported for CS.
+     *
+     * We give these states a very low priority w.r.t. the other ones as they
+     * are really likely never used (i.e. we would get as consolidated the LTE
+     * registration state, not the CS fall back state).
+     *
+     * We also warn in that case, because ideally we should always report the
+     * LTE registration state first, not this one.
+     */
+    if (ctx->cs == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_SMS_ONLY ||
+        ctx->cs == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_SMS_ONLY ||
+        ctx->cs == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_CSFB_NOT_PREFERRED ||
+        ctx->cs == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_CSFB_NOT_PREFERRED) {
+        mm_warn ("3GPP CSFB registration state is consolidated: %s",
+                 mm_modem_3gpp_registration_state_get_string (ctx->cs));
+        return ctx->cs;
+    }
+
+    /* Idle? */
+    if (ctx->cs  == MM_MODEM_3GPP_REGISTRATION_STATE_IDLE ||
+        ctx->ps  == MM_MODEM_3GPP_REGISTRATION_STATE_IDLE ||
+        ctx->eps == MM_MODEM_3GPP_REGISTRATION_STATE_IDLE)
+         return MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+
+    /* Just unknown at this point */
+    return MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
 }
 
 /*****************************************************************************/
@@ -233,7 +266,7 @@ run_registration_checks_again (RegisterInNetworkContext *ctx)
         ctx->self,
         (GAsyncReadyCallback)run_registration_checks_ready,
         ctx);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -269,7 +302,11 @@ run_registration_checks_ready (MMIfaceModem3gpp *self,
 
     /* If we got registered, end registration checks */
     if (current_registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
-        current_registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
+        current_registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING ||
+        current_registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_SMS_ONLY ||
+        current_registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_SMS_ONLY ||
+        current_registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_CSFB_NOT_PREFERRED ||
+        current_registration_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_CSFB_NOT_PREFERRED) {
         /* Request immediate access tech update */
         mm_iface_modem_refresh_access_technologies (MM_IFACE_MODEM (ctx->self));
         mm_dbg ("Modem is currently registered in a 3GPP network");
@@ -1035,6 +1072,10 @@ mm_iface_modem_3gpp_update_access_technologies (MMIfaceModem3gpp *self,
      * but only if something valid to report */
     if (state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
         state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_SMS_ONLY ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_SMS_ONLY ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_CSFB_NOT_PREFERRED ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_CSFB_NOT_PREFERRED ||
         ctx->reloading_registration_info) {
         if (access_tech != MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN)
             mm_iface_modem_update_access_technologies (MM_IFACE_MODEM (self),
@@ -1052,6 +1093,10 @@ mm_iface_modem_3gpp_update_location (MMIfaceModem3gpp *self,
                                      gulong cell_id)
 {
     MMModem3gppRegistrationState state;
+    RegistrationStateContext *ctx;
+
+    ctx = get_registration_state_context (self);
+    g_assert (ctx);
 
     if (!MM_IS_IFACE_MODEM_LOCATION (self))
         return;
@@ -1061,9 +1106,16 @@ mm_iface_modem_3gpp_update_location (MMIfaceModem3gpp *self,
                   NULL);
 
     /* Even if registration state didn't change, report access technology or
-     * location updates, but only if something valid to report */
-    if (state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
-        state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
+     * location updates, but only if something valid to report. For the case
+     * where we're registering (loading current registration info after a state
+     * change to registered), we also allow LAC/CID updates. */
+    if (ctx->reloading_registration_info ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_SMS_ONLY ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_SMS_ONLY ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_CSFB_NOT_PREFERRED ||
+        state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_CSFB_NOT_PREFERRED) {
         if (location_area_code > 0 && cell_id > 0)
             mm_iface_modem_location_3gpp_update_lac_ci (MM_IFACE_MODEM_LOCATION (self),
                                                         location_area_code,
@@ -1116,7 +1168,11 @@ update_non_registered_state (MMIfaceModem3gpp *self,
      * registration reject error code.  If b), we want to make sure we
      * preserve the subscription state */
     if (old_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
-        old_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING)
+        old_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING ||
+        old_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_SMS_ONLY ||
+        old_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_SMS_ONLY ||
+        old_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_CSFB_NOT_PREFERRED ||
+        old_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_CSFB_NOT_PREFERRED)
         clear_subscription_state (self);
 
     /* The property in the interface is bound to the property
@@ -1154,7 +1210,11 @@ update_registration_state (MMIfaceModem3gpp *self,
         return;
 
     if (new_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME ||
-        new_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
+        new_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING ||
+        new_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_SMS_ONLY ||
+        new_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_SMS_ONLY ||
+        new_state == MM_MODEM_3GPP_REGISTRATION_STATE_HOME_CSFB_NOT_PREFERRED ||
+        new_state == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_CSFB_NOT_PREFERRED) {
         /* If already reloading registration info, skip it */
         if (ctx->reloading_registration_info)
             return;
@@ -1302,7 +1362,7 @@ periodic_registration_check (MMIfaceModem3gpp *self)
             (GAsyncReadyCallback)periodic_registration_checks_ready,
             NULL);
     }
-    return TRUE;
+    return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -1551,7 +1611,6 @@ typedef enum {
     ENABLING_STEP_ENABLE_UNSOLICITED_EVENTS,
     ENABLING_STEP_SETUP_UNSOLICITED_REGISTRATION_EVENTS,
     ENABLING_STEP_ENABLE_UNSOLICITED_REGISTRATION_EVENTS,
-    ENABLING_STEP_RUN_REGISTRATION_CHECKS,
     ENABLING_STEP_LAST
 } EnablingStep;
 
@@ -1690,25 +1749,6 @@ enable_unsolicited_registration_events_ready (MMIfaceModem3gpp *self,
 }
 
 static void
-run_all_registration_checks_ready (MMIfaceModem3gpp *self,
-                                   GAsyncResult *res,
-                                   EnablingContext *ctx)
-{
-    GError *error = NULL;
-
-    mm_iface_modem_3gpp_run_registration_checks_finish (self, res, &error);
-    if (error) {
-        g_simple_async_result_take_error (ctx->result, error);
-        enabling_context_complete_and_free (ctx);
-        return;
-    }
-
-    /* Go on to next step */
-    ctx->step++;
-    interface_enabling_step (ctx);
-}
-
-static void
 interface_enabling_step (EnablingContext *ctx)
 {
     /* Don't run new steps if we're cancelled */
@@ -1781,13 +1821,6 @@ interface_enabling_step (EnablingContext *ctx)
         /* Fall down to next step */
         ctx->step++;
     }
-
-    case ENABLING_STEP_RUN_REGISTRATION_CHECKS:
-        mm_iface_modem_3gpp_run_registration_checks (
-            ctx->self,
-            (GAsyncReadyCallback)run_all_registration_checks_ready,
-            ctx);
-        return;
 
     case ENABLING_STEP_LAST:
         /* We are done without errors! */

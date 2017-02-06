@@ -250,7 +250,7 @@ start_cb (void)
                           FALSE,
                           (GAsyncReadyCallback) flash_ready,
                           NULL);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 int main (int argc, char **argv)
@@ -258,8 +258,6 @@ int main (int argc, char **argv)
     GOptionContext *context;
 
     setlocale (LC_ALL, "");
-
-    g_type_init ();
 
     /* Setup option context, process it and destroy it */
     context = g_option_context_new ("- ModemManager TTY testing");

@@ -131,7 +131,7 @@ state_changed_wait_expired (WaitForFinalStateContext *ctx)
         MM_CORE_ERROR_RETRY,
         "Too much time waiting to get to a final state");
     wait_for_final_state_context_complete_and_free (ctx);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -250,7 +250,7 @@ load_unlock_required_again (InternalLoadUnlockRequiredContext *ctx)
     ctx->pin_check_timeout_id = 0;
     /* Retry the step */
     internal_load_unlock_required_context_step (ctx);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -760,11 +760,14 @@ typedef struct {
     MMIfaceModem *self;
     MMBearerList *list;
     gchar *bearer_path;
+    MMBaseBearer *bearer;
 } HandleDeleteBearerContext;
 
 static void
 handle_delete_bearer_context_free (HandleDeleteBearerContext *ctx)
 {
+    if (ctx->bearer)
+        g_object_unref (ctx->bearer);
     g_object_unref (ctx->skeleton);
     g_object_unref (ctx->invocation);
     g_object_unref (ctx->self);
@@ -772,6 +775,26 @@ handle_delete_bearer_context_free (HandleDeleteBearerContext *ctx)
         g_object_unref (ctx->list);
     g_free (ctx->bearer_path);
     g_free (ctx);
+}
+
+static void
+delete_bearer_disconnect_ready (MMBaseBearer *bearer,
+                                GAsyncResult *res,
+                                HandleDeleteBearerContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_base_bearer_disconnect_finish (bearer, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_delete_bearer_context_free (ctx);
+        return;
+    }
+
+    if (!mm_bearer_list_delete_bearer (ctx->list, ctx->bearer_path, &error))
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+    else
+        mm_gdbus_modem_complete_delete_bearer (ctx->skeleton, ctx->invocation);
+    handle_delete_bearer_context_free (ctx);
 }
 
 static void
@@ -787,14 +810,30 @@ handle_delete_bearer_auth_ready (MMBaseModem *self,
         return;
     }
 
-    if (!ctx->list)
-        mm_gdbus_modem_complete_delete_bearer (ctx->skeleton, ctx->invocation);
-    else if (!mm_bearer_list_delete_bearer (ctx->list, ctx->bearer_path, &error))
-        g_dbus_method_invocation_take_error (ctx->invocation, error);
-    else
-        mm_gdbus_modem_complete_delete_bearer (ctx->skeleton, ctx->invocation);
+    if (!g_str_has_prefix (ctx->bearer_path, MM_DBUS_BEARER_PREFIX)) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_INVALID_ARGS,
+                                               "Cannot delete bearer: invalid path '%s'",
+                                               ctx->bearer_path);
+        handle_delete_bearer_context_free (ctx);
+        return;
+    }
 
-    handle_delete_bearer_context_free (ctx);
+    ctx->bearer = mm_bearer_list_find_by_path (ctx->list, ctx->bearer_path);
+    if (!ctx->bearer) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_INVALID_ARGS,
+                                               "Cannot delete bearer: no bearer found with path '%s'",
+                                               ctx->bearer_path);
+        handle_delete_bearer_context_free (ctx);
+        return;
+    }
+
+    mm_base_bearer_disconnect (ctx->bearer,
+                               (GAsyncReadyCallback)delete_bearer_disconnect_ready,
+                               ctx);
 }
 
 static gboolean
@@ -961,7 +1000,7 @@ periodic_access_technologies_check (MMIfaceModem *self)
             NULL);
     }
 
-    return TRUE;
+    return G_SOURCE_CONTINUE;
 }
 
 void
@@ -1111,7 +1150,7 @@ expire_signal_quality (MMIfaceModem *self)
     /* Remove source id */
     ctx = g_object_get_qdata (G_OBJECT (self), signal_quality_update_context_quark);
     ctx->recent_timeout_source = 0;
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -1261,7 +1300,7 @@ periodic_signal_quality_check (MMIfaceModem *self)
             NULL);
     }
 
-    return TRUE;
+    return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -2149,12 +2188,15 @@ set_current_bands_ready (MMIfaceModem *self,
 
             supported_bands = (mm_common_bands_variant_to_garray (
                                    mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
+            mm_common_bands_garray_sort (supported_bands);
             mm_gdbus_modem_set_current_bands (ctx->skeleton,
                                               mm_common_bands_garray_to_variant (supported_bands));
             g_array_unref (supported_bands);
-        } else
+        } else {
+            mm_common_bands_garray_sort (ctx->bands_array);
             mm_gdbus_modem_set_current_bands (ctx->skeleton,
                                               mm_common_bands_garray_to_variant (ctx->bands_array));
+        }
 
         g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
     }
@@ -2775,7 +2817,7 @@ restart_initialize_idle (MMIfaceModem *self)
     mm_base_modem_initialize (MM_BASE_MODEM (self),
                               (GAsyncReadyCallback) reinitialize_ready,
                               NULL);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -2868,8 +2910,8 @@ update_unlock_retries (MMIfaceModem *self,
 typedef enum {
     UPDATE_LOCK_INFO_CONTEXT_STEP_FIRST = 0,
     UPDATE_LOCK_INFO_CONTEXT_STEP_LOCK,
-    UPDATE_LOCK_INFO_CONTEXT_STEP_RETRIES,
     UPDATE_LOCK_INFO_CONTEXT_STEP_AFTER_UNLOCK,
+    UPDATE_LOCK_INFO_CONTEXT_STEP_RETRIES,
     UPDATE_LOCK_INFO_CONTEXT_STEP_LAST
 } UpdateLockInfoContextStep;
 
@@ -3025,28 +3067,9 @@ update_lock_info_context_step (UpdateLockInfoContext *ctx)
         /* Don't re-ask if already known */
         if (ctx->lock == MM_MODEM_LOCK_UNKNOWN) {
             /* If we're already unlocked, we're done */
-            if (mm_gdbus_modem_get_unlock_required (ctx->skeleton) != MM_MODEM_LOCK_NONE) {
-                internal_load_unlock_required (
-                    ctx->self,
-                    (GAsyncReadyCallback)internal_load_unlock_required_ready,
-                    ctx);
-                return;
-            }
-
-            /* Just assume that no lock is required */
-            ctx->lock = MM_MODEM_LOCK_NONE;
-        }
-
-        /* Fall down to next step */
-        ctx->step++;
-
-    case UPDATE_LOCK_INFO_CONTEXT_STEP_RETRIES:
-        /* Load unlock retries if possible */
-        if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_unlock_retries &&
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_unlock_retries_finish) {
-            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_unlock_retries (
+            internal_load_unlock_required (
                 ctx->self,
-                (GAsyncReadyCallback)load_unlock_retries_ready,
+                (GAsyncReadyCallback)internal_load_unlock_required_ready,
                 ctx);
             return;
         }
@@ -3074,6 +3097,20 @@ update_lock_info_context_step (UpdateLockInfoContext *ctx)
 
             /* If no way to run after SIM unlock step, we're done */
             mm_dbg ("SIM is ready, and no need for the after SIM unlock step...");
+        }
+
+        /* Fall down to next step */
+        ctx->step++;
+
+    case UPDATE_LOCK_INFO_CONTEXT_STEP_RETRIES:
+        /* Load unlock retries if possible */
+        if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_unlock_retries &&
+            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_unlock_retries_finish) {
+            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->load_unlock_retries (
+                ctx->self,
+                (GAsyncReadyCallback)load_unlock_retries_ready,
+                ctx);
+            return;
         }
 
         /* Fall down to next step */
@@ -3337,7 +3374,7 @@ set_power_state_load_ready (MMIfaceModem *self,
 
     ctx->previous_real_power_state = MM_IFACE_MODEM_GET_INTERFACE (self)->load_power_state_finish (self, res, &error);
     if (error) {
-        g_debug ("Couldn't reload current power state: %s", error->message);
+        mm_dbg ("Couldn't reload current power state: %s", error->message);
         g_error_free (error);
         /* Default to the cached one */
         ctx->previous_real_power_state = ctx->previous_cached_power_state;
@@ -3713,6 +3750,7 @@ typedef enum {
     INITIALIZATION_STEP_SUPPORTED_BANDS,
     INITIALIZATION_STEP_SUPPORTED_IP_FAMILIES,
     INITIALIZATION_STEP_POWER_STATE,
+    INITIALIZATION_STEP_SIM_HOT_SWAP,
     INITIALIZATION_STEP_UNLOCK_REQUIRED,
     INITIALIZATION_STEP_SIM,
     INITIALIZATION_STEP_OWN_NUMBERS,
@@ -3957,6 +3995,7 @@ load_supported_bands_ready (MMIfaceModem *self,
     bands_array = MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_bands_finish (self, res, &error);
 
     if (bands_array) {
+        mm_common_bands_garray_sort (bands_array);
         mm_gdbus_modem_set_supported_bands (ctx->skeleton,
                                             mm_common_bands_garray_to_variant (bands_array));
         g_array_unref (bands_array);
@@ -4158,6 +4197,7 @@ load_current_bands_ready (MMIfaceModem *self,
             g_array_unref (supported_bands);
 
         if (filtered_bands) {
+            mm_common_bands_garray_sort (filtered_bands);
             mm_gdbus_modem_set_current_bands (ctx->skeleton,
                                               mm_common_bands_garray_to_variant (filtered_bands));
             g_array_unref (filtered_bands);
@@ -4165,6 +4205,27 @@ load_current_bands_ready (MMIfaceModem *self,
     }
 
     /* Done, Go on to next step */
+    ctx->step++;
+    interface_initialization_step (ctx);
+}
+
+/*****************************************************************************/
+/* Setup SIM hot swap (Modem interface) */
+static void
+setup_sim_hot_swap_ready (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          InitializationContext *ctx) {
+    GError *error = NULL;
+
+    MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap_finish (self, res, &error);
+    if (error) {
+        mm_warn ("Iface modem: SIM hot swap setup failed: '%s'", error->message);
+        g_error_free (error);
+    } else {
+        mm_dbg ("Iface modem: SIM hot swap setup succeded");
+    }
+
+    /* Go on to next step */
     ctx->step++;
     interface_initialization_step (ctx);
 }
@@ -4510,6 +4571,18 @@ interface_initialization_step (InitializationContext *ctx)
         /* Fall down to next step */
         ctx->step++;
 
+    case INITIALIZATION_STEP_SIM_HOT_SWAP:
+        if (MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->setup_sim_hot_swap &&
+            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->setup_sim_hot_swap_finish) {
+            MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->setup_sim_hot_swap (
+                MM_IFACE_MODEM (ctx->self),
+                (GAsyncReadyCallback) setup_sim_hot_swap_ready,
+                ctx);
+                return;
+        }
+        /* Fall down to next step */
+        ctx->step++;
+
     case INITIALIZATION_STEP_UNLOCK_REQUIRED:
         /* Only check unlock required if we were previously not unlocked */
         if (mm_gdbus_modem_get_unlock_required (ctx->skeleton) != MM_MODEM_LOCK_NONE) {
@@ -4673,6 +4746,18 @@ interface_initialization_step (InitializationContext *ctx)
                           ctx->self);
 
         if (ctx->fatal_error) {
+            if (g_error_matches (ctx->fatal_error,
+                                 MM_MOBILE_EQUIPMENT_ERROR,
+                                 MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED)) {
+                gboolean is_sim_hot_swap_supported = FALSE;
+
+                g_object_get (ctx->self,
+                              MM_IFACE_MODEM_SIM_HOT_SWAP_SUPPORTED, &is_sim_hot_swap_supported,
+                              NULL);
+
+                if (is_sim_hot_swap_supported)
+                    mm_iface_modem_update_failed_state (ctx->self, MM_MODEM_STATE_FAILED_REASON_SIM_MISSING);
+            }
             g_simple_async_result_take_error (ctx->result, ctx->fatal_error);
             ctx->fatal_error = NULL;
         } else {
@@ -5001,7 +5086,7 @@ mm_iface_modem_is_3gpp_only (MMIfaceModem *self)
     MMModemCapability capabilities;
 
     capabilities = mm_iface_modem_get_current_capabilities (self);
-    return !((MM_MODEM_CAPABILITY_3GPP ^ capabilities) & capabilities);
+    return (capabilities & MM_MODEM_CAPABILITY_3GPP) && !((MM_MODEM_CAPABILITY_3GPP ^ capabilities) & capabilities);
 }
 
 gboolean
@@ -5010,7 +5095,7 @@ mm_iface_modem_is_3gpp_lte_only (MMIfaceModem *self)
     MMModemCapability capabilities;
 
     capabilities = mm_iface_modem_get_current_capabilities (self);
-    return !((MM_MODEM_CAPABILITY_3GPP_LTE ^ capabilities) & capabilities);
+    return (capabilities & MM_MODEM_CAPABILITY_3GPP_LTE) && !((MM_MODEM_CAPABILITY_3GPP_LTE ^ capabilities) & capabilities);
 }
 
 gboolean
@@ -5019,7 +5104,7 @@ mm_iface_modem_is_cdma_only (MMIfaceModem *self)
     MMModemCapability capabilities;
 
     capabilities = mm_iface_modem_get_current_capabilities (self);
-    return !((MM_MODEM_CAPABILITY_CDMA_EVDO ^ capabilities) & capabilities);
+    return (capabilities & MM_MODEM_CAPABILITY_CDMA_EVDO) && !((MM_MODEM_CAPABILITY_CDMA_EVDO ^ capabilities) & capabilities);
 }
 
 /*****************************************************************************/
@@ -5085,6 +5170,13 @@ iface_modem_init (gpointer g_iface)
                               "List of bearers handled by the modem",
                               MM_TYPE_BEARER_LIST,
                               G_PARAM_READWRITE));
+    g_object_interface_install_property
+        (g_iface,
+         g_param_spec_boolean (MM_IFACE_MODEM_SIM_HOT_SWAP_SUPPORTED,
+                               "Sim Hot Swap Supported",
+                               "Whether the modem supports sim hot swap or not.",
+                               FALSE,
+                               G_PARAM_READWRITE));
 
     initialized = TRUE;
 }

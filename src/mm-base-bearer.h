@@ -10,10 +10,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details:
  *
- * Author: Aleksander Morgado <aleksander@lanedo.com>
- *
+
  * Copyright (C) 2011 Google, Inc.
- * Copyright (C) 2011 - 2013 Aleksander Morgado <aleksander@gnu.org>
+ * Copyright (C) 2015 Azimut Electronics
+ * Copyright (C) 2011 - 2015 Aleksander Morgado <aleksander@aleksander.es>
  */
 
 #ifndef MM_BASE_BEARER_H
@@ -100,6 +100,27 @@ struct _MMBaseBearerClass {
     gboolean (* disconnect_finish) (MMBaseBearer *bearer,
                                     GAsyncResult *res,
                                     GError **error);
+
+    /* Monitor connection status:
+     * NOTE: only CONNECTED or DISCONNECTED should be reported here; this method
+     * is used to poll for connection status once the connection has been
+     * established */
+    void (* load_connection_status) (MMBaseBearer *bearer,
+                                     GAsyncReadyCallback callback,
+                                     gpointer user_data);
+    MMBearerConnectionStatus (* load_connection_status_finish) (MMBaseBearer *bearer,
+                                                                GAsyncResult *res,
+                                                                GError **error);
+
+    /* Reload statistics */
+    void (* reload_stats) (MMBaseBearer *bearer,
+                           GAsyncReadyCallback callback,
+                           gpointer user_data);
+    gboolean (* reload_stats_finish) (MMBaseBearer *bearer,
+                                      guint64 *bytes_rx,
+                                      guint64 *bytes_tx,
+                                      GAsyncResult *res,
+                                      GError **error);
 
     /* Report connection status of this bearer */
     void (* report_connection_status) (MMBaseBearer *bearer,

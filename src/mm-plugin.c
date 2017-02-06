@@ -23,13 +23,13 @@
 #include <unistd.h>
 #include <string.h>
 
-#include <gudev/gudev.h>
-
 #include <ModemManager.h>
 #include <mm-errors-types.h>
 
 #include "mm-plugin.h"
 #include "mm-device.h"
+#include "mm-kernel-device.h"
+#include "mm-kernel-device-generic.h"
 #include "mm-port-serial-at.h"
 #include "mm-port-serial-qcdm.h"
 #include "mm-serial-parsers.h"
@@ -162,14 +162,14 @@ is_virtual_port (const gchar *device_name)
 
 /* Returns TRUE if the support check request was filtered out */
 static gboolean
-apply_subsystem_filter (MMPlugin *self,
-                        GUdevDevice *port)
+apply_subsystem_filter (MMPlugin       *self,
+                        MMKernelDevice *port)
 {
     if (self->priv->subsystems) {
         const gchar *subsys;
         guint i;
 
-        subsys = g_udev_device_get_subsystem (port);
+        subsys = mm_kernel_device_get_subsystem (port);
         for (i = 0; self->priv->subsystems[i]; i++) {
             if (g_str_equal (subsys, self->priv->subsystems[i]))
                 break;
@@ -189,11 +189,11 @@ apply_subsystem_filter (MMPlugin *self,
 
 /* Returns TRUE if the support check request was filtered out */
 static gboolean
-apply_pre_probing_filters (MMPlugin *self,
-                           MMDevice *device,
-                           GUdevDevice *port,
-                           gboolean *need_vendor_probing,
-                           gboolean *need_product_probing)
+apply_pre_probing_filters (MMPlugin       *self,
+                           MMDevice       *device,
+                           MMKernelDevice *port,
+                           gboolean       *need_vendor_probing,
+                           gboolean       *need_product_probing)
 {
     guint16 vendor;
     guint16 product;
@@ -209,7 +209,7 @@ apply_pre_probing_filters (MMPlugin *self,
     if (apply_subsystem_filter (self, port)) {
         mm_dbg ("(%s) [%s] filtered by subsystem",
                 self->priv->name,
-                g_udev_device_get_name (port));
+                mm_kernel_device_get_name (port));
         return TRUE;
     }
 
@@ -232,7 +232,7 @@ apply_pre_probing_filters (MMPlugin *self,
         const gchar **drivers;
 
         /* Detect any modems accessible through the list of virtual ports */
-        drivers = (is_virtual_port (g_udev_device_get_name (port)) ?
+        drivers = (is_virtual_port (mm_kernel_device_get_name (port)) ?
                    virtual_drivers :
                    mm_device_get_drivers (device));
 
@@ -240,7 +240,7 @@ apply_pre_probing_filters (MMPlugin *self,
         if (!drivers) {
             mm_dbg ("(%s) [%s] filtered as couldn't retrieve drivers",
                     self->priv->name,
-                    g_udev_device_get_name (port));
+                    mm_kernel_device_get_name (port));
             return TRUE;
         }
 
@@ -261,7 +261,7 @@ apply_pre_probing_filters (MMPlugin *self,
             if (!found) {
                 mm_dbg ("(%s) [%s] filtered by drivers",
                         self->priv->name,
-                        g_udev_device_get_name (port));
+                        mm_kernel_device_get_name (port));
                 return TRUE;
             }
         }
@@ -276,7 +276,7 @@ apply_pre_probing_filters (MMPlugin *self,
                     if (g_str_equal (drivers[j], self->priv->forbidden_drivers[i])) {
                         mm_dbg ("(%s) [%s] filtered by forbidden drivers",
                                 self->priv->name,
-                                g_udev_device_get_name (port));
+                                mm_kernel_device_get_name (port));
                         return TRUE;
                     }
                 }
@@ -292,7 +292,7 @@ apply_pre_probing_filters (MMPlugin *self,
                 if (g_str_equal (drivers[j], "qmi_wwan")) {
                     mm_dbg ("(%s) [%s] filtered by implicit QMI driver",
                             self->priv->name,
-                            g_udev_device_get_name (port));
+                            mm_kernel_device_get_name (port));
                     return TRUE;
                 }
             }
@@ -307,7 +307,7 @@ apply_pre_probing_filters (MMPlugin *self,
                 if (g_str_equal (drivers[j], "cdc_mbim")) {
                     mm_dbg ("(%s) [%s] filtered by implicit MBIM driver",
                             self->priv->name,
-                            g_udev_device_get_name (port));
+                            mm_kernel_device_get_name (port));
                     return TRUE;
                 }
             }
@@ -369,11 +369,11 @@ apply_pre_probing_filters (MMPlugin *self,
         ((!self->priv->vendor_strings &&
           !self->priv->product_strings &&
           !self->priv->forbidden_product_strings) ||
-         g_str_equal (g_udev_device_get_subsystem (port), "net") ||
-         g_str_has_prefix (g_udev_device_get_name (port), "cdc-wdm"))) {
+         g_str_equal (mm_kernel_device_get_subsystem (port), "net") ||
+         g_str_has_prefix (mm_kernel_device_get_name (port), "cdc-wdm"))) {
         mm_dbg ("(%s) [%s] filtered by vendor/product IDs",
                 self->priv->name,
-                g_udev_device_get_name (port));
+                mm_kernel_device_get_name (port));
         return TRUE;
     }
 
@@ -385,7 +385,7 @@ apply_pre_probing_filters (MMPlugin *self,
                 product == self->priv->forbidden_product_ids[i].r) {
                 mm_dbg ("(%s) [%s] filtered by forbidden vendor/product IDs",
                         self->priv->name,
-                        g_udev_device_get_name (port));
+                        mm_kernel_device_get_name (port));
                 return TRUE;
             }
         }
@@ -418,8 +418,7 @@ apply_pre_probing_filters (MMPlugin *self,
     if (self->priv->udev_tags) {
         for (i = 0; self->priv->udev_tags[i]; i++) {
             /* Check if the port was tagged */
-            if (g_udev_device_get_property_as_boolean (port,
-                                                       self->priv->udev_tags[i]))
+            if (mm_kernel_device_get_property_as_boolean (port, self->priv->udev_tags[i]))
                 break;
         }
 
@@ -427,7 +426,7 @@ apply_pre_probing_filters (MMPlugin *self,
         if (!self->priv->udev_tags[i]) {
             mm_dbg ("(%s) [%s] filtered by udev tags",
                     self->priv->name,
-                    g_udev_device_get_name (port));
+                    mm_kernel_device_get_name (port));
             return TRUE;
         }
     }
@@ -582,125 +581,119 @@ apply_post_probing_filters (MMPlugin *self,
 
 /* Context for the asynchronous probing operation */
 typedef struct {
-    GSimpleAsyncResult *result;
     MMPlugin *self;
-    MMPortProbeFlag flags;
     MMDevice *device;
+    MMPortProbeFlag flags;
 } PortProbeRunContext;
+
+static void
+port_probe_run_context_free (PortProbeRunContext *ctx)
+{
+    g_object_unref (ctx->device);
+    g_object_unref (ctx->self);
+    g_slice_free (PortProbeRunContext, ctx);
+}
 
 static void
 port_probe_run_ready (MMPortProbe *probe,
                       GAsyncResult *probe_result,
-                      PortProbeRunContext *ctx)
+                      GTask *task)
 {
     GError *error = NULL;
+    MMPluginSupportsResult result = MM_PLUGIN_SUPPORTS_PORT_UNKNOWN;
+    PortProbeRunContext *ctx;
 
     if (!mm_port_probe_run_finish (probe, probe_result, &error)) {
         /* Probing failed saying the port is unsupported. This is not to be
          * treated as a generic error, the plugin is just telling us as nicely
          * as it can that the port is not supported, so don't warn these cases.
          */
-        if (g_error_matches (error,
-                             MM_CORE_ERROR,
-                             MM_CORE_ERROR_UNSUPPORTED)) {
-            g_simple_async_result_set_op_res_gpointer (ctx->result,
-                                                       GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED),
-                                                       NULL);
-            g_error_free (error);
+        if (g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED)) {
+            result = MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED;
+            goto out;
         }
+
         /* Probing failed but the plugin tells us to retry; so we'll defer the
          * probing a bit */
-        else if (g_error_matches (error,
-                                  MM_CORE_ERROR,
-                                  MM_CORE_ERROR_RETRY)) {
-            g_simple_async_result_set_op_res_gpointer (ctx->result,
-                                                       GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_DEFER),
-                                                       NULL);
-            g_error_free (error);
+        if (g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_RETRY)) {
+            result = MM_PLUGIN_SUPPORTS_PORT_DEFER;
+            goto out;
         }
+
         /* For remaining errors, just propagate them */
-        else {
-            g_simple_async_result_take_error (ctx->result, error);
-        }
-    } else {
-        /* Probing succeeded */
-        MMPluginSupportsResult supports_result;
-
-        if (!apply_post_probing_filters (ctx->self, ctx->flags, probe)) {
-            /* Port is supported! */
-            supports_result = MM_PLUGIN_SUPPORTS_PORT_SUPPORTED;
-
-            /* If we were looking for AT ports, and the port is AT,
-             * and we were told that only one AT port is expected, cancel AT
-             * probings in the other available support tasks of the SAME
-             * device. */
-            if (ctx->self->priv->single_at &&
-                ctx->flags & MM_PORT_PROBE_AT &&
-                mm_port_probe_is_at (probe)) {
-                GList *l;
-
-                for (l = mm_device_peek_port_probe_list (ctx->device); l; l = g_list_next (l)) {
-                    if (l->data != probe) {
-                        mm_port_probe_run_cancel_at_probing (MM_PORT_PROBE (l->data));
-                    }
-                }
-            }
-        } else {
-            /* Unsupported port, remove from internal tracking HT */
-            supports_result = MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED;
-        }
-
-        g_simple_async_result_set_op_res_gpointer (ctx->result,
-                                                   GUINT_TO_POINTER (supports_result),
-                                                   NULL);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
     }
 
-    /* Complete the async supports port request */
-    g_simple_async_result_complete_in_idle (ctx->result);
+    /* Probing succeeded, recover context */
+    ctx = g_task_get_task_data (task);
 
-    g_object_unref (ctx->device);
-    g_object_unref (ctx->result);
-    g_object_unref (ctx->self);
-    g_free (ctx);
+    /* Apply post probing filters */
+    if (!apply_post_probing_filters (ctx->self, ctx->flags, probe)) {
+        /* Port is supported! */
+        result = MM_PLUGIN_SUPPORTS_PORT_SUPPORTED;
+
+        /* If we were looking for AT ports, and the port is AT,
+         * and we were told that only one AT port is expected, cancel AT
+         * probings in the other available support tasks of the SAME
+         * device. */
+        if (ctx->self->priv->single_at &&
+            ctx->flags & MM_PORT_PROBE_AT &&
+            mm_port_probe_is_at (probe)) {
+            GList *l;
+
+            for (l = mm_device_peek_port_probe_list (ctx->device); l; l = g_list_next (l)) {
+                if (l->data != probe)
+                    mm_port_probe_run_cancel_at_probing (MM_PORT_PROBE (l->data));
+            }
+        }
+    } else
+        /* Filtered by post probing filters */
+        result = MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED;
+
+out:
+    /* Complete action */
+    g_clear_error (&error);
+    g_task_return_int (task, result);
+    g_object_unref (task);
 }
 
+G_STATIC_ASSERT (MM_PLUGIN_SUPPORTS_PORT_UNKNOWN == -1);
+
 MMPluginSupportsResult
-mm_plugin_supports_port_finish (MMPlugin *self,
-                                GAsyncResult *result,
-                                GError **error)
+mm_plugin_supports_port_finish (MMPlugin      *self,
+                                GAsyncResult  *result,
+                                GError       **error)
 {
-    g_return_val_if_fail (MM_IS_PLUGIN (self),
-                          MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED);
-    g_return_val_if_fail (G_IS_ASYNC_RESULT (result),
-                          MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED);
+    g_return_val_if_fail (MM_IS_PLUGIN (self), MM_PLUGIN_SUPPORTS_PORT_UNKNOWN);
+    g_return_val_if_fail (G_IS_TASK (result), MM_PLUGIN_SUPPORTS_PORT_UNKNOWN);
 
-    /* Propagate error, if any */
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error)) {
-        return MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED;
-    }
-
-    return (MMPluginSupportsResult) GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (result)));
+    return (MMPluginSupportsResult) g_task_propagate_int (G_TASK (result), error);
 }
 
 void
-mm_plugin_supports_port (MMPlugin *self,
-                         MMDevice *device,
-                         GUdevDevice *port,
-                         GAsyncReadyCallback callback,
-                         gpointer user_data)
+mm_plugin_supports_port (MMPlugin            *self,
+                         MMDevice            *device,
+                         MMKernelDevice      *port,
+                         GCancellable        *cancellable,
+                         GAsyncReadyCallback  callback,
+                         gpointer             user_data)
 {
     MMPortProbe *probe = NULL;
-    GSimpleAsyncResult *async_result;
+    GTask *task;
     PortProbeRunContext *ctx;
     gboolean need_vendor_probing;
     gboolean need_product_probing;
     MMPortProbeFlag probe_run_flags;
     gchar *probe_list_str;
 
-    async_result = g_simple_async_result_new (G_OBJECT (self),
-                                              callback,
-                                              user_data,
-                                              mm_plugin_supports_port);
+    g_return_if_fail (MM_IS_PLUGIN (self));
+    g_return_if_fail (MM_IS_DEVICE (device));
+    g_return_if_fail (MM_IS_KERNEL_DEVICE (port));
+
+    /* Create new cancellable task */
+    task = g_task_new (self, cancellable, callback, user_data);
 
     /* Apply filters before launching the probing */
     if (apply_pre_probing_filters (self,
@@ -709,46 +702,40 @@ mm_plugin_supports_port (MMPlugin *self,
                                    &need_vendor_probing,
                                    &need_product_probing)) {
         /* Filtered! */
-        g_simple_async_result_set_op_res_gpointer (async_result,
-                                                   GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED),
-                                                   NULL);
-        g_simple_async_result_complete_in_idle (async_result);
-        goto out;
+        g_task_return_int (task, MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED);
+        g_object_unref (task);
+        return;
     }
 
     /* Need to launch new probing */
-    probe = MM_PORT_PROBE (mm_device_get_port_probe (device, port));
+    probe = MM_PORT_PROBE (mm_device_peek_port_probe (device, port));
     if (!probe) {
         /* This may happen if the ports get removed from the device while
          * probing is ongoing */
-        g_simple_async_result_set_error (async_result,
-                                         MM_CORE_ERROR,
-                                         MM_CORE_ERROR_FAILED,
-                                         "(%s) Missing port probe for port (%s/%s)",
-                                         self->priv->name,
-                                         g_udev_device_get_subsystem (port),
-                                         g_udev_device_get_name (port));
-        g_simple_async_result_complete_in_idle (async_result);
-        goto out;
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "(%s) Missing port probe for port (%s/%s)",
+                                 self->priv->name,
+                                 mm_kernel_device_get_subsystem (port),
+                                 mm_kernel_device_get_name (port));
+        g_object_unref (task);
+        return;
     }
 
     /* Before launching any probing, check if the port is a net device. */
-    if (g_str_equal (g_udev_device_get_subsystem (port), "net")) {
+    if (g_str_equal (mm_kernel_device_get_subsystem (port), "net")) {
         mm_dbg ("(%s) [%s] probing deferred until result suggested",
-                self->priv->name,
-                g_udev_device_get_name (port));
-        g_simple_async_result_set_op_res_gpointer (
-            async_result,
-            GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_DEFER_UNTIL_SUGGESTED),
-            NULL);
-        g_simple_async_result_complete_in_idle (async_result);
-        goto out;
+                self->priv->name, mm_kernel_device_get_name (port));
+        g_task_return_int (task, MM_PLUGIN_SUPPORTS_PORT_DEFER_UNTIL_SUGGESTED);
+        g_object_unref (task);
+        return;
     }
 
     /* Build flags depending on what probing needed */
-    if (!g_str_has_prefix (g_udev_device_get_name (port), "cdc-wdm")) {
+    probe_run_flags = MM_PORT_PROBE_NONE;
+    if (!g_str_has_prefix (mm_kernel_device_get_name (port), "cdc-wdm")) {
         /* Serial ports... */
-        probe_run_flags = MM_PORT_PROBE_NONE;
         if (self->priv->at)
             probe_run_flags |= MM_PORT_PROBE_AT;
         else if (self->priv->single_at)
@@ -757,10 +744,9 @@ mm_plugin_supports_port (MMPlugin *self,
             probe_run_flags |= MM_PORT_PROBE_QCDM;
     } else {
         /* cdc-wdm ports... */
-        probe_run_flags = MM_PORT_PROBE_NONE;
-        if (self->priv->qmi && !g_strcmp0 (mm_device_utils_get_port_driver (port), "qmi_wwan"))
+        if (self->priv->qmi && !g_strcmp0 (mm_kernel_device_get_driver (port), "qmi_wwan"))
             probe_run_flags |= MM_PORT_PROBE_QMI;
-        else if (self->priv->mbim && !g_strcmp0 (mm_device_utils_get_port_driver (port), "cdc_mbim"))
+        else if (self->priv->mbim && !g_strcmp0 (mm_kernel_device_get_driver (port), "cdc_mbim"))
             probe_run_flags |= MM_PORT_PROBE_MBIM;
         else
             probe_run_flags |= MM_PORT_PROBE_AT;
@@ -779,11 +765,9 @@ mm_plugin_supports_port (MMPlugin *self,
     /* If no explicit probing was required, just request to grab it without probing anything.
      * This may happen, e.g. with cdc-wdm ports which do not need QMI/MBIM probing. */
     if (probe_run_flags == MM_PORT_PROBE_NONE) {
-        g_simple_async_result_set_op_res_gpointer (async_result,
-                                                   GUINT_TO_POINTER (MM_PLUGIN_SUPPORTS_PORT_DEFER_UNTIL_SUGGESTED),
-                                                   NULL);
-        g_simple_async_result_complete_in_idle (async_result);
-        goto out;
+        g_task_return_int (task, MM_PLUGIN_SUPPORTS_PORT_DEFER_UNTIL_SUGGESTED);
+        g_object_unref (task);
+        return;
     }
 
     /* If a modem is already available and the plugin says that only one AT port is
@@ -795,7 +779,7 @@ mm_plugin_supports_port (MMPlugin *self,
         mm_dbg ("(%s) [%s] not setting up AT probing tasks: "
                 "modem already has the expected single AT port",
                 self->priv->name,
-                g_udev_device_get_name (port));
+                mm_kernel_device_get_name (port));
 
         /* Assuming it won't be an AT port. We still run the probe anyway, in
          * case we need to check for other port types (e.g. QCDM) */
@@ -803,17 +787,19 @@ mm_plugin_supports_port (MMPlugin *self,
     }
 
     /* Setup async call context */
-    ctx = g_new (PortProbeRunContext, 1);
-    ctx->self = g_object_ref (self);
+    ctx = g_slice_new0 (PortProbeRunContext);
+    ctx->self   = g_object_ref (self);
     ctx->device = g_object_ref (device);
-    ctx->result = g_object_ref (async_result);
-    ctx->flags = probe_run_flags;
+    ctx->flags  = probe_run_flags;
+
+    /* Store context in task */
+    g_task_set_task_data (task, ctx, (GDestroyNotify) port_probe_run_context_free);
 
     /* Launch the probe */
     probe_list_str = mm_port_probe_flag_build_string_from_mask (ctx->flags);
     mm_dbg ("(%s) [%s] probe required: '%s'",
             self->priv->name,
-            g_udev_device_get_name (port),
+            mm_kernel_device_get_name (port),
             probe_list_str);
     g_free (probe_list_str);
 
@@ -824,21 +810,17 @@ mm_plugin_supports_port (MMPlugin *self,
                        self->priv->send_lf,
                        self->priv->custom_at_probe,
                        self->priv->custom_init,
-                       (GAsyncReadyCallback)port_probe_run_ready,
-                       ctx);
-
-out:
-    g_object_unref (async_result);
-    if (probe)
-        g_object_unref (probe);
+                       cancellable,
+                       (GAsyncReadyCallback) port_probe_run_ready,
+                       task);
 }
 
 /*****************************************************************************/
 
 MMPluginSupportsHint
-mm_plugin_discard_port_early (MMPlugin *self,
-                              MMDevice *device,
-                              GUdevDevice *port)
+mm_plugin_discard_port_early (MMPlugin       *self,
+                              MMDevice       *device,
+                              MMKernelDevice *port)
 {
     gboolean need_vendor_probing = FALSE;
     gboolean need_product_probing = FALSE;
@@ -882,7 +864,7 @@ mm_plugin_create_modem (MMPlugin  *self,
 
     /* Let the plugin create the modem from the port probe results */
     modem = MM_PLUGIN_GET_CLASS (self)->create_modem (MM_PLUGIN (self),
-                                                      mm_device_get_path (device),
+                                                      mm_device_get_uid (device),
                                                       mm_device_get_drivers (device),
                                                       mm_device_get_vendor (device),
                                                       mm_device_get_product (device),
@@ -921,21 +903,17 @@ mm_plugin_create_modem (MMPlugin  *self,
                         mm_port_probe_get_port_subsys (probe),
                         mm_port_probe_get_port_name (probe));
                 grabbed = mm_base_modem_grab_port (modem,
-                                                   mm_port_probe_get_port_subsys (probe),
-                                                   mm_port_probe_get_port_name (probe),
-                                                   mm_port_probe_get_parent_path (probe),
+                                                   mm_port_probe_peek_port (probe),
                                                    MM_PORT_TYPE_IGNORED,
                                                    MM_PORT_SERIAL_AT_FLAG_NONE,
                                                    &inner_error);
             }
 #if !defined WITH_QMI
             else if (mm_port_probe_get_port_type (probe) == MM_PORT_TYPE_NET &&
-                     !g_strcmp0 (mm_device_utils_get_port_driver (mm_port_probe_peek_port (probe)), "qmi_wwan")) {
+                     !g_strcmp0 (mm_kernel_device_get_driver (mm_port_probe_peek_port (probe)), "qmi_wwan")) {
                 /* Try to generically grab the port, but flagged as ignored */
                 grabbed = mm_base_modem_grab_port (modem,
-                                                   mm_port_probe_get_port_subsys (probe),
-                                                   mm_port_probe_get_port_name (probe),
-                                                   mm_port_probe_get_parent_path (probe),
+                                                   mm_port_probe_peek_port (probe),
                                                    MM_PORT_TYPE_IGNORED,
                                                    MM_PORT_SERIAL_AT_FLAG_NONE,
                                                    &inner_error);
@@ -943,12 +921,10 @@ mm_plugin_create_modem (MMPlugin  *self,
 #endif
 #if !defined WITH_MBIM
             else if (mm_port_probe_get_port_type (probe) == MM_PORT_TYPE_NET &&
-                     !g_strcmp0 (mm_device_utils_get_port_driver (mm_port_probe_peek_port (probe)), "cdc_mbim")) {
+                     !g_strcmp0 (mm_kernel_device_get_driver (mm_port_probe_peek_port (probe)), "cdc_mbim")) {
                 /* Try to generically grab the port, but flagged as ignored */
                 grabbed = mm_base_modem_grab_port (modem,
-                                                   mm_port_probe_get_port_subsys (probe),
-                                                   mm_port_probe_get_port_name (probe),
-                                                   mm_port_probe_get_parent_path (probe),
+                                                   mm_port_probe_peek_port (probe),
                                                    MM_PORT_TYPE_IGNORED,
                                                    MM_PORT_SERIAL_AT_FLAG_NONE,
                                                    &inner_error);
@@ -961,9 +937,7 @@ mm_plugin_create_modem (MMPlugin  *self,
                                                                  &inner_error);
             else
                 grabbed = mm_base_modem_grab_port (modem,
-                                                   mm_port_probe_get_port_subsys (probe),
-                                                   mm_port_probe_get_port_name (probe),
-                                                   mm_port_probe_get_parent_path (probe),
+                                                   mm_port_probe_peek_port (probe),
                                                    mm_port_probe_get_port_type (probe),
                                                    MM_PORT_SERIAL_AT_FLAG_NONE,
                                                    &inner_error);
@@ -979,20 +953,38 @@ mm_plugin_create_modem (MMPlugin  *self,
         guint i;
 
         for (i = 0; virtual_ports[i]; i++) {
-            GError *inner_error = NULL;
+            GError                  *inner_error = NULL;
+            MMKernelDevice          *kernel_device;
+            MMKernelEventProperties *properties;
 
-            if (!mm_base_modem_grab_port (modem,
-                                          "virtual",
-                                          virtual_ports[i],
-                                          NULL,
-                                          MM_PORT_TYPE_AT,
-                                          MM_PORT_SERIAL_AT_FLAG_NONE,
-                                          &inner_error)) {
+            properties = mm_kernel_event_properties_new ();
+            mm_kernel_event_properties_set_action (properties, "add");
+            mm_kernel_event_properties_set_subsystem (properties, "virtual");
+            mm_kernel_event_properties_set_name (properties, virtual_ports[i]);
+
+            /* Give an empty set of rules, because we don't want them to be
+             * loaded from the udev rules path (as there may not be any
+             * installed yet). */
+            kernel_device = mm_kernel_device_generic_new_with_rules (properties, NULL, &inner_error);
+            if (!kernel_device) {
+                mm_warn ("Could not grab port (virtual/%s): '%s'",
+                         virtual_ports[i],
+                         inner_error ? inner_error->message : "unknown error");
+                g_clear_error (&inner_error);
+            } else if (!mm_base_modem_grab_port (modem,
+                                                 kernel_device,
+                                                 MM_PORT_TYPE_AT,
+                                                 MM_PORT_SERIAL_AT_FLAG_NONE,
+                                                 &inner_error)) {
                 mm_warn ("Could not grab port (virtual/%s): '%s'",
                          virtual_ports[i],
                          inner_error ? inner_error->message : "unknown error");
                 g_clear_error (&inner_error);
             }
+
+            if (kernel_device)
+                g_object_unref (kernel_device);
+            g_object_unref (properties);
         }
     }
 

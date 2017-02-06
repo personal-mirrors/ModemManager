@@ -28,8 +28,8 @@
 
 G_DEFINE_TYPE (MMPluginHso, mm_plugin_hso, MM_TYPE_PLUGIN)
 
-int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
-int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
+MM_PLUGIN_DEFINE_MAJOR_VERSION
+MM_PLUGIN_DEFINE_MINOR_VERSION
 
 /*****************************************************************************/
 /* Custom init */
@@ -56,13 +56,13 @@ hso_custom_init (MMPortProbe *probe,
                  GAsyncReadyCallback callback,
                  gpointer user_data)
 {
-    GUdevDevice *udev_port;
+    MMKernelDevice *kernel_port;
     GSimpleAsyncResult *result;
     const gchar *subsys, *sysfs_path;
 
     subsys = mm_port_probe_get_port_subsys (probe);
-    udev_port = mm_port_probe_peek_port (probe);
-    sysfs_path = g_udev_device_get_sysfs_path (udev_port);
+    kernel_port = mm_port_probe_peek_port (probe);
+    sysfs_path = mm_kernel_device_get_sysfs_path (kernel_port);
 
     if (g_str_equal (subsys, "tty")) {
         gchar *hsotype_path;
@@ -115,14 +115,14 @@ hso_custom_init (MMPortProbe *probe,
 
 static MMBaseModem *
 create_modem (MMPlugin *self,
-              const gchar *sysfs_path,
+              const gchar *uid,
               const gchar **drivers,
               guint16 vendor,
               guint16 product,
               GList *probes,
               GError **error)
 {
-    return MM_BASE_MODEM (mm_broadband_modem_hso_new (sysfs_path,
+    return MM_BASE_MODEM (mm_broadband_modem_hso_new (uid,
                                                       drivers,
                                                       mm_plugin_get_name (self),
                                                       vendor,
@@ -160,9 +160,7 @@ grab_port (MMPlugin *self,
     }
 
     return mm_base_modem_grab_port (modem,
-                                    subsys,
-                                    mm_port_probe_get_port_name (probe),
-                                    mm_port_probe_get_parent_path (probe),
+                                    mm_port_probe_peek_port (probe),
                                     port_type,
                                     pflags,
                                     error);

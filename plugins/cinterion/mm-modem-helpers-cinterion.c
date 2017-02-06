@@ -10,12 +10,15 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details:
  *
+ * Copyright (C) 2016 Trimble Navigation Limited
  * Copyright (C) 2014 Aleksander Morgado <aleksander@aleksander.es>
+ * Contributor: Matthew Stanger <matthew_stanger@trimble.com>
  */
 
 #include <config.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "ModemManager.h"
 #define _LIBMM_INSIDE_MM
@@ -24,6 +27,7 @@
 #include "mm-charsets.h"
 #include "mm-errors-types.h"
 #include "mm-modem-helpers-cinterion.h"
+#include "mm-modem-helpers.h"
 
 /* Setup relationship between the 3G band bitmask in the modem and the bitmask
  * in ModemManager. */
@@ -481,4 +485,97 @@ mm_cinterion_parse_sind_response (const gchar *response,
     }
 
     return TRUE;
+}
+
+/*****************************************************************************/
+/* ^SWWAN read parser
+ *
+ * Description: Parses <cid>, <state>[, <WWAN adapter>] or CME ERROR from SWWAN.
+ *
+ * The method returns a MMSwwanState with the connection status of a single
+ * PDP context, the one being queried via the cid given as input.
+ *
+ * Note that we use CID for matching because the WWAN adapter field is optional
+ * it seems.
+ *
+ *     Read Command
+ *         AT^SWWAN?
+ *         Response(s)
+ *         [^SWWAN: <cid>, <state>[, <WWAN adapter>]]
+ *         [^SWWAN: ...]
+ *         OK
+ *         ERROR
+ *         +CME ERROR: <err>
+ *
+ *     Examples:
+ *         OK              - If no WWAN connection is active, then read command just returns OK
+ *         ^SWWAN: 3,1,1   - 3rd PDP Context, Activated, First WWAN Adaptor
+ *         +CME ERROR: ?   -
+ */
+
+enum {
+    MM_SWWAN_STATE_DISCONNECTED =  0,
+    MM_SWWAN_STATE_CONNECTED    =  1,
+};
+
+MMBearerConnectionStatus
+mm_cinterion_parse_swwan_response (const gchar  *response,
+                                   guint         cid,
+                                   GError      **error)
+{
+    GRegex                   *r;
+    GMatchInfo               *match_info;
+    GError                   *inner_error = NULL;
+    MMBearerConnectionStatus  status;
+
+    g_assert (response);
+
+    /* If no WWAN connection is active, then ^SWWAN read command just returns OK
+     * (which we receive as an empty string) */
+    if (!response[0])
+        return MM_BEARER_CONNECTION_STATUS_DISCONNECTED;
+
+    if (!g_str_has_prefix (response, "^SWWAN:")) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Couldn't parse ^SWWAN response: '%s'", response);
+        return MM_BEARER_CONNECTION_STATUS_UNKNOWN;
+    }
+
+    r = g_regex_new ("\\^SWWAN:\\s*(\\d+),\\s*(\\d+)(?:,\\s*(\\d+))?(?:\\r\\n)?",
+                     G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW, 0, NULL);
+    g_assert (r != NULL);
+
+    status = MM_BEARER_CONNECTION_STATUS_UNKNOWN;
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    while (!inner_error && g_match_info_matches (match_info)) {
+        guint read_state;
+        guint read_cid;
+
+        if (!mm_get_uint_from_match_info (match_info, 1, &read_cid))
+            mm_warn ("Couldn't read cid in ^SWWAN response: '%s'", response);
+        else if (!mm_get_uint_from_match_info (match_info, 2, &read_state))
+            mm_warn ("Couldn't read state in ^SWWAN response: '%s'", response);
+        else if (read_cid == cid) {
+            if (read_state == MM_SWWAN_STATE_CONNECTED) {
+                status = MM_BEARER_CONNECTION_STATUS_CONNECTED;
+                break;
+            }
+            if (read_state == MM_SWWAN_STATE_DISCONNECTED) {
+                status = MM_BEARER_CONNECTION_STATUS_DISCONNECTED;
+                break;
+            }
+            mm_warn ("Invalid state read in ^SWWAN response: %u", read_state);
+            break;
+        }
+        g_match_info_next (match_info, &inner_error);
+    }
+
+    g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (status == MM_BEARER_CONNECTION_STATUS_UNKNOWN)
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "No state returned for CID %u", cid);
+
+    return status;
 }

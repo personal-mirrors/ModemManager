@@ -21,7 +21,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <gudev/gudev.h>
 
 #include <ModemManager.h>
 #include <mm-errors-types.h>
@@ -47,6 +46,7 @@ enum {
     PROP_VENDOR_ID,
     PROP_PRODUCT_ID,
     PROP_CONNECTION,
+    PROP_REPROBE,
     PROP_LAST
 };
 
@@ -70,6 +70,7 @@ struct _MMBaseModemPrivate {
 
     gboolean hotplugged;
     gboolean valid;
+    gboolean reprobe;
 
     guint max_timeouts;
 
@@ -106,38 +107,6 @@ get_hash_key (const gchar *subsys,
     return g_strdup_printf ("%s%s", subsys, name);
 }
 
-MMPort *
-mm_base_modem_get_port (MMBaseModem *self,
-                        const gchar *subsys,
-                        const gchar *name)
-{
-    MMPort *port;
-    gchar *key;
-
-    g_return_val_if_fail (MM_IS_BASE_MODEM (self), NULL);
-    g_return_val_if_fail (name != NULL, NULL);
-    g_return_val_if_fail (subsys != NULL, NULL);
-
-    /* Only 'net' or 'tty' should be given */
-    g_return_val_if_fail (g_str_equal (subsys, "net") ||
-                          g_str_equal (subsys, "tty"),
-                          NULL);
-
-    key = get_hash_key (subsys, name);
-    port = g_hash_table_lookup (self->priv->ports, key);
-    g_free (key);
-
-    return port;
-}
-
-gboolean
-mm_base_modem_owns_port (MMBaseModem *self,
-                         const gchar *subsys,
-                         const gchar *name)
-{
-    return !!mm_base_modem_get_port (self, subsys, name);
-}
-
 static void
 serial_port_timed_out_cb (MMPortSerial *port,
                           guint n_consecutive_timeouts,
@@ -159,18 +128,23 @@ serial_port_timed_out_cb (MMPortSerial *port,
 }
 
 gboolean
-mm_base_modem_grab_port (MMBaseModem *self,
-                         const gchar *subsys,
-                         const gchar *name,
-                         const gchar *parent_path,
-                         MMPortType ptype,
-                         MMPortSerialAtFlag at_pflags,
-                         GError **error)
+mm_base_modem_grab_port (MMBaseModem         *self,
+                         MMKernelDevice      *kernel_device,
+                         MMPortType           ptype,
+                         MMPortSerialAtFlag   at_pflags,
+                         GError             **error)
 {
-    MMPort *port;
-    gchar *key;
+    MMPort      *port;
+    gchar       *key;
+    const gchar *subsys;
+    const gchar *name;
 
     g_return_val_if_fail (MM_IS_BASE_MODEM (self), FALSE);
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE (kernel_device), FALSE);
+
+    subsys = mm_kernel_device_get_subsystem (kernel_device);
+    name   = mm_kernel_device_get_name      (kernel_device);
+
     g_return_val_if_fail (subsys != NULL, FALSE);
     g_return_val_if_fail (name != NULL, FALSE);
 
@@ -315,94 +289,12 @@ mm_base_modem_grab_port (MMBaseModem *self,
      * Note: 'key' and 'port' now owned by the HT. */
     g_hash_table_insert (self->priv->ports, key, port);
 
-    /* Store parent path */
+    /* Store kernel device */
     g_object_set (port,
-                  MM_PORT_PARENT_PATH, parent_path,
+                  MM_PORT_KERNEL_DEVICE, kernel_device,
                   NULL);
 
     return TRUE;
-}
-
-void
-mm_base_modem_release_port (MMBaseModem *self,
-                            const gchar *subsys,
-                            const gchar *name)
-{
-    gchar *key;
-    MMPort *port;
-    GList *l;
-
-    g_return_if_fail (MM_IS_BASE_MODEM (self));
-    g_return_if_fail (name != NULL);
-    g_return_if_fail (subsys != NULL);
-
-    if (!g_str_equal (subsys, "tty") &&
-        !g_str_equal (subsys, "net") &&
-        !(g_str_has_prefix (subsys, "usb") && g_str_has_prefix (name, "cdc-wdm")) &&
-        !g_str_equal (subsys, "virtual"))
-        return;
-
-    key = get_hash_key (subsys, name);
-
-    /* Find the port */
-    port = g_hash_table_lookup (self->priv->ports, key);
-    if (!port) {
-        mm_warn ("(%s/%s): cannot release port, not found",
-                 subsys, name);
-        g_free (key);
-        return;
-    }
-
-    if (port == (MMPort *)self->priv->primary) {
-        /* Cancel modem-wide cancellable; no further actions can be done
-         * without a primary port. */
-        g_cancellable_cancel (self->priv->cancellable);
-
-        g_clear_object (&self->priv->primary);
-    }
-
-    l = g_list_find (self->priv->data, port);
-    if (l) {
-        g_object_unref (l->data);
-        self->priv->data = g_list_delete_link (self->priv->data, l);
-    }
-
-    if (port == (MMPort *)self->priv->secondary)
-        g_clear_object (&self->priv->secondary);
-
-    if (port == (MMPort *)self->priv->qcdm)
-        g_clear_object (&self->priv->qcdm);
-
-    if (port == (MMPort *)self->priv->gps_control)
-        g_clear_object (&self->priv->gps_control);
-
-    if (port == (MMPort *)self->priv->gps)
-        g_clear_object (&self->priv->gps);
-
-#if defined WITH_QMI
-    l = g_list_find (self->priv->qmi, port);
-    if (l) {
-        g_object_unref (l->data);
-        self->priv->qmi = g_list_delete_link (self->priv->qmi, l);
-    }
-#endif
-
-#if defined WITH_MBIM
-    l = g_list_find (self->priv->mbim, port);
-    if (l) {
-        g_object_unref (l->data);
-        self->priv->mbim = g_list_delete_link (self->priv->mbim, l);
-    }
-#endif
-
-    /* Remove it from the tracking HT */
-    mm_dbg ("(%s/%s) type %s released from %s",
-            subsys,
-            name,
-            mm_port_type_get_string (mm_port_get_port_type (port)),
-            mm_port_get_device (port));
-    g_hash_table_remove (self->priv->ports, key);
-    g_free (key);
 }
 
 gboolean
@@ -504,6 +396,23 @@ mm_base_modem_set_valid (MMBaseModem *self,
         self->priv->valid = new_valid;
         g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_VALID]);
     }
+}
+
+void
+mm_base_modem_set_reprobe (MMBaseModem *self,
+                           gboolean reprobe)
+{
+    g_return_if_fail (MM_IS_BASE_MODEM (self));
+
+    self->priv->reprobe = reprobe;
+}
+
+gboolean
+mm_base_modem_get_reprobe (MMBaseModem *self)
+{
+    g_return_val_if_fail (MM_IS_BASE_MODEM (self), FALSE);
+
+    return self->priv->reprobe;
 }
 
 gboolean
@@ -650,7 +559,7 @@ mm_base_modem_peek_port_qmi_for_data (MMBaseModem *self,
     const gchar *net_port_parent_path;
 
     g_warn_if_fail (mm_port_get_subsys (data) == MM_PORT_SUBSYS_NET);
-    net_port_parent_path = mm_port_get_parent_path (data);
+    net_port_parent_path = mm_kernel_device_get_parent_sysfs_path (mm_port_peek_kernel_device (data));
     if (!net_port_parent_path) {
         g_set_error (error,
                      MM_CORE_ERROR,
@@ -669,7 +578,7 @@ mm_base_modem_peek_port_qmi_for_data (MMBaseModem *self,
         const gchar *wdm_port_parent_path;
 
         g_assert (MM_IS_PORT_QMI (l->data));
-        wdm_port_parent_path = mm_port_get_parent_path (MM_PORT (l->data));
+        wdm_port_parent_path = mm_kernel_device_get_parent_sysfs_path (mm_port_peek_kernel_device (MM_PORT (l->data)));
         if (wdm_port_parent_path && g_str_equal (wdm_port_parent_path, net_port_parent_path))
             return MM_PORT_QMI (l->data);
     }
@@ -724,7 +633,7 @@ mm_base_modem_peek_port_mbim_for_data (MMBaseModem *self,
     const gchar *net_port_parent_path;
 
     g_warn_if_fail (mm_port_get_subsys (data) == MM_PORT_SUBSYS_NET);
-    net_port_parent_path = mm_port_get_parent_path (data);
+    net_port_parent_path = mm_kernel_device_get_parent_sysfs_path (mm_port_peek_kernel_device (data));
     if (!net_port_parent_path) {
         g_set_error (error,
                      MM_CORE_ERROR,
@@ -743,7 +652,7 @@ mm_base_modem_peek_port_mbim_for_data (MMBaseModem *self,
         const gchar *wdm_port_parent_path;
 
         g_assert (MM_IS_PORT_MBIM (l->data));
-        wdm_port_parent_path = mm_port_get_parent_path (MM_PORT (l->data));
+        wdm_port_parent_path = mm_kernel_device_get_parent_sysfs_path (mm_port_peek_kernel_device (MM_PORT (l->data)));
         if (wdm_port_parent_path && g_str_equal (wdm_port_parent_path, net_port_parent_path))
             return MM_PORT_MBIM (l->data);
     }
@@ -1357,7 +1266,7 @@ base_modem_invalid_idle (MMBaseModem *self)
      * cancelled */
     mm_base_modem_set_valid (self, FALSE);
     g_object_unref (self);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -1409,6 +1318,9 @@ set_property (GObject *object,
     case PROP_VALID:
         mm_base_modem_set_valid (self, g_value_get_boolean (value));
         break;
+    case PROP_REPROBE:
+        mm_base_modem_set_reprobe (self, g_value_get_boolean (value));
+        break;
     case PROP_MAX_TIMEOUTS:
         self->priv->max_timeouts = g_value_get_uint (value);
         break;
@@ -1451,6 +1363,9 @@ get_property (GObject *object,
     switch (prop_id) {
     case PROP_VALID:
         g_value_set_boolean (value, self->priv->valid);
+        break;
+    case PROP_REPROBE:
+        g_value_set_boolean (value, self->priv->reprobe);
         break;
     case PROP_MAX_TIMEOUTS:
         g_value_set_uint (value, self->priv->max_timeouts);
@@ -1627,4 +1542,12 @@ mm_base_modem_class_init (MMBaseModemClass *klass)
                              G_TYPE_DBUS_CONNECTION,
                              G_PARAM_READWRITE);
     g_object_class_install_property (object_class, PROP_CONNECTION, properties[PROP_CONNECTION]);
+
+    properties[PROP_REPROBE] =
+        g_param_spec_boolean (MM_BASE_MODEM_REPROBE,
+                              "Reprobe",
+                              "Whether the modem needs to be reprobed or not.",
+                              FALSE,
+                              G_PARAM_READWRITE);
+    g_object_class_install_property (object_class, PROP_REPROBE, properties[PROP_REPROBE]);
 }

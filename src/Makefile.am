@@ -1,4 +1,54 @@
-SUBDIRS=. tests
+
+SUBDIRS = . tests
+
+################################################################################
+# common
+################################################################################
+
+sbin_PROGRAMS =
+noinst_LTLIBRARIES =
+EXTRA_DIST =
+BUILT_SOURCES =
+CLEANFILES =
+
+AM_CFLAGS = \
+	$(MM_CFLAGS) \
+	$(CODE_COVERAGE_CFLAGS) \
+	$(GUDEV_CFLAGS) \
+	-I$(top_srcdir) \
+	-I$(top_srcdir)/include \
+	-I$(top_builddir)/include \
+	-I$(top_srcdir)/libqcdm/src \
+	-I$(top_srcdir)/libmm-glib \
+	-I${top_builddir}/libmm-glib/generated \
+	-I${top_builddir}/libmm-glib/generated/tests \
+	-I$(srcdir)/kerneldevice \
+	$(NULL)
+
+AM_LDFLAGS = \
+	$(MM_LIBS) \
+	$(CODE_COVERAGE_LDFLAGS) \
+	$(GUDEV_LIBS) \
+	$(NULL)
+
+if WITH_QMI
+AM_CFLAGS  += $(QMI_CFLAGS)
+AM_LDFLAGS += $(QMI_LIBS)
+endif
+
+if WITH_MBIM
+AM_CFLAGS  += $(MBIM_CFLAGS)
+AM_LDFLAGS += $(MBIM_LIBS)
+endif
+
+if WITH_POLKIT
+AM_CFLAGS  += $(POLKIT_CFLAGS)
+AM_LDFLAGS += $(POLKIT_LIBS)
+endif
+
+################################################################################
+# generic udev rules
+################################################################################
 
 udevrulesdir = $(UDEV_BASE_DIR)/rules.d
 udevrules_DATA = \
@@ -6,26 +56,18 @@ udevrules_DATA = \
 	77-mm-pcmcia-device-blacklist.rules \
 	77-mm-platform-serial-whitelist.rules \
 	77-mm-usb-serial-adapters-greylist.rules \
-	80-mm-candidate.rules
+	80-mm-candidate.rules \
+	$(NULL)
 
-AM_CFLAGS = $(CODE_COVERAGE_CFLAGS)
-AM_LDFLAGS = $(CODE_COVERAGE_LDFLAGS)
+EXTRA_DIST += $(udevrules_DATA)
 
-noinst_LTLIBRARIES = libmodem-helpers.la libport.la
+################################################################################
+# helpers library
+################################################################################
 
-libmodem_helpers_la_CPPFLAGS = \
-	$(MM_CFLAGS) \
-	-I$(top_srcdir) \
-	-I$(top_srcdir)/include \
-	-I$(top_builddir)/include \
-	-I$(top_srcdir)/libmm-glib \
-	-I${top_srcdir}/libmm-glib/generated \
-	-I${top_builddir}/libmm-glib/generated
+noinst_LTLIBRARIES += libhelpers.la
 
-libmodem_helpers_la_LIBADD = \
-	$(top_builddir)/libmm-glib/libmm-glib.la
-
-libmodem_helpers_la_SOURCES = \
+libhelpers_la_SOURCES = \
 	mm-error-helpers.c \
 	mm-error-helpers.h \
 	mm-modem-helpers.c \
@@ -37,54 +79,81 @@ libmodem_helpers_la_SOURCES = \
 	mm-sms-part-3gpp.h \
 	mm-sms-part-3gpp.c \
 	mm-sms-part-cdma.h \
-	mm-sms-part-cdma.c
+	mm-sms-part-cdma.c \
+	$(NULL)
 
-# Additional QMI support in libmodem-helpers
 if WITH_QMI
-libmodem_helpers_la_SOURCES += \
+libhelpers_la_SOURCES += \
 	mm-modem-helpers-qmi.c \
-	mm-modem-helpers-qmi.h
-libmodem_helpers_la_CPPFLAGS += $(QMI_CFLAGS)
+	mm-modem-helpers-qmi.h \
+	$(NULL)
 endif
 
-# Additional MBIM support in libmodem-helpers
 if WITH_MBIM
-libmodem_helpers_la_SOURCES += \
+libhelpers_la_SOURCES += \
 	mm-modem-helpers-mbim.c \
-	mm-modem-helpers-mbim.h
-libmodem_helpers_la_CPPFLAGS += $(MBIM_CFLAGS)
+	mm-modem-helpers-mbim.h \
+	$(NULL)
 endif
 
-# libport specific enum types
-PORT_ENUMS = \
-	$(srcdir)/mm-port.h \
-	$(srcdir)/mm-port-serial-at.h
+################################################################################
+# kerneldevice library
+################################################################################
 
-mm-port-enums-types.h: Makefile.am $(PORT_ENUMS) $(top_srcdir)/build-aux/mm-enums-template.h
+noinst_LTLIBRARIES += libkerneldevice.la
+
+libkerneldevice_la_CPPFLAGS = \
+	-DUDEVRULESDIR=\"$(udevrulesdir)\" \
+	$(NULL)
+
+libkerneldevice_la_SOURCES = \
+	kerneldevice/mm-kernel-device.h \
+	kerneldevice/mm-kernel-device.c \
+	kerneldevice/mm-kernel-device-generic.h \
+	kerneldevice/mm-kernel-device-generic.c \
+	kerneldevice/mm-kernel-device-generic-rules.h \
+	kerneldevice/mm-kernel-device-generic-rules.c \
+	$(NULL)
+
+if WITH_UDEV
+libkerneldevice_la_SOURCES += \
+	kerneldevice/mm-kernel-device-udev.h \
+	kerneldevice/mm-kernel-device-udev.c \
+	$(NULL)
+endif
+
+libkerneldevice_la_LIBADD = \
+	$(top_builddir)/libmm-glib/libmm-glib.la \
+	$(NULL)
+
+################################################################################
+# ports library
+################################################################################
+
+noinst_LTLIBRARIES += libport.la
+
+PORT_ENUMS_INPUTS = \
+	$(srcdir)/mm-port.h \
+	$(srcdir)/mm-port-serial-at.h \
+	$(NULL)
+
+PORT_ENUMS_GENERATED = \
+	mm-port-enums-types.h \
+	mm-port-enums-types.c \
+	$(NULL)
+
+mm-port-enums-types.h: Makefile.am $(PORT_ENUMS_INPUTS) $(top_srcdir)/build-aux/mm-enums-template.h
 	$(AM_V_GEN) $(GLIB_MKENUMS) \
 		--fhead "#include \"mm-port.h\"\n#include \"mm-port-serial-at.h\"\n#ifndef __MM_PORT_ENUMS_TYPES_H__\n#define __MM_PORT_ENUMS_TYPES_H__\n" \
 		--template $(top_srcdir)/build-aux/mm-enums-template.h \
 		--ftail "#endif /* __MM_PORT_ENUMS_TYPES_H__ */\n" \
-		$(PORT_ENUMS) > $@
+		$(PORT_ENUMS_INPUTS) > $@
 
 mm-port-enums-types.c: Makefile.am $(top_srcdir)/build-aux/mm-enums-template.c mm-port-enums-types.h
 	$(AM_V_GEN) $(GLIB_MKENUMS) \
 		--fhead "#include \"mm-port-enums-types.h\"" \
 		--template $(top_srcdir)/build-aux/mm-enums-template.c \
-		$(PORT_ENUMS) > $@
-
-libport_la_CPPFLAGS = \
-	$(MM_CFLAGS) \
-	-I$(top_srcdir) \
-	-I$(top_srcdir)/include \
-	-I$(top_builddir)/include \
-	-I$(top_srcdir)/libmm-glib \
-	-I${top_srcdir}/libmm-glib/generated \
-	-I${top_builddir}/libmm-glib/generated
-
-nodist_libport_la_SOURCES = \
-	mm-port-enums-types.h \
-	mm-port-enums-types.c
+		$(PORT_ENUMS_INPUTS) > $@
 
 libport_la_SOURCES = \
 	mm-port.c \
@@ -98,69 +167,79 @@ libport_la_SOURCES = \
 	mm-port-serial-gps.c \
 	mm-port-serial-gps.h \
 	mm-serial-parsers.c \
-	mm-serial-parsers.h
+	mm-serial-parsers.h \
+	$(NULL)
 
-# Additional QMI support in libserial
+nodist_libport_la_SOURCES = $(PORT_ENUMS_GENERATED)
+
 if WITH_QMI
 libport_la_SOURCES += \
 	mm-port-qmi.c \
-	mm-port-qmi.h
-libport_la_CPPFLAGS += $(QMI_CFLAGS)
+	mm-port-qmi.h \
+	$(NULL)
 endif
 
-# Additional MBIM support in libserial
 if WITH_MBIM
 libport_la_SOURCES += \
 	mm-port-mbim.c \
-	mm-port-mbim.h
-libport_la_CPPFLAGS += $(MBIM_CFLAGS)
+	mm-port-mbim.h \
+	$(NULL)
 endif
 
-# Daemon specific enum types
-DAEMON_ENUMS = \
-	$(srcdir)/mm-base-bearer.h \
-	$(srcdir)/mm-port-probe.h
+libport_la_LIBADD = \
+	$(top_builddir)/libqcdm/src/libqcdm.la \
+	$(top_builddir)/libmm-glib/libmm-glib.la \
+	$(builddir)/libhelpers.la \
+	$(builddir)/libkerneldevice.la \
+	$(NULL)
 
-mm-daemon-enums-types.h: Makefile.am $(DAEMON_ENUMS) $(top_srcdir)/build-aux/mm-enums-template.h
+# Request to build enum types before anything else
+BUILT_SOURCES += $(PORT_ENUMS_GENERATED)
+CLEANFILES    += $(PORT_ENUMS_GENERATED)
+
+################################################################################
+# ModemManager daemon
+################################################################################
+
+sbin_PROGRAMS += ModemManager
+
+DAEMON_ENUMS_INPUTS = \
+	$(srcdir)/mm-base-bearer.h \
+	$(srcdir)/mm-port-probe.h  \
+	$(NULL)
+
+DAEMON_ENUMS_GENERATED = \
+	mm-daemon-enums-types.h \
+	mm-daemon-enums-types.c \
+	$(NULL)
+
+mm-daemon-enums-types.h: Makefile.am $(DAEMON_ENUMS_INPUTS) $(top_srcdir)/build-aux/mm-enums-template.h
 	$(AM_V_GEN) $(GLIB_MKENUMS) \
 		--fhead "#include \"mm-base-bearer.h\"\n#include \"mm-port-probe.h\"\n#ifndef __MM_DAEMON_ENUMS_TYPES_H__\n#define __MM_DAEMON_ENUMS_TYPES_H__\n" \
 		--template $(top_srcdir)/build-aux/mm-enums-template.h \
 		--ftail "#endif /* __MM_DAEMON_ENUMS_TYPES_H__ */\n" \
-		$(DAEMON_ENUMS) > $@
+		$(DAEMON_ENUMS_INPUTS) > $@
 
 mm-daemon-enums-types.c: Makefile.am $(top_srcdir)/build-aux/mm-enums-template.c mm-daemon-enums-types.h
 	$(AM_V_GEN) $(GLIB_MKENUMS) \
 		--fhead "#include \"mm-daemon-enums-types.h\"" \
 		--template $(top_srcdir)/build-aux/mm-enums-template.c \
-		$(DAEMON_ENUMS) > $@
+		$(DAEMON_ENUMS_INPUTS) > $@
 
-sbin_PROGRAMS = ModemManager
+# Request to build enum types before anything else
+BUILT_SOURCES += $(DAEMON_ENUMS_GENERATED)
+CLEANFILES    += $(DAEMON_ENUMS_GENERATED)
 
 ModemManager_CPPFLAGS = \
-	$(MM_CFLAGS) \
-	$(GUDEV_CFLAGS) \
-	-I$(top_srcdir) \
-	-I$(top_srcdir)/include \
-	-I$(top_builddir)/include \
-	-I$(top_srcdir)/libmm-glib \
-	-I$(top_builddir)/libmm-glib \
-	-I${top_srcdir}/libmm-glib/generated \
-	-I${top_builddir}/libmm-glib/generated \
-	-I${top_srcdir}/libmm-glib/generated/tests \
-	-I${top_builddir}/libmm-glib/generated/tests \
-	-DPLUGINDIR=\"$(pkglibdir)\"
+	-DPLUGINDIR=\"$(pkglibdir)\" \
+	$(NULL)
 
 ModemManager_LDADD = \
-	$(MM_LIBS) \
-	$(GUDEV_LIBS) \
-	$(builddir)/libmodem-helpers.la \
-	$(builddir)/libport.la \
 	$(top_builddir)/libqcdm/src/libqcdm.la \
-	$(top_builddir)/libmm-glib/generated/tests/libmm-test-generated.la
-
-nodist_ModemManager_SOURCES = \
-	mm-daemon-enums-types.h \
-	mm-daemon-enums-types.c
+	$(top_builddir)/libmm-glib/libmm-glib.la \
+	$(top_builddir)/libmm-glib/generated/tests/libmm-test-generated.la \
+	$(builddir)/libport.la \
+	$(NULL)
 
 ModemManager_SOURCES = \
 	main.c \
@@ -195,8 +274,12 @@ ModemManager_SOURCES = \
 	mm-base-modem.c \
 	mm-base-sms.h \
 	mm-base-sms.c \
+	mm-base-call.h \
+	mm-base-call.c \
 	mm-sms-list.h \
 	mm-sms-list.c \
+	mm-call-list.h \
+	mm-call-list.c \
 	mm-iface-modem.h \
 	mm-iface-modem.c \
 	mm-iface-modem-3gpp.h \
@@ -211,6 +294,8 @@ ModemManager_SOURCES = \
 	mm-iface-modem-location.c \
 	mm-iface-modem-messaging.h \
 	mm-iface-modem-messaging.c \
+	mm-iface-modem-voice.h \
+	mm-iface-modem-voice.c \
 	mm-iface-modem-time.h \
 	mm-iface-modem-time.c \
 	mm-iface-modem-firmware.h \
@@ -226,28 +311,19 @@ ModemManager_SOURCES = \
 	mm-port-probe-at.h \
 	mm-port-probe-at.c \
 	mm-plugin.c \
-	mm-plugin.h
+	mm-plugin.h \
+	$(NULL)
 
-# Additional dependency rules
-mm-base-bearer.c: mm-daemon-enums-types.h
+nodist_ModemManager_SOURCES = $(DAEMON_ENUMS_GENERATED)
 
 # Additional Polkit support
 if WITH_POLKIT
-ModemManager_SOURCES += \
-	mm-auth-provider-polkit.c \
-	mm-auth-provider-polkit.h
-ModemManager_LDADD += $(POLKIT_LIBS)
-ModemManager_CPPFLAGS += $(POLKIT_CFLAGS)
+ModemManager_SOURCES += mm-auth-provider-polkit.h mm-auth-provider-polkit.c
 endif
 
 # Additional suspend/resume support via systemd
 if SUSPEND_RESUME_SYSTEMD
-ModemManager_SOURCES += mm-sleep-monitor.h mm-sleep-monitor-systemd.c
-endif
-
-# Additional suspend/resume support via upower
-if SUSPEND_RESUME_UPOWER
-ModemManager_SOURCES += mm-sleep-monitor.h mm-sleep-monitor-upower.c
+ModemManager_SOURCES += mm-sleep-monitor.h mm-sleep-monitor.c
 endif
 
 # Additional QMI support in ModemManager
@@ -260,9 +336,8 @@ ModemManager_SOURCES += \
 	mm-bearer-qmi.h \
 	mm-bearer-qmi.c \
 	mm-broadband-modem-qmi.h \
-	mm-broadband-modem-qmi.c
-ModemManager_CPPFLAGS += $(QMI_CFLAGS)
-ModemManager_LDADD += $(QMI_LIBS)
+	mm-broadband-modem-qmi.c \
+	$(NULL)
 endif
 
 # Additional MBIM support in ModemManager
@@ -275,16 +350,6 @@ ModemManager_SOURCES += \
 	mm-bearer-mbim.h \
 	mm-bearer-mbim.c \
 	mm-broadband-modem-mbim.h \
-	mm-broadband-modem-mbim.c
-ModemManager_CPPFLAGS += $(MBIM_CFLAGS)
-ModemManager_LDADD += $(MBIM_LIBS)
+	mm-broadband-modem-mbim.c \
+	$(NULL)
 endif
-
-EXTRA_DIST = \
-	$(udevrules_DATA)
-
-CLEANFILES = \
-	mm-daemon-enums-types.h \
-	mm-daemon-enums-types.c \
-	mm-port-enums-types.h \
-	mm-port-enums-types.c

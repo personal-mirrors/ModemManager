@@ -86,7 +86,8 @@ bus_acquired_cb (GDBusConnection *connection,
     g_assert (!manager);
     manager = mm_base_manager_new (connection,
                                    mm_context_get_test_plugin_dir (),
-                                   !mm_context_get_test_no_auto_scan (),
+                                   !mm_context_get_no_auto_scan (),
+                                   mm_context_get_initial_kernel_events (),
                                    mm_context_get_test_enable (),
                                    &error);
     if (!manager) {
@@ -134,8 +135,6 @@ main (int argc, char *argv[])
     GMainLoop *inner;
     GError *err = NULL;
     guint name_id;
-
-    g_type_init ();
 
     /* Setup application context */
     mm_context_init (argc, argv);

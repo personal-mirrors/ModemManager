@@ -152,6 +152,118 @@ mm_huawei_parse_ndisstatqry_response (const gchar *response,
 }
 
 /*****************************************************************************/
+/* ^DHCP response parser */
+
+static gboolean
+match_info_to_ip4_addr (GMatchInfo *match_info,
+                        guint match_index,
+                        guint *out_addr)
+{
+    gchar *s, *bin = NULL;
+    gchar buf[9];
+    gsize len, bin_len;
+    gboolean success = FALSE;
+
+    s = g_match_info_fetch (match_info, match_index);
+    g_return_val_if_fail (s != NULL, FALSE);
+
+    len = strlen (s);
+    if (len == 1 && s[0] == '0') {
+        *out_addr = 0;
+        success = TRUE;
+        goto done;
+    }
+    if (len < 7 || len > 8)
+        goto done;
+
+    /* Handle possibly missing leading zero */
+    memset (buf, 0, sizeof (buf));
+    if (len == 7) {
+        strcpy (&buf[1], s);
+        buf[0] = '0';
+    } else if (len == 8)
+        strcpy (buf, s);
+    else
+        g_assert_not_reached ();
+
+    bin = mm_utils_hexstr2bin (buf, &bin_len);
+    if (!bin || bin_len != 4)
+        goto done;
+
+    *out_addr = GUINT32_SWAP_LE_BE (*((guint32 *) bin));
+    success = TRUE;
+
+done:
+    g_free (s);
+    g_free (bin);
+    return success;
+}
+
+gboolean
+mm_huawei_parse_dhcp_response (const char *reply,
+                               guint *out_address,
+                               guint *out_prefix,
+                               guint *out_gateway,
+                               guint *out_dns1,
+                               guint *out_dns2,
+                               GError **error)
+{
+    gboolean matched;
+    GRegex *r;
+    GMatchInfo *match_info = NULL;
+    GError *match_error = NULL;
+
+    g_assert (reply != NULL);
+    g_assert (out_address != NULL);
+    g_assert (out_prefix != NULL);
+    g_assert (out_gateway != NULL);
+    g_assert (out_dns1 != NULL);
+    g_assert (out_dns2 != NULL);
+
+    /* Format:
+     *
+     * ^DHCP: <address>,<netmask>,<gateway>,<?>,<dns1>,<dns2>,<uplink>,<downlink>
+     *
+     * All numbers are hexadecimal representations of IPv4 addresses, with
+     * least-significant byte first.  eg, 192.168.50.32 is expressed as
+     * "2032A8C0".  Sometimes leading zeros are stripped, so "1010A0A" is
+     * actually 10.10.1.1.
+     */
+
+    r = g_regex_new ("\\^DHCP:\\s*([0-9a-fA-F]+),([0-9a-fA-F]+),([0-9a-fA-F]+),([0-9a-fA-F]+),([0-9a-fA-F]+),([0-9a-fA-F]+),.*$", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    matched = g_regex_match_full (r, reply, -1, 0, 0, &match_info, &match_error);
+    if (!matched) {
+        if (match_error) {
+            g_propagate_error (error, match_error);
+            g_prefix_error (error, "Could not parse ^DHCP results: ");
+        } else {
+            g_set_error_literal (error,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Couldn't match ^DHCP reply");
+        }
+    } else {
+        guint netmask;
+
+        if (match_info_to_ip4_addr (match_info, 1, out_address) &&
+            match_info_to_ip4_addr (match_info, 2, &netmask) &&
+            match_info_to_ip4_addr (match_info, 3, out_gateway) &&
+            match_info_to_ip4_addr (match_info, 5, out_dns1) &&
+            match_info_to_ip4_addr (match_info, 6, out_dns2)) {
+            *out_prefix = mm_count_bits_set (netmask);
+            matched = TRUE;
+        }
+    }
+
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+    return matched;
+}
+
+/*****************************************************************************/
 /* ^SYSINFO response parser */
 
 gboolean
@@ -792,6 +904,12 @@ mm_huawei_parse_syscfg_response (const gchar *response,
         return NULL;
     }
 
+    /* Fix invalid modes with non-sensical acquisition orders */
+    if (mode == 14 && acqorder != 0)  /* WCDMA only but acqorder != "Automatic" */
+        acqorder = 0;
+    else if (mode == 13 && acqorder != 0)  /* GSM only but acqorder != "Automatic" */
+        acqorder = 0;
+
     /* Look for current modes among the supported ones */
     for (i = 0; i < supported_mode_combinations->len; i++) {
         const MMHuaweiSyscfgCombination *combination;
@@ -1211,6 +1329,77 @@ gboolean mm_huawei_parse_time_response (const gchar *response,
         }
     }
 
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    return ret;
+}
+
+/*****************************************************************************/
+/* ^HCSQ response parser */
+
+gboolean
+mm_huawei_parse_hcsq_response (const gchar *response,
+                               MMModemAccessTechnology *out_act,
+                               guint *out_value1,
+                               guint *out_value2,
+                               guint *out_value3,
+                               guint *out_value4,
+                               guint *out_value5,
+                               GError **error)
+{
+    GRegex *r;
+    GMatchInfo *match_info = NULL;
+    GError *match_error = NULL;
+    gboolean ret = FALSE;
+    char *s;
+
+    r = g_regex_new ("\\^HCSQ:\\s*\"([a-zA-Z]*)\",(\\d+),?(\\d+)?,?(\\d+)?,?(\\d+)?,?(\\d+)?$", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    if (!g_regex_match_full (r, response, -1, 0, 0, &match_info, &match_error)) {
+        if (match_error) {
+            g_propagate_error (error, match_error);
+            g_prefix_error (error, "Could not parse ^HCSQ results: ");
+        } else {
+            g_set_error_literal (error,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Couldn't match ^HCSQ reply");
+        }
+        goto done;
+    }
+
+    /* Remember that g_match_info_get_match_count() includes match #0 */
+    if (g_match_info_get_match_count (match_info) < 3) {
+        g_set_error_literal (error,
+                             MM_CORE_ERROR,
+                             MM_CORE_ERROR_FAILED,
+                             "Not enough elements in ^HCSQ reply");
+        goto done;
+    }
+
+    if (out_act) {
+        s = g_match_info_fetch (match_info, 1);
+        *out_act = mm_string_to_access_tech (s);
+        g_free (s);
+    }
+
+    if (out_value1)
+        mm_get_uint_from_match_info (match_info, 2, out_value1);
+    if (out_value2)
+        mm_get_uint_from_match_info (match_info, 3, out_value2);
+    if (out_value3)
+        mm_get_uint_from_match_info (match_info, 4, out_value3);
+    if (out_value4)
+        mm_get_uint_from_match_info (match_info, 5, out_value4);
+    if (out_value5)
+        mm_get_uint_from_match_info (match_info, 6, out_value5);
+
+    ret = TRUE;
+
+done:
     if (match_info)
         g_match_info_free (match_info);
     g_regex_unref (r);

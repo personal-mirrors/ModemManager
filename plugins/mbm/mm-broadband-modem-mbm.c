@@ -35,28 +35,30 @@
 #include "mm-bearer-list.h"
 #include "mm-errors-types.h"
 #include "mm-modem-helpers.h"
+#include "mm-modem-helpers-mbm.h"
 #include "mm-broadband-modem-mbm.h"
 #include "mm-broadband-bearer-mbm.h"
 #include "mm-sim-mbm.h"
 #include "mm-base-modem-at.h"
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-3gpp.h"
+#include "mm-iface-modem-location.h"
+
+/* sets the interval in seconds on how often the card emits the NMEA sentences */
+#define MBM_GPS_NMEA_INTERVAL   "5"
 
 static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
+static void iface_modem_location_init (MMIfaceModemLocation *iface);
 
 static MMIfaceModem *iface_modem_parent;
 static MMIfaceModem3gpp *iface_modem_3gpp_parent;
+static MMIfaceModemLocation *iface_modem_location_parent;
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbm, mm_broadband_modem_mbm, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init))
-
-#define MBM_NETWORK_MODE_OFFLINE   0
-#define MBM_NETWORK_MODE_ANY       1
-#define MBM_NETWORK_MODE_LOW_POWER 4
-#define MBM_NETWORK_MODE_2G        5
-#define MBM_NETWORK_MODE_3G        6
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_LOCATION, iface_modem_location_init))
 
 #define MBM_E2NAP_DISCONNECTED 0
 #define MBM_E2NAP_CONNECTED    1
@@ -73,6 +75,8 @@ struct _MMBroadbandModemMbmPrivate {
     GRegex *estksms_regex;
     GRegex *emwi_regex;
     GRegex *erinfo_regex;
+
+    MMModemLocationSource enabled_sources;
 
     guint mbm_mode;
 };
@@ -172,7 +176,7 @@ after_sim_unlock_wait_cb (GSimpleAsyncResult *result)
 {
     g_simple_async_result_complete (result);
     g_object_unref (result);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -195,59 +199,55 @@ modem_after_sim_unlock (MMIfaceModem *self,
 /* Load supported modes (Modem interface) */
 
 static GArray *
-load_supported_modes_finish (MMIfaceModem *self,
+load_supported_modes_finish (MMIfaceModem *_self,
                              GAsyncResult *res,
                              GError **error)
 {
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
-        return NULL;
-
-    return g_array_ref (g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res)));
-}
-
-static void
-parent_load_supported_modes_ready (MMIfaceModem *self,
-                                   GAsyncResult *res,
-                                   GSimpleAsyncResult *simple)
-{
-    GError *error = NULL;
-    GArray *all;
+    MMBroadbandModemMbm *self = MM_BROADBAND_MODEM_MBM (_self);
+    const gchar *response;
+    guint32 mask =  0;
     GArray *combinations;
-    GArray *filtered;
     MMModemModeCombination mode;
 
-    all = iface_modem_parent->load_supported_modes_finish (self, res, &error);
-    if (!all) {
-        g_simple_async_result_take_error (simple, error);
-        g_simple_async_result_complete (simple);
-        g_object_unref (simple);
-        return;
-    }
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+    if (!response)
+        return FALSE;
+
+    if (!mm_mbm_parse_cfun_test (response, &mask, error))
+        return FALSE;
 
     /* Build list of combinations */
     combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 3);
 
     /* 2G only */
-    mode.allowed = MM_MODEM_MODE_2G;
-    mode.preferred = MM_MODEM_MODE_NONE;
-    g_array_append_val (combinations, mode);
+    if (mask & (1 << MBM_NETWORK_MODE_2G)) {
+        mode.allowed = MM_MODEM_MODE_2G;
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+    }
+
     /* 3G only */
-    mode.allowed = MM_MODEM_MODE_3G;
-    mode.preferred = MM_MODEM_MODE_NONE;
-    g_array_append_val (combinations, mode);
+    if (mask & (1 << MBM_NETWORK_MODE_3G)) {
+        mode.allowed = MM_MODEM_MODE_3G;
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+    }
+
     /* 2G and 3G */
-    mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-    mode.preferred = MM_MODEM_MODE_NONE;
-    g_array_append_val (combinations, mode);
+    if (mask & (1 << MBM_NETWORK_MODE_ANY)) {
+        mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+    }
 
-    /* Filter out those unsupported modes */
-    filtered = mm_filter_supported_modes (all, combinations);
-    g_array_unref (all);
-    g_array_unref (combinations);
+    if (combinations->len == 0) {
+        g_set_error_literal (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                             "Couldn't load any supported mode");
+        g_array_unref (combinations);
+        return NULL;
+    }
 
-    g_simple_async_result_set_op_res_gpointer (simple, filtered, (GDestroyNotify) g_array_unref);
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+    return combinations;
 }
 
 static void
@@ -255,14 +255,12 @@ load_supported_modes (MMIfaceModem *self,
                       GAsyncReadyCallback callback,
                       gpointer user_data)
 {
-    /* Run parent's loading */
-    iface_modem_parent->load_supported_modes (
-        MM_IFACE_MODEM (self),
-        (GAsyncReadyCallback)parent_load_supported_modes_ready,
-        g_simple_async_result_new (G_OBJECT (self),
-                                   callback,
-                                   user_data,
-                                   load_supported_modes));
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CFUN=?",
+                              3,
+                              FALSE,
+                              callback,
+                              user_data);
 }
 
 /*****************************************************************************/
@@ -277,45 +275,22 @@ load_current_modes_finish (MMIfaceModem *_self,
 {
     MMBroadbandModemMbm *self = MM_BROADBAND_MODEM_MBM (_self);
     const gchar *response;
-    guint a;
+    gint mbm_mode = -1;
+
+    g_assert (allowed);
+    g_assert (preferred);
 
     response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
-    if (!response)
+    if (!response || !mm_mbm_parse_cfun_query_current_modes (response, allowed, &mbm_mode, error))
         return FALSE;
 
-    if (mm_get_uint_from_str (mm_strip_tag (response, "+CFUN:"), &a)) {
-        /* No settings to set preferred */
-        *preferred = MM_MODEM_MODE_NONE;
+    /* No settings to set preferred */
+    *preferred = MM_MODEM_MODE_NONE;
 
-        switch (a) {
-        case MBM_NETWORK_MODE_OFFLINE:
-        case MBM_NETWORK_MODE_LOW_POWER:
-            /* Do not update internal mbm_mode */
-            *allowed = MM_MODEM_MODE_NONE;
-            break;
-        case MBM_NETWORK_MODE_2G:
-            self->priv->mbm_mode = MBM_NETWORK_MODE_2G;
-            *allowed = MM_MODEM_MODE_2G;
-            break;
-        case MBM_NETWORK_MODE_3G:
-            self->priv->mbm_mode = MBM_NETWORK_MODE_3G;
-            *allowed = MM_MODEM_MODE_3G;
-            break;
-        default:
-            /* Do not update internal mbm_mode */
-            *allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-            break;
-        }
+    if (mbm_mode != -1)
+        self->priv->mbm_mode = mbm_mode;
 
-        return TRUE;
-    }
-
-    g_set_error (error,
-                 MM_CORE_ERROR,
-                 MM_CORE_ERROR_FAILED,
-                 "Couldn't parse +CFUN response: '%s'",
-                 response);
-    return FALSE;
+    return TRUE;
 }
 
 static void
@@ -617,36 +592,14 @@ load_power_state_finish (MMIfaceModem *self,
                          GAsyncResult *res,
                          GError **error)
 {
-    const gchar *response;
-    guint a;
+    const gchar       *response;
+    MMModemPowerState  state;
 
     response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
-    if (!response)
-        return FALSE;
+    if (!response || !mm_mbm_parse_cfun_query_power_state (response, &state, error))
+        return MM_MODEM_POWER_STATE_UNKNOWN;
 
-    if (mm_get_uint_from_str (mm_strip_tag (response, "+CFUN:"), &a)) {
-        switch (a) {
-        case MBM_NETWORK_MODE_OFFLINE:
-            return MM_MODEM_POWER_STATE_OFF;
-
-        case MBM_NETWORK_MODE_LOW_POWER:
-            return MM_MODEM_POWER_STATE_LOW;
-
-        case MBM_NETWORK_MODE_ANY:
-        case MBM_NETWORK_MODE_2G:
-        case MBM_NETWORK_MODE_3G:
-            return MM_MODEM_POWER_STATE_ON;
-        default:
-            break;
-        }
-    }
-
-    g_set_error (error,
-                 MM_CORE_ERROR,
-                 MM_CORE_ERROR_FAILED,
-                 "Couldn't parse +CFUN response: '%s'",
-                 response);
-    return MM_MODEM_POWER_STATE_UNKNOWN;
+    return state;
 }
 
 static void
@@ -1176,6 +1129,305 @@ modem_3gpp_disable_unsolicited_events (MMIfaceModem3gpp *self,
 }
 
 /*****************************************************************************/
+/* Location capabilities loading (Location interface) */
+
+static MMModemLocationSource
+location_load_capabilities_finish (MMIfaceModemLocation *self,
+                                   GAsyncResult *res,
+                                   GError **error)
+{
+    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+        return MM_MODEM_LOCATION_SOURCE_NONE;
+
+    return (MMModemLocationSource) GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res)));
+}
+
+static void
+parent_load_capabilities_ready (MMIfaceModemLocation *self,
+                                GAsyncResult *res,
+                                GSimpleAsyncResult *simple)
+{
+    MMModemLocationSource sources;
+    GError *error = NULL;
+
+    sources = iface_modem_location_parent->load_capabilities_finish (self, res, &error);
+    if (error) {
+        g_simple_async_result_take_error (simple, error);
+        g_simple_async_result_complete (simple);
+        g_object_unref (simple);
+        return;
+    }
+
+    /* not sure how to check if GPS is supported, just allow it */
+    if (mm_base_modem_peek_port_gps (MM_BASE_MODEM (self)))
+        sources |= (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                    MM_MODEM_LOCATION_SOURCE_GPS_RAW  |
+                    MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED);
+
+    /* So we're done, complete */
+    g_simple_async_result_set_op_res_gpointer (simple,
+                                               GUINT_TO_POINTER (sources),
+                                               NULL);
+    g_simple_async_result_complete (simple);
+    g_object_unref (simple);
+}
+
+static void
+location_load_capabilities (MMIfaceModemLocation *self,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
+{
+    GSimpleAsyncResult *result;
+
+    result = g_simple_async_result_new (G_OBJECT (self),
+                                        callback,
+                                        user_data,
+                                        location_load_capabilities);
+
+    /* Chain up parent's setup */
+    iface_modem_location_parent->load_capabilities (self,
+                                                    (GAsyncReadyCallback)parent_load_capabilities_ready,
+                                                    result);
+}
+
+/*****************************************************************************/
+/* Enable/Disable location gathering (Location interface) */
+
+typedef struct {
+    MMBroadbandModemMbm *self;
+    GSimpleAsyncResult *result;
+    MMModemLocationSource source;
+} LocationGatheringContext;
+
+static void
+location_gathering_context_complete_and_free (LocationGatheringContext *ctx)
+{
+    g_simple_async_result_complete_in_idle (ctx->result);
+    g_object_unref (ctx->result);
+    g_object_unref (ctx->self);
+    g_slice_free (LocationGatheringContext, ctx);
+}
+
+/******************************/
+/* Disable location gathering */
+
+static gboolean
+disable_location_gathering_finish (MMIfaceModemLocation *self,
+                                   GAsyncResult *res,
+                                   GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+gps_disabled_ready (MMBaseModem *self,
+                    GAsyncResult *res,
+                    LocationGatheringContext *ctx)
+{
+    MMPortSerialGps *gps_port;
+    GError *error = NULL;
+
+    if (!mm_base_modem_at_command_full_finish (self, res, &error))
+        g_simple_async_result_take_error (ctx->result, error);
+    else
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+
+    /* Only use the GPS port in NMEA/RAW setups */
+    if (ctx->source & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                       MM_MODEM_LOCATION_SOURCE_GPS_RAW)) {
+        /* Even if we get an error here, we try to close the GPS port */
+        gps_port = mm_base_modem_peek_port_gps (self);
+        if (gps_port)
+            mm_port_serial_close (MM_PORT_SERIAL (gps_port));
+    }
+
+    location_gathering_context_complete_and_free (ctx);
+}
+
+static void
+disable_location_gathering (MMIfaceModemLocation *_self,
+                            MMModemLocationSource source,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
+{
+    MMBroadbandModemMbm *self = MM_BROADBAND_MODEM_MBM (_self);
+    gboolean stop_gps = FALSE;
+    LocationGatheringContext *ctx;
+
+    ctx = g_slice_new (LocationGatheringContext);
+    ctx->self = g_object_ref (self);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             disable_location_gathering);
+    ctx->source = source;
+
+    /* Only stop GPS engine if no GPS-related sources enabled */
+    if (source & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                  MM_MODEM_LOCATION_SOURCE_GPS_RAW |
+                  MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED)) {
+        self->priv->enabled_sources &= ~source;
+
+        if (!(self->priv->enabled_sources & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                                             MM_MODEM_LOCATION_SOURCE_GPS_RAW |
+                                             MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED)))
+            stop_gps = TRUE;
+    }
+
+    if (stop_gps) {
+        mm_base_modem_at_command_full (MM_BASE_MODEM (_self),
+                                       mm_base_modem_peek_port_primary (MM_BASE_MODEM (_self)),
+                                       "AT*E2GPSCTL=0",
+                                       3,
+                                       FALSE,
+                                       FALSE, /* raw */
+                                       NULL, /* cancellable */
+                                       (GAsyncReadyCallback)gps_disabled_ready,
+                                       ctx);
+        return;
+    }
+
+    /* For any other location (e.g. 3GPP), or if still some GPS needed, just return */
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    location_gathering_context_complete_and_free (ctx);
+}
+
+/*****************************************************************************/
+/* Enable location gathering (Location interface) */
+
+static gboolean
+enable_location_gathering_finish (MMIfaceModemLocation *self,
+                                  GAsyncResult *res,
+                                  GError **error)
+{
+    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+}
+
+static void
+gps_enabled_ready (MMBaseModem *self,
+                   GAsyncResult *res,
+                   LocationGatheringContext *ctx)
+{
+    GError *error = NULL;
+    MMPortSerialGps *gps_port;
+
+    if (!mm_base_modem_at_command_full_finish (self, res, &error)) {
+        g_simple_async_result_take_error (ctx->result, error);
+        location_gathering_context_complete_and_free (ctx);
+        return;
+    }
+
+    /* Only use the GPS port in NMEA/RAW setups */
+    if (ctx->source & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                       MM_MODEM_LOCATION_SOURCE_GPS_RAW)) {
+        gps_port = mm_base_modem_peek_port_gps (self);
+        if (!gps_port ||
+            !mm_port_serial_open (MM_PORT_SERIAL (gps_port), &error)) {
+            if (error)
+                g_simple_async_result_take_error (ctx->result, error);
+            else
+                g_simple_async_result_set_error (ctx->result,
+                                                 MM_CORE_ERROR,
+                                                 MM_CORE_ERROR_FAILED,
+                                                 "Couldn't open raw GPS serial port");
+        } else {
+            GByteArray *buf;
+            const gchar *command = "ATE0*E2GPSNPD\r\n";
+
+            /* We need to send an AT command to the GPS data port to
+             * toggle it into this data mode. This is a particularity of
+             * mbm cards where the GPS data port is not hard wired. So
+             * we need to use the MMPortSerial API here.
+             */
+            buf = g_byte_array_new ();
+            g_byte_array_append (buf, (const guint8 *) command, strlen (command));
+            mm_port_serial_command (MM_PORT_SERIAL (gps_port),
+                                    buf,
+                                    3,
+                                    FALSE,
+                                    NULL,
+                                    NULL,
+                                    NULL);
+            g_byte_array_unref (buf);
+            g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+        }
+
+    } else
+        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+
+    location_gathering_context_complete_and_free (ctx);
+}
+
+static void
+parent_enable_location_gathering_ready (MMIfaceModemLocation *self,
+                                        GAsyncResult *res,
+                                        LocationGatheringContext *ctx)
+{
+    gboolean start_gps = FALSE;
+    GError *error = NULL;
+
+    if (!iface_modem_location_parent->enable_location_gathering_finish (self, res, &error)) {
+        g_simple_async_result_take_error (ctx->result, error);
+        location_gathering_context_complete_and_free (ctx);
+        return;
+    }
+
+    /* Now our own enabling */
+
+    /* NMEA and RAW are both enabled in the same way */
+    if (ctx->source & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                       MM_MODEM_LOCATION_SOURCE_GPS_RAW |
+                       MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED)) {
+        /* Only start GPS engine if not done already */
+        if (!(ctx->self->priv->enabled_sources & (MM_MODEM_LOCATION_SOURCE_GPS_NMEA |
+                                                  MM_MODEM_LOCATION_SOURCE_GPS_RAW |
+                                                  MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED)))
+            start_gps = TRUE;
+        ctx->self->priv->enabled_sources |= ctx->source;
+    }
+
+    if (start_gps) {
+        mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                       mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)),
+                                       "AT*E2GPSCTL=1," MBM_GPS_NMEA_INTERVAL ",0",
+                                       3,
+                                       FALSE,
+                                       FALSE, /* raw */
+                                       NULL, /* cancellable */
+                                       (GAsyncReadyCallback)gps_enabled_ready,
+                                       ctx);
+        return;
+    }
+
+    /* For any other location (e.g. 3GPP), or if GPS already running just return */
+    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
+    location_gathering_context_complete_and_free (ctx);
+}
+
+static void
+enable_location_gathering (MMIfaceModemLocation *self,
+                           MMModemLocationSource source,
+                           GAsyncReadyCallback callback,
+                           gpointer user_data)
+{
+    LocationGatheringContext *ctx;
+
+    ctx = g_slice_new (LocationGatheringContext);
+    ctx->self = g_object_ref (self);
+    ctx->result = g_simple_async_result_new (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             enable_location_gathering);
+    ctx->source = source;
+
+    /* Chain up parent's gathering enable */
+    iface_modem_location_parent->enable_location_gathering (self,
+                                                            source,
+                                                            (GAsyncReadyCallback)parent_enable_location_gathering_ready,
+                                                            ctx);
+}
+
+/*****************************************************************************/
 /* Setup ports (Broadband modem class) */
 
 static void
@@ -1187,10 +1439,19 @@ emrdy_received (MMPortSerialAt *port,
 }
 
 static void
+gps_trace_received (MMPortSerialGps *port,
+                    const gchar *trace,
+                    MMIfaceModemLocation *self)
+{
+    mm_iface_modem_location_gps_update (self, trace);
+}
+
+static void
 setup_ports (MMBroadbandModem *_self)
 {
     MMBroadbandModemMbm *self = MM_BROADBAND_MODEM_MBM (_self);
     MMPortSerialAt *ports[2];
+    MMPortSerialGps *gps_data_port;
     guint i;
 
     /* Call parent's setup ports first always */
@@ -1244,6 +1505,20 @@ setup_ports (MMBroadbandModem *_self)
 
     /* Now reset the unsolicited messages we'll handle when enabled */
     set_unsolicited_events_handlers (MM_BROADBAND_MODEM_MBM (self), FALSE);
+
+    /* NMEA GPS monitoring */
+    gps_data_port = mm_base_modem_peek_port_gps (MM_BASE_MODEM (self));
+    if (gps_data_port) {
+        /* make sure GPS is stopped incase it was left enabled */
+        mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                       mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)),
+                                       "AT*E2GPSCTL=0",
+                                       3, FALSE, FALSE, NULL, NULL, NULL);
+        /* Add handler for the NMEA traces */
+        mm_port_serial_gps_add_trace_handler (gps_data_port,
+                                              (MMPortSerialGpsTraceFn)gps_trace_received,
+                                              self, NULL);
+    }
 }
 
 /*****************************************************************************/
@@ -1355,6 +1630,19 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->setup_unsolicited_events_finish = modem_3gpp_setup_cleanup_unsolicited_events_finish;
     iface->cleanup_unsolicited_events = modem_3gpp_cleanup_unsolicited_events;
     iface->cleanup_unsolicited_events_finish = modem_3gpp_setup_cleanup_unsolicited_events_finish;
+}
+
+static void
+iface_modem_location_init (MMIfaceModemLocation *iface)
+{
+    iface_modem_location_parent = g_type_interface_peek_parent (iface);
+
+    iface->load_capabilities = location_load_capabilities;
+    iface->load_capabilities_finish = location_load_capabilities_finish;
+    iface->enable_location_gathering = enable_location_gathering;
+    iface->enable_location_gathering_finish = enable_location_gathering_finish;
+    iface->disable_location_gathering = disable_location_gathering;
+    iface->disable_location_gathering_finish = disable_location_gathering_finish;
 }
 
 static void

@@ -4,7 +4,7 @@
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
+ * the Free Software Foundation, either version 2 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -178,8 +178,10 @@ print_signal_info (void)
     if (signal)
         g_print ("  -------------------------\n"
                  "  UMTS   | RSSI: '%.2lf' dBm\n"
-                 "         | EcIo: '%.2lf' dBm\n",
+                 "         | RSCP: '%.2lf' dBm\n"
+                 "         | EcIo: '%.2lf' dB\n",
                  mm_signal_get_rssi (signal),
+                 mm_signal_get_rscp (signal),
                  mm_signal_get_ecio (signal));
 
     /* LTE */

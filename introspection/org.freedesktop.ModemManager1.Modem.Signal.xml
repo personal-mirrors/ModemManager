@@ -149,11 +149,19 @@
               given as a floating point value (signature <literal>"d"</literal>).
             </para>
           </listitem>
+          </varlistentry>
+        <varlistentry><term><literal>"rscp"</literal></term>
+          <listitem>
+            <para>
+              The UMTS RSCP (Received Signal Code Power), in dBm, given as a
+              floating point value (signature <literal>"d"</literal>).
+            </para>
+          </listitem>
         </varlistentry>
         <varlistentry><term><literal>"ecio"</literal></term>
           <listitem>
             <para>
-              The UMTS Ec/Io, in dBm, given as a floating point value
+              The UMTS Ec/Io, in dB, given as a floating point value
               (signature <literal>"d"</literal>).
             </para>
           </listitem>
@@ -165,7 +173,7 @@
     <!--
         Lte:
 
-        Dictionary of available signal information for the UMTS (WCDMA) access
+        Dictionary of available signal information for the LTE access
         technology.
 
         This dictionary is composed of a string key, with an associated data

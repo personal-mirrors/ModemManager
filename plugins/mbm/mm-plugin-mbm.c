@@ -33,14 +33,14 @@
 
 G_DEFINE_TYPE (MMPluginMbm, mm_plugin_mbm, MM_TYPE_PLUGIN)
 
-int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
-int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
+MM_PLUGIN_DEFINE_MAJOR_VERSION
+MM_PLUGIN_DEFINE_MINOR_VERSION
 
 /*****************************************************************************/
 
 static MMBaseModem *
 create_modem (MMPlugin *self,
-              const gchar *sysfs_path,
+              const gchar *uid,
               const gchar **drivers,
               guint16 vendor,
               guint16 product,
@@ -50,7 +50,7 @@ create_modem (MMPlugin *self,
 #if defined WITH_MBIM
     if (mm_port_probe_list_has_mbim_port (probes)) {
         mm_dbg ("MBIM-powered Ericsson modem found...");
-        return MM_BASE_MODEM (mm_broadband_modem_mbim_new (sysfs_path,
+        return MM_BASE_MODEM (mm_broadband_modem_mbim_new (uid,
                                                            drivers,
                                                            mm_plugin_get_name (self),
                                                            vendor,
@@ -58,11 +58,38 @@ create_modem (MMPlugin *self,
     }
 #endif
 
-    return MM_BASE_MODEM (mm_broadband_modem_mbm_new (sysfs_path,
+    return MM_BASE_MODEM (mm_broadband_modem_mbm_new (uid,
                                                       drivers,
                                                       mm_plugin_get_name (self),
                                                       vendor,
                                                       product));
+}
+
+static gboolean
+grab_port (MMPlugin *self,
+           MMBaseModem *modem,
+           MMPortProbe *probe,
+           GError **error)
+{
+    MMPortSerialAtFlag pflags = MM_PORT_SERIAL_AT_FLAG_NONE;
+    MMKernelDevice *port;
+    MMPortType port_type;
+
+    port_type = mm_port_probe_get_port_type (probe);
+    port = mm_port_probe_peek_port (probe);
+
+    if (mm_kernel_device_get_property_as_boolean (port, "ID_MM_ERICSSON_MBM_GPS_PORT")) {
+        mm_dbg ("(%s/%s) Port flagged as GPS",
+                mm_port_probe_get_port_subsys (probe),
+                mm_port_probe_get_port_name (probe));
+        port_type = MM_PORT_TYPE_GPS;
+    }
+
+    return mm_base_modem_grab_port (modem,
+                                    port,
+                                    port_type,
+                                    pflags,
+                                    error);
 }
 
 /*****************************************************************************/
@@ -97,4 +124,6 @@ mm_plugin_mbm_class_init (MMPluginMbmClass *klass)
     MMPluginClass *plugin_class = MM_PLUGIN_CLASS (klass);
 
     plugin_class->create_modem = create_modem;
+    plugin_class->grab_port = grab_port;
+
 }

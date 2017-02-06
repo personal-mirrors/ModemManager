@@ -164,7 +164,7 @@ after_sim_unlock_wait_cb (GSimpleAsyncResult *result)
 {
     g_simple_async_result_complete (result);
     g_object_unref (result);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -751,7 +751,7 @@ scan_networks (MMIfaceModem3gpp *self,
 
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               "+COPS=?",
-                              120,
+                              300,
                               FALSE,
                               (GAsyncReadyCallback)cops_query_ready,
                               result);

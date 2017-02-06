@@ -4,7 +4,7 @@
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
+ * the Free Software Foundation, either version 2 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -135,10 +135,12 @@ print_bearer_info (MMBearer *bearer)
     MMBearerIpConfig *ipv4_config;
     MMBearerIpConfig *ipv6_config;
     MMBearerProperties *properties;
+    MMBearerStats *stats;
 
     ipv4_config = mm_bearer_get_ipv4_config (bearer);
     ipv6_config = mm_bearer_get_ipv6_config (bearer);
     properties = mm_bearer_get_properties (bearer);
+    stats = mm_bearer_get_stats (bearer);
 
     /* Not the best thing to do, as we may be doing _get() calls twice, but
      * easiest to maintain */
@@ -253,6 +255,26 @@ print_bearer_info (MMBearer *bearer)
             g_print ("                     |      MTU: '%u'\n", mtu);
     }
 
+    if (stats) {
+        guint64 val;
+
+        g_print ("  -------------------------\n"
+                 "  Stats              |          Duration: '%u'\n", mm_bearer_stats_get_duration (stats));
+
+        val = mm_bearer_stats_get_rx_bytes (stats);
+        if (val > 0)
+            g_print ("                     |    Bytes received: '%" G_GUINT64_FORMAT "'\n", val);
+        else
+            g_print ("                     |    Bytes received: 'N/A'\n");
+
+        val = mm_bearer_stats_get_tx_bytes (stats);
+        if (val > 0)
+            g_print ("                     | Bytes transmitted: '%" G_GUINT64_FORMAT "'\n", val);
+        else
+            g_print ("                     | Bytes transmitted: 'N/A'\n");
+    }
+
+    g_clear_object (&stats);
     g_clear_object (&properties);
     g_clear_object (&ipv4_config);
     g_clear_object (&ipv6_config);

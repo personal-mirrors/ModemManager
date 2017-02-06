@@ -4,7 +4,7 @@
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
+ * the Free Software Foundation, either version 2 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -132,7 +132,7 @@ print_version_and_exit (void)
 {
     g_print ("\n"
              PROGRAM_NAME " " PROGRAM_VERSION "\n"
-             "Copyright (2011) Aleksander Morgado\n"
+             "Copyright (2011 - 2016) Aleksander Morgado\n"
              "License GPLv2+: GNU GPL version 2 or later <http://gnu.org/licenses/gpl-2.0.html>\n"
              "This is free software: you are free to change and redistribute it.\n"
              "There is NO WARRANTY, to the extent permitted by law.\n"
@@ -184,8 +184,6 @@ main (gint argc, gchar **argv)
 
     setlocale (LC_ALL, "");
 
-    g_type_init ();
-
     /* Setup option context, process it and destroy it */
     context = g_option_context_new ("- Control and monitor the ModemManager");
     g_option_context_add_group (context,
@@ -205,6 +203,8 @@ main (gint argc, gchar **argv)
     g_option_context_add_group (context,
                                 mmcli_modem_messaging_get_option_group ());
     g_option_context_add_group (context,
+                                mmcli_modem_voice_get_option_group ());
+    g_option_context_add_group (context,
                                 mmcli_modem_time_get_option_group ());
     g_option_context_add_group (context,
                                 mmcli_modem_firmware_get_option_group ());
@@ -218,6 +218,8 @@ main (gint argc, gchar **argv)
                                 mmcli_bearer_get_option_group ());
     g_option_context_add_group (context,
                                 mmcli_sms_get_option_group ());
+    g_option_context_add_group (context,
+                                mmcli_call_get_option_group ());
     g_option_context_add_main_entries (context, main_entries, NULL);
     g_option_context_parse (context, &argc, &argv, NULL);
     g_option_context_free (context);
@@ -280,6 +282,13 @@ main (gint argc, gchar **argv)
         else
             mmcli_sms_run_synchronous (connection);
     }
+    /* Call options? */
+    else if (mmcli_call_options_enabled ()) {
+        if (async_flag)
+            mmcli_call_run_asynchronous (connection, cancellable);
+        else
+            mmcli_call_run_synchronous (connection);
+    }
     /* Modem 3GPP options? */
     else if (mmcli_modem_3gpp_options_enabled ()) {
         if (async_flag)
@@ -314,6 +323,13 @@ main (gint argc, gchar **argv)
             mmcli_modem_messaging_run_asynchronous (connection, cancellable);
         else
             mmcli_modem_messaging_run_synchronous (connection);
+    }
+    /* Voice options? */
+    else if (mmcli_modem_voice_options_enabled ()) {
+        if (async_flag)
+            mmcli_modem_voice_run_asynchronous (connection, cancellable);
+        else
+            mmcli_modem_voice_run_synchronous (connection);
     }
     /* Modem Time options? */
     else if (mmcli_modem_time_options_enabled ()) {
@@ -375,6 +391,8 @@ main (gint argc, gchar **argv)
         mmcli_modem_location_shutdown ();
     } else if (mmcli_modem_messaging_options_enabled ()) {
         mmcli_modem_messaging_shutdown ();
+    } else if (mmcli_modem_voice_options_enabled ()) {
+           mmcli_modem_voice_shutdown ();
     } else if (mmcli_modem_time_options_enabled ()) {
         mmcli_modem_time_shutdown ();
     } else if (mmcli_modem_firmware_options_enabled ()) {
@@ -389,6 +407,8 @@ main (gint argc, gchar **argv)
         mmcli_bearer_shutdown ();
     }  else if (mmcli_sms_options_enabled ()) {
         mmcli_sms_shutdown ();
+    }  else if (mmcli_call_options_enabled ()) {
+        mmcli_call_shutdown ();
     } else if (mmcli_modem_options_enabled ()) {
         mmcli_modem_shutdown ();
     }

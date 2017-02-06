@@ -43,14 +43,14 @@
 
 G_DEFINE_TYPE (MMPluginGeneric, mm_plugin_generic, MM_TYPE_PLUGIN)
 
-int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
-int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
+MM_PLUGIN_DEFINE_MAJOR_VERSION
+MM_PLUGIN_DEFINE_MINOR_VERSION
 
 /*****************************************************************************/
 
 static MMBaseModem *
 create_modem (MMPlugin *self,
-              const gchar *sysfs_path,
+              const gchar *uid,
               const gchar **drivers,
               guint16 vendor,
               guint16 product,
@@ -60,7 +60,7 @@ create_modem (MMPlugin *self,
 #if defined WITH_QMI
     if (mm_port_probe_list_has_qmi_port (probes)) {
         mm_dbg ("QMI-powered generic modem found...");
-        return MM_BASE_MODEM (mm_broadband_modem_qmi_new (sysfs_path,
+        return MM_BASE_MODEM (mm_broadband_modem_qmi_new (uid,
                                                           drivers,
                                                           mm_plugin_get_name (self),
                                                           vendor,
@@ -71,7 +71,7 @@ create_modem (MMPlugin *self,
 #if defined WITH_MBIM
     if (mm_port_probe_list_has_mbim_port (probes)) {
         mm_dbg ("MBIM-powered generic modem found...");
-        return MM_BASE_MODEM (mm_broadband_modem_mbim_new (sysfs_path,
+        return MM_BASE_MODEM (mm_broadband_modem_mbim_new (uid,
                                                            drivers,
                                                            mm_plugin_get_name (self),
                                                            vendor,
@@ -79,7 +79,7 @@ create_modem (MMPlugin *self,
     }
 #endif
 
-    return MM_BASE_MODEM (mm_broadband_modem_new (sysfs_path,
+    return MM_BASE_MODEM (mm_broadband_modem_new (uid,
                                                   drivers,
                                                   mm_plugin_get_name (self),
                                                   vendor,

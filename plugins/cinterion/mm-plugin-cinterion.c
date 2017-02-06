@@ -37,8 +37,8 @@
 
 G_DEFINE_TYPE (MMPluginCinterion, mm_plugin_cinterion, MM_TYPE_PLUGIN)
 
-int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
-int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
+MM_PLUGIN_DEFINE_MAJOR_VERSION
+MM_PLUGIN_DEFINE_MINOR_VERSION
 
 /*****************************************************************************/
 /* Custom init */
@@ -130,7 +130,7 @@ cinterion_custom_init (MMPortProbe *probe,
 
 static MMBaseModem *
 create_modem (MMPlugin *self,
-              const gchar *sysfs_path,
+              const gchar *uid,
               const gchar **drivers,
               guint16 vendor,
               guint16 product,
@@ -140,7 +140,7 @@ create_modem (MMPlugin *self,
 #if defined WITH_QMI
     if (mm_port_probe_list_has_qmi_port (probes)) {
         mm_dbg ("QMI-powered Cinterion modem found...");
-        return MM_BASE_MODEM (mm_broadband_modem_qmi_cinterion_new (sysfs_path,
+        return MM_BASE_MODEM (mm_broadband_modem_qmi_cinterion_new (uid,
                                                                     drivers,
                                                                     mm_plugin_get_name (self),
                                                                     vendor,
@@ -148,7 +148,7 @@ create_modem (MMPlugin *self,
     }
 #endif
 
-    return MM_BASE_MODEM (mm_broadband_modem_cinterion_new (sysfs_path,
+    return MM_BASE_MODEM (mm_broadband_modem_cinterion_new (uid,
                                                             drivers,
                                                             mm_plugin_get_name (self),
                                                             vendor,
@@ -176,8 +176,8 @@ grab_port (MMPlugin *self,
                 mm_port_probe_get_port_subsys (probe),
                 mm_port_probe_get_port_name (probe));
         pflags = MM_PORT_SERIAL_AT_FLAG_PPP;
-    } else if (g_udev_device_get_property_as_boolean (mm_port_probe_peek_port (probe),
-                                                      "ID_MM_CINTERION_PORT_TYPE_GPS")) {
+    } else if (mm_kernel_device_get_property_as_boolean (mm_port_probe_peek_port (probe),
+                                                         "ID_MM_CINTERION_PORT_TYPE_GPS")) {
         mm_dbg ("(%s/%s)' Port flagged as GPS",
                 mm_port_probe_get_port_subsys (probe),
                 mm_port_probe_get_port_name (probe));
@@ -187,9 +187,7 @@ grab_port (MMPlugin *self,
     }
 
     return mm_base_modem_grab_port (modem,
-                                    mm_port_probe_get_port_subsys (probe),
-                                    mm_port_probe_get_port_name (probe),
-                                    mm_port_probe_get_parent_path (probe),
+                                    mm_port_probe_peek_port (probe),
                                     ptype,
                                     pflags,
                                     error);

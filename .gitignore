@@ -56,6 +56,7 @@ Makefile.in
 /src/tests/test-at-serial-port
 /src/tests/test-sms-part-3gpp
 /src/tests/test-sms-part-cdma
+/src/tests/test-udev-rules
 
 /cli/mmcli
 
@@ -151,19 +152,30 @@ Makefile.in
 /m4/wchar_t.m4
 /m4/wint_t.m4
 /m4/xsize.m4
+/m4/extern-inline.m4
+/m4/fcntl-o.m4
+/m4/threadlib.m4
 
 /uml290/uml290mode
 
 /plugins/test-suite.log
+/plugins/test-udev-rules
 /plugins/test-modem-helpers-huawei*
 /plugins/test-modem-helpers-altair*
 /plugins/test-modem-helpers-cinterion*
 /plugins/test-modem-helpers-icera*
 /plugins/test-modem-helpers-mbm*
+/plugins/test-modem-helpers-telit*
+/plugins/test-modem-helpers-thuraya*
+/plugins/test-modem-helpers-ublox*
+/plugins/test-modem-helpers-linktop*
 /plugins/test-service-*
+
+/plugins/ublox/mm-ublox-enums-types.[ch]
 
 /test/lsudev
 /test/mmtty
+/test/mmrules
 
 /ModemManager-*-coverage.info
 /ModemManager-*-coverage/

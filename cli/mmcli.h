@@ -4,7 +4,7 @@
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
+ * the Free Software Foundation, either version 2 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -85,6 +85,14 @@ void          mmcli_modem_messaging_run_asynchronous   (GDBusConnection *connect
 void          mmcli_modem_messaging_run_synchronous    (GDBusConnection *connection);
 void          mmcli_modem_messaging_shutdown           (void);
 
+/* Voice group */
+GOptionGroup *mmcli_modem_voice_get_option_group   (void);
+gboolean      mmcli_modem_voice_options_enabled    (void);
+void          mmcli_modem_voice_run_asynchronous   (GDBusConnection *connection,
+                                                        GCancellable    *cancellable);
+void          mmcli_modem_voice_run_synchronous    (GDBusConnection *connection);
+void          mmcli_modem_voice_shutdown           (void);
+
 /* Time group */
 GOptionGroup *mmcli_modem_time_get_option_group   (void);
 gboolean      mmcli_modem_time_options_enabled    (void);
@@ -140,5 +148,13 @@ void          mmcli_sms_run_asynchronous   (GDBusConnection *connection,
                                             GCancellable    *cancellable);
 void          mmcli_sms_run_synchronous    (GDBusConnection *connection);
 void          mmcli_sms_shutdown           (void);
+
+/* Call group */
+GOptionGroup *mmcli_call_get_option_group   (void);
+gboolean      mmcli_call_options_enabled    (void);
+void          mmcli_call_run_asynchronous   (GDBusConnection *connection,
+                                            GCancellable    *cancellable);
+void          mmcli_call_run_synchronous    (GDBusConnection *connection);
+void          mmcli_call_shutdown           (void);
 
 #endif /* __MMCLI_H__ */

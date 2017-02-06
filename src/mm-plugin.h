@@ -20,16 +20,25 @@
 
 #include <glib.h>
 #include <glib-object.h>
-#include <gudev/gudev.h>
 
 #include "mm-base-modem.h"
 #include "mm-port.h"
 #include "mm-port-probe.h"
 #include "mm-device.h"
+#include "mm-kernel-device.h"
 
 #define MM_PLUGIN_GENERIC_NAME "Generic"
 #define MM_PLUGIN_MAJOR_VERSION 4
 #define MM_PLUGIN_MINOR_VERSION 0
+
+#if defined (G_HAVE_GNUC_VISIBILITY)
+#define VISIBILITY __attribute__((visibility("protected")))
+#else
+#define VISIBILITY
+#endif
+
+#define MM_PLUGIN_DEFINE_MAJOR_VERSION VISIBILITY int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
+#define MM_PLUGIN_DEFINE_MINOR_VERSION VISIBILITY int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
 
 #define MM_TYPE_PLUGIN            (mm_plugin_get_type ())
 #define MM_PLUGIN(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_PLUGIN, MMPlugin))
@@ -64,7 +73,8 @@
 #define MM_PLUGIN_SEND_LF                   "send-lf"
 
 typedef enum {
-    MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED = 0x0,
+    MM_PLUGIN_SUPPORTS_PORT_UNKNOWN = -1,
+    MM_PLUGIN_SUPPORTS_PORT_UNSUPPORTED,
     MM_PLUGIN_SUPPORTS_PORT_DEFER,
     MM_PLUGIN_SUPPORTS_PORT_DEFER_UNTIL_SUGGESTED,
     MM_PLUGIN_SUPPORTS_PORT_SUPPORTED
@@ -94,7 +104,7 @@ struct _MMPluginClass {
     /* Plugins need to provide a method to create a modem object given
      * a list of port probes (Mandatory) */
     MMBaseModem *(*create_modem) (MMPlugin *plugin,
-                                  const gchar *sysfs_path,
+                                  const gchar *uid,
                                   const gchar **drivers,
                                   guint16 vendor,
                                   guint16 product,
@@ -115,18 +125,19 @@ const gchar *mm_plugin_get_name (MMPlugin *plugin);
 
 /* This method will run all pre-probing filters, to see if we can discard this
  * plugin from the probing logic as soon as possible. */
-MMPluginSupportsHint mm_plugin_discard_port_early (MMPlugin *plugin,
-                                                   MMDevice *device,
-                                                   GUdevDevice *port);
+MMPluginSupportsHint mm_plugin_discard_port_early (MMPlugin       *plugin,
+                                                   MMDevice       *device,
+                                                   MMKernelDevice *port);
 
-void                   mm_plugin_supports_port        (MMPlugin *plugin,
-                                                       MMDevice *device,
-                                                       GUdevDevice *port,
-                                                       GAsyncReadyCallback callback,
-                                                       gpointer user_data);
-MMPluginSupportsResult mm_plugin_supports_port_finish (MMPlugin *plugin,
-                                                       GAsyncResult *result,
-                                                       GError **error);
+void                   mm_plugin_supports_port        (MMPlugin             *plugin,
+                                                       MMDevice             *device,
+                                                       MMKernelDevice       *port,
+                                                       GCancellable         *cancellable,
+                                                       GAsyncReadyCallback   callback,
+                                                       gpointer              user_data);
+MMPluginSupportsResult mm_plugin_supports_port_finish (MMPlugin             *plugin,
+                                                       GAsyncResult         *result,
+                                                       GError              **error);
 
 MMBaseModem *mm_plugin_create_modem (MMPlugin *plugin,
                                      MMDevice *device,

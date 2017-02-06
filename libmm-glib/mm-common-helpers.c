@@ -655,6 +655,12 @@ mm_common_bands_garray_cmp (GArray *a, GArray *b)
     return !different;
 }
 
+void
+mm_common_bands_garray_sort (GArray *array)
+{
+    g_array_sort (array, (GCompareFunc) cmp_band);
+}
+
 GArray *
 mm_common_mode_combinations_variant_to_garray (GVariant *variant)
 {
@@ -832,12 +838,13 @@ mm_common_get_boolean_from_string (const gchar *value,
     if (!g_ascii_strcasecmp (value, "true") || g_str_equal (value, "1"))
         return TRUE;
 
-    if (g_ascii_strcasecmp (value, "false") && g_str_equal (value, "0"))
-        g_set_error (error,
-                     MM_CORE_ERROR,
-                     MM_CORE_ERROR_INVALID_ARGS,
-                     "Cannot get boolean from string '%s'", value);
+    if (!g_ascii_strcasecmp (value, "false") || g_str_equal (value, "0"))
+        return FALSE;
 
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_INVALID_ARGS,
+                 "Cannot get boolean from string '%s'", value);
     return FALSE;
 }
 
@@ -999,6 +1006,72 @@ mm_common_get_sms_cdma_service_category_from_string (const gchar *str,
                  "Couldn't match '%s' with a valid MMSmsCdmaServiceCategory value",
                  str);
     return MM_SMS_CDMA_SERVICE_CATEGORY_UNKNOWN;
+}
+
+MMCallDirection
+mm_common_get_call_direction_from_string (const gchar *str,
+                                          GError **error)
+{
+    GEnumClass *enum_class;
+    guint i;
+
+    enum_class = G_ENUM_CLASS (g_type_class_ref (MM_TYPE_CALL_DIRECTION));
+
+    for (i = 0; enum_class->values[i].value_nick; i++) {
+        if (!g_ascii_strcasecmp (str, enum_class->values[i].value_nick))
+            return enum_class->values[i].value;
+    }
+
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_INVALID_ARGS,
+                 "Couldn't match '%s' with a valid MMCallDirection value",
+                 str);
+    return MM_CALL_DIRECTION_UNKNOWN;
+}
+
+MMCallState
+mm_common_get_call_state_from_string (const gchar *str,
+                                      GError **error)
+{
+    GEnumClass *enum_class;
+    guint i;
+
+    enum_class = G_ENUM_CLASS (g_type_class_ref (MM_TYPE_CALL_STATE));
+
+    for (i = 0; enum_class->values[i].value_nick; i++) {
+        if (!g_ascii_strcasecmp (str, enum_class->values[i].value_nick))
+            return enum_class->values[i].value;
+    }
+
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_INVALID_ARGS,
+                 "Couldn't match '%s' with a valid MMCallState value",
+                 str);
+    return MM_CALL_STATE_UNKNOWN;
+}
+
+MMCallStateReason
+mm_common_get_call_state_reason_from_string (const gchar *str,
+                                             GError **error)
+{
+    GEnumClass *enum_class;
+    guint i;
+
+    enum_class = G_ENUM_CLASS (g_type_class_ref (MM_TYPE_CALL_STATE_REASON));
+
+    for (i = 0; enum_class->values[i].value_nick; i++) {
+        if (!g_ascii_strcasecmp (str, enum_class->values[i].value_nick))
+            return enum_class->values[i].value;
+    }
+
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_INVALID_ARGS,
+                 "Couldn't match '%s' with a valid MMCallStateReason value",
+                 str);
+    return MM_CALL_STATE_REASON_UNKNOWN;
 }
 
 MMOmaFeature
@@ -1276,7 +1349,8 @@ mm_get_int_from_match_info (GMatchInfo *match_info,
     gboolean ret;
 
     s = g_match_info_fetch (match_info, match_index);
-    g_return_val_if_fail (s != NULL, FALSE);
+    if (!s)
+        return FALSE;
 
     ret = mm_get_int_from_str (s, out);
     g_free (s);
@@ -1318,6 +1392,49 @@ mm_get_uint_from_str (const gchar *str,
     return FALSE;
 }
 
+/**
+ * mm_get_uint_from_hex_str:
+ * @str: the hex string to convert to an unsigned int
+ * @out: on success, the number
+ *
+ * Converts a string to an unsigned number.  All characters in the string
+ * MUST be valid hexadecimal digits (0-9, A-F, a-f), otherwise FALSE is
+ * returned.
+ *
+ * An optional "0x" prefix may be given in @str.
+ *
+ * Returns: %TRUE if the string was converted, %FALSE if it was not or if it
+ * did not contain only digits.
+ */
+gboolean
+mm_get_uint_from_hex_str (const gchar *str,
+                          guint       *out)
+{
+    gulong num;
+
+    if (!str)
+        return FALSE;
+
+    if (g_str_has_prefix (str, "0x"))
+        str = &str[2];
+
+    if (!str[0])
+        return FALSE;
+
+    for (num = 0; str[num]; num++) {
+        if (!g_ascii_isxdigit (str[num]))
+            return FALSE;
+    }
+
+    errno = 0;
+    num = strtoul (str, NULL, 16);
+    if (!errno && num <= G_MAXUINT) {
+        *out = (guint)num;
+        return TRUE;
+    }
+    return FALSE;
+}
+
 gboolean
 mm_get_uint_from_match_info (GMatchInfo *match_info,
                              guint32 match_index,
@@ -1327,7 +1444,8 @@ mm_get_uint_from_match_info (GMatchInfo *match_info,
     gboolean ret;
 
     s = g_match_info_fetch (match_info, match_index);
-    g_return_val_if_fail (s != NULL, FALSE);
+    if (!s)
+        return FALSE;
 
     ret = mm_get_uint_from_str (s, out);
     g_free (s);
@@ -1372,7 +1490,8 @@ mm_get_double_from_match_info (GMatchInfo *match_info,
     gboolean ret;
 
     s = g_match_info_fetch (match_info, match_index);
-    g_return_val_if_fail (s != NULL, FALSE);
+    if (!s)
+        return FALSE;
 
     ret = mm_get_double_from_str (s, out);
     g_free (s);

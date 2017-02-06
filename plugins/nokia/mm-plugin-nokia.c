@@ -27,8 +27,8 @@
 
 G_DEFINE_TYPE (MMPluginNokia, mm_plugin_nokia, MM_TYPE_PLUGIN)
 
-int mm_plugin_major_version = MM_PLUGIN_MAJOR_VERSION;
-int mm_plugin_minor_version = MM_PLUGIN_MINOR_VERSION;
+MM_PLUGIN_DEFINE_MAJOR_VERSION
+MM_PLUGIN_DEFINE_MINOR_VERSION
 
 /*****************************************************************************/
 /* Custom commands for AT probing */
@@ -44,14 +44,14 @@ static const MMPortProbeAtCommand custom_at_probe[] = {
 
 static MMBaseModem *
 create_modem (MMPlugin *self,
-              const gchar *sysfs_path,
+              const gchar *uid,
               const gchar **drivers,
               guint16 vendor,
               guint16 product,
               GList *probes,
               GError **error)
 {
-    return MM_BASE_MODEM (mm_broadband_modem_nokia_new (sysfs_path,
+    return MM_BASE_MODEM (mm_broadband_modem_nokia_new (uid,
                                                         drivers,
                                                         mm_plugin_get_name (self),
                                                         vendor,

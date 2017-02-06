@@ -17,6 +17,7 @@
 #include <glib-object.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 #include <libmm-glib.h>
 #include "mm-modem-helpers.h"
@@ -27,6 +28,9 @@
 #else
 #define trace(...)
 #endif
+
+#define g_assert_cmpfloat_tolerance(val1, val2, tolerance)  \
+    g_assert_cmpfloat (fabs (val1 - val2), <, tolerance)
 
 /*****************************************************************************/
 /* Test CMGL responses */
@@ -193,6 +197,69 @@ test_cmgl_response_pantech_multiple (void *f, gpointer d)
     };
 
     test_cmgl_response (str, expected, G_N_ELEMENTS (expected));
+}
+
+/*****************************************************************************/
+/* Test CMGR responses */
+
+static void
+test_cmgr_response (const gchar *str,
+                    const MM3gppPduInfo *expected)
+{
+    MM3gppPduInfo *info;
+    GError *error = NULL;
+
+    info = mm_3gpp_parse_cmgr_read_response (str, 0, &error);
+    g_assert_no_error (error);
+    g_assert (info != NULL);
+
+    /* Ignore index, it is not included in CMGR response */
+    g_assert_cmpint (info->status, ==, expected->status);
+    g_assert_cmpstr (info->pdu, ==, expected->pdu);
+
+    mm_3gpp_pdu_info_free (info);
+}
+
+static void
+test_cmgr_response_generic (void *f, gpointer d)
+{
+    const gchar *str =
+        "+CMGR: 1,,147 07914306073011F00405812261F700003130916191314095C27"
+        "4D96D2FBBD3E437280CB2BEC961F3DB5D76818EF2F0381D9E83E06F39A8CC2E9FD372F"
+        "77BEE0249CBE37A594E0E83E2F532085E2F93CB73D0B93CA7A7DFEEB01C447F93DF731"
+        "0BD3E07CDCB727B7A9C7ECF41E432C8FC96B7C32079189E26874179D0F8DD7E93C3A0B"
+        "21B246AA641D637396C7EBBCB22D0FD7E77B5D376B3AB3C07";
+
+    const MM3gppPduInfo expected = {
+        .index = 0,
+        .status = 1,
+        .pdu = "07914306073011F00405812261F700003130916191314095C27"
+        "4D96D2FBBD3E437280CB2BEC961F3DB5D76818EF2F0381D9E83E06F39A8CC2E9FD372F"
+        "77BEE0249CBE37A594E0E83E2F532085E2F93CB73D0B93CA7A7DFEEB01C447F93DF731"
+        "0BD3E07CDCB727B7A9C7ECF41E432C8FC96B7C32079189E26874179D0F8DD7E93C3A0B"
+        "21B246AA641D637396C7EBBCB22D0FD7E77B5D376B3AB3C07"
+    };
+
+    test_cmgr_response (str, &expected);
+}
+
+/* Telit HE910 places empty quotation marks in the <alpha> field and a CR+LF
+ * before the PDU */
+static void
+test_cmgr_response_telit (void *f, gpointer d)
+{
+    const gchar *str =
+        "+CMGR: 0,\"\",50\r\n07916163838428F9040B916121021021F7000051905141642"
+        "20A23C4B0BCFD5E8740C4B0BCFD5E83C26E3248196687C9A0301D440DBBC3677918";
+
+    const MM3gppPduInfo expected = {
+        .index = 0,
+        .status = 0,
+        .pdu = "07916163838428F9040B916121021021F7000051905141642"
+        "20A23C4B0BCFD5E8740C4B0BCFD5E83C26E3248196687C9A0301D440DBBC3677918"
+    };
+
+    test_cmgr_response (str, &expected);
 }
 
 /*****************************************************************************/
@@ -626,6 +693,83 @@ test_cops_response_umts_invalid (void *f, gpointer d)
 }
 
 /*****************************************************************************/
+/* Test COPS? responses */
+
+typedef struct {
+    const gchar             *str;
+    guint                    mode;
+    guint                    format;
+    const gchar             *operator;
+    MMModemAccessTechnology  act;
+} CopsQueryData;
+
+static void
+test_cops_query_data (const CopsQueryData *item)
+{
+    gboolean                 result;
+    GError                  *error = NULL;
+    guint                    mode = G_MAXUINT;
+    guint                    format = G_MAXUINT;
+    gchar                   *operator = NULL;
+    MMModemAccessTechnology  act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+
+    result = mm_3gpp_parse_cops_read_response (item->str,
+                                               &mode,
+                                               &format,
+                                               &operator,
+                                               &act,
+                                               &error);
+    g_assert_no_error (error);
+    g_assert (result);
+    g_assert_cmpuint (mode,     ==, item->mode);
+    g_assert_cmpuint (format,   ==, item->format);
+    g_assert_cmpstr  (operator, ==, item->operator);
+    g_assert_cmpuint (act,      ==, item->act);
+
+    g_free (operator);
+}
+
+static const CopsQueryData cops_query_data[] = {
+    {
+        .str = "+COPS: 1,0,\"CHINA MOBILE\"",
+        .mode = 1,
+        .format = 0,
+        .operator = "CHINA MOBILE",
+        .act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN
+    },
+    {
+        .str = "+COPS: 1,0,\"CHINA MOBILE\",7",
+        .mode = 1,
+        .format = 0,
+        .operator = "CHINA MOBILE",
+        .act = MM_MODEM_ACCESS_TECHNOLOGY_LTE
+    },
+    {
+        .str = "+COPS: 1,2,\"46000\"",
+        .mode = 1,
+        .format = 2,
+        .operator = "46000",
+        .act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN
+    },
+    {
+        .str = "+COPS: 1,2,\"46000\",7",
+        .mode = 1,
+        .format = 2,
+        .operator = "46000",
+        .act = MM_MODEM_ACCESS_TECHNOLOGY_LTE
+    },
+};
+
+static void
+test_cops_query (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (cops_query_data); i++)
+        test_cops_query_data (&cops_query_data[i]);
+}
+
+/*****************************************************************************/
 /* Test CREG/CGREG responses and unsolicited messages */
 
 typedef struct {
@@ -887,6 +1031,28 @@ test_creg2_leading_zeros_unsolicited (void *f, gpointer d)
 }
 
 static void
+test_creg2_ublox_solicited (void *f, gpointer d)
+{
+    RegTestData *data = (RegTestData *) d;
+    const gchar *reply = "\r\n+CREG: 2,6,\"8B37\",\"0A265185\",7\r\n";
+    /* NOTE: '6' means registered for "SMS only", home network; we just assume UNKNOWN in this case */
+    const CregResult result = { MM_MODEM_3GPP_REGISTRATION_STATE_HOME_SMS_ONLY, 0x8B37, 0x0A265185, MM_MODEM_ACCESS_TECHNOLOGY_LTE, 8, FALSE, FALSE };
+
+    test_creg_match ("Ublox Toby-L2 solicited while on LTE", TRUE, reply, data, &result);
+}
+
+static void
+test_creg2_ublox_unsolicited (void *f, gpointer d)
+{
+    RegTestData *data = (RegTestData *) d;
+    const gchar *reply = "\r\n+CREG: 6,\"8B37\",\"0A265185\",7\r\n";
+    /* NOTE: '6' means registered for "SMS only", home network; we just assume UNKNOWN in this case */
+    const CregResult result = { MM_MODEM_3GPP_REGISTRATION_STATE_HOME_SMS_ONLY, 0x8B37, 0x0A265185, MM_MODEM_ACCESS_TECHNOLOGY_LTE, 6, FALSE, FALSE };
+
+    test_creg_match ("Ublox Toby-L2 unsolicited while on LTE", FALSE, reply, data, &result);
+}
+
+static void
 test_cgreg1_solicited (void *f, gpointer d)
 {
     RegTestData *data = (RegTestData *) d;
@@ -1072,7 +1238,7 @@ test_cereg2_novatel_lte_solicited (void *f, gpointer d)
 {
     RegTestData *data = (RegTestData *) d;
     const char *reply = "\r\n+CEREG: 2,1, 1F00, 20 ,79D903 ,7\r\n";
-    const CregResult result = { 1, 0x1F00, 0x79D903, MM_MODEM_ACCESS_TECHNOLOGY_LTE, 12, FALSE, TRUE };
+    const CregResult result = { 1, 0x1F00, 0x79D903, MM_MODEM_ACCESS_TECHNOLOGY_LTE, 13, FALSE, TRUE };
 
     test_creg_match ("Novatel LTE E362 CEREG=2", TRUE, reply, data, &result);
 }
@@ -1082,9 +1248,29 @@ test_cereg2_novatel_lte_unsolicited (void *f, gpointer d)
 {
     RegTestData *data = (RegTestData *) d;
     const char *reply = "\r\n+CEREG: 1, 1F00, 20 ,79D903 ,7\r\n";
-    const CregResult result = { 1, 0x1F00, 0x79D903, MM_MODEM_ACCESS_TECHNOLOGY_LTE, 11, FALSE, TRUE };
+    const CregResult result = { 1, 0x1F00, 0x79D903, MM_MODEM_ACCESS_TECHNOLOGY_LTE, 12, FALSE, TRUE };
 
     test_creg_match ("Novatel LTE E362 CEREG=2", FALSE, reply, data, &result);
+}
+
+static void
+test_cgreg2_thuraya_solicited (void *f, gpointer d)
+{
+    RegTestData *data = (RegTestData *) d;
+    const char *reply = "+CGREG: 1, \"0426\", \"F0,0F\"";
+    const CregResult result = { 1, 0x0426, 0x00F0, MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN, 11, TRUE, FALSE };
+
+    test_creg_match ("Thuraya solicited CREG=2", TRUE, reply, data, &result);
+}
+
+static void
+test_cgreg2_thuraya_unsolicited (void *f, gpointer d)
+{
+    RegTestData *data = (RegTestData *) d;
+    const char *reply = "\r\n+CGREG: 1, \"0426\", \"F0,0F\"\r\n";
+    const CregResult result = { 1, 0x0426, 0x00F0, MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN, 11, TRUE, FALSE };
+
+    test_creg_match ("Thuraya unsolicited CREG=2", FALSE, reply, data, &result);
 }
 
 /*****************************************************************************/
@@ -1636,6 +1822,43 @@ test_iccid_parse_unquoted_invalid_mii (void *f, gpointer d)
 }
 
 /*****************************************************************************/
+/* Test APN cmp */
+
+typedef struct {
+    const gchar *existing;
+    const gchar *requested;
+    gboolean     match_expected;
+} TestApnCmp;
+
+static const TestApnCmp test_apn_cmp[] = {
+    { "m2m.com.attz",                      "m2m.com.attz",                      TRUE  },
+    { "m2m.com.attz",                      "M2M.COM.ATTZ",                      TRUE  },
+    { "M2M.COM.ATTZ",                      "m2m.com.attz",                      TRUE  },
+    { "m2m.com.attz.mnc170.mcc310.gprs",   "m2m.com.attz",                      TRUE  },
+    { "ac.vodafone.es.MNC001.MCC214.GPRS", "ac.vodafone.es",                    TRUE  },
+    { "m2m.com.attz",                      "m2m.com.attz.mnc170.mcc310.gprs",   FALSE },
+    { "ac.vodafone.es",                    "ac.vodafone.es.MNC001.MCC214.GPRS", FALSE },
+    { "internet.test",                     "internet",                          FALSE },
+    { "internet.test",                     "INTERNET",                          FALSE },
+    { "internet.test",                     "internet.tes",                      FALSE },
+    { "",                                  "",                                  FALSE },
+};
+
+static void
+test_cmp_apn_name (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (test_apn_cmp); i++) {
+        g_debug ("Comparing requested '%s' vs existing '%s': %s match",
+                 test_apn_cmp[i].requested,
+                 test_apn_cmp[i].existing,
+                 test_apn_cmp[i].match_expected ? "should" : "shouldn't");
+        g_assert (mm_3gpp_cmp_apn_name (test_apn_cmp[i].requested, test_apn_cmp[i].existing) == test_apn_cmp[i].match_expected);
+    }
+}
+
+/*****************************************************************************/
 /* Test CGDCONT test responses */
 
 static void
@@ -1735,6 +1958,34 @@ test_cgdcont_test_response_single_context (void *f, gpointer d)
     test_cgdcont_test_results ("Single Context", reply, &expected[0], G_N_ELEMENTS (expected));
 }
 
+static void
+test_cgdcont_test_response_thuraya (void *f, gpointer d)
+{
+    const gchar *reply =
+        "+CGDCONT: ( 1 ) , \"IP\" ,,, (0-2),(0-3)\r\n"
+        "+CGDCONT: , \"PPP\" ,,, (0-2),(0-3)\r\n";
+    static MM3gppPdpContextFormat expected[] = {
+        { 1, 1, MM_BEARER_IP_FAMILY_IPV4 }
+    };
+
+    test_cgdcont_test_results ("Thuraya", reply, &expected[0], G_N_ELEMENTS (expected));
+}
+
+
+static void
+test_cgdcont_test_response_cinterion_phs8 (void *f, gpointer d)
+{
+    const gchar *reply =
+        "+CGDCONT: (1-17,101-116),\"IP\",,,(0),(0-4)\r\n";
+    static MM3gppPdpContextFormat expected[] = {
+        { 1, 17, MM_BEARER_IP_FAMILY_IPV4 }
+    };
+
+    test_cgdcont_test_results ("Cinterion PHS8-USA REVISION 03.001", reply, &expected[0], G_N_ELEMENTS (expected));
+}
+
+
+
 /*****************************************************************************/
 /* Test CGDCONT read responses */
 
@@ -1806,6 +2057,93 @@ test_cgdcont_read_response_samsung (void *f, gpointer d)
 }
 
 /*****************************************************************************/
+/* Test CGDCONT read responses */
+
+static void
+test_cgact_read_results (const gchar *desc,
+                         const gchar *reply,
+                         MM3gppPdpContextActive *expected_results,
+                         guint32 expected_results_len)
+{
+    GList *l;
+    GError *error = NULL;
+    GList *results;
+
+    trace ("\nTesting %s +CGACT response...\n", desc);
+
+    results = mm_3gpp_parse_cgact_read_response (reply, &error);
+    g_assert_no_error (error);
+    if (expected_results_len) {
+        g_assert (results);
+        g_assert_cmpuint (g_list_length (results), ==, expected_results_len);
+    }
+
+    for (l = results; l; l = g_list_next (l)) {
+        MM3gppPdpContextActive *pdp = l->data;
+        gboolean found = FALSE;
+        guint i;
+
+        for (i = 0; !found && i < expected_results_len; i++) {
+            MM3gppPdpContextActive *expected;
+
+            expected = &expected_results[i];
+            if (pdp->cid == expected->cid) {
+                found = TRUE;
+                g_assert_cmpuint (pdp->active, ==, expected->active);
+            }
+        }
+
+        g_assert (found == TRUE);
+    }
+
+    mm_3gpp_pdp_context_active_list_free (results);
+}
+
+static void
+test_cgact_read_response_none (void)
+{
+    test_cgact_read_results ("none", "", NULL, 0);
+}
+
+static void
+test_cgact_read_response_single_inactive (void)
+{
+    const gchar *reply = "+CGACT: 1,0\r\n";
+    static MM3gppPdpContextActive expected[] = {
+        { 1, FALSE },
+    };
+
+    test_cgact_read_results ("single inactive", reply, &expected[0], G_N_ELEMENTS (expected));
+}
+
+static void
+test_cgact_read_response_single_active (void)
+{
+    const gchar *reply = "+CGACT: 1,1\r\n";
+    static MM3gppPdpContextActive expected[] = {
+        { 1, TRUE },
+    };
+
+    test_cgact_read_results ("single active", reply, &expected[0], G_N_ELEMENTS (expected));
+}
+
+static void
+test_cgact_read_response_multiple (void)
+{
+    const gchar *reply =
+        "+CGACT: 1,0\r\n"
+        "+CGACT: 4,1\r\n"
+        "+CGACT: 5,0\r\n";
+    static MM3gppPdpContextActive expected[] = {
+        { 1, FALSE },
+        { 4, TRUE },
+        { 5, FALSE },
+    };
+
+    test_cgact_read_results ("multiple", reply, &expected[0], G_N_ELEMENTS (expected));
+}
+
+/*****************************************************************************/
 /* Test CPMS responses */
 
 static gboolean
@@ -1834,20 +2172,178 @@ test_cpms_response_cinterion (void *f, gpointer d)
     trace ("\nTesting Cinterion +CPMS=? response...\n");
 
     g_assert (mm_3gpp_parse_cpms_test_response (reply, &mem1, &mem2, &mem3));
-    g_assert (mem1->len == 2);
+    g_assert_cmpuint (mem1->len, ==, 2);
     g_assert (is_storage_supported (mem1, MM_SMS_STORAGE_ME));
     g_assert (is_storage_supported (mem1, MM_SMS_STORAGE_MT));
-    g_assert (mem2->len == 3);
+    g_assert_cmpuint (mem2->len, ==, 3);
     g_assert (is_storage_supported (mem2, MM_SMS_STORAGE_ME));
     g_assert (is_storage_supported (mem2, MM_SMS_STORAGE_SM));
     g_assert (is_storage_supported (mem2, MM_SMS_STORAGE_MT));
-    g_assert (mem3->len == 2);
+    g_assert_cmpuint (mem3->len, ==, 2);
     g_assert (is_storage_supported (mem3, MM_SMS_STORAGE_SM));
     g_assert (is_storage_supported (mem3, MM_SMS_STORAGE_MT));
 
     g_array_unref (mem1);
     g_array_unref (mem2);
     g_array_unref (mem3);
+}
+
+static void
+test_cpms_response_huawei_mu609 (void *f, gpointer d)
+{
+    /* Use different sets for each on purpose, even if weird */
+    const gchar *reply = "+CPMS: \"ME\",\"MT\",\"SM\"";
+    GArray *mem1 = NULL;
+    GArray *mem2 = NULL;
+    GArray *mem3 = NULL;
+
+    trace ("\nTesting Huawei MU609 +CPMS=? response...\n");
+
+    g_assert (mm_3gpp_parse_cpms_test_response (reply, &mem1, &mem2, &mem3));
+    g_assert_cmpuint (mem1->len, ==, 1);
+    g_assert (is_storage_supported (mem1, MM_SMS_STORAGE_ME));
+    g_assert_cmpuint (mem2->len, ==, 1);
+    g_assert (is_storage_supported (mem2, MM_SMS_STORAGE_MT));
+    g_assert_cmpuint (mem3->len, ==, 1);
+    g_assert (is_storage_supported (mem3, MM_SMS_STORAGE_SM));
+
+    g_array_unref (mem1);
+    g_array_unref (mem2);
+    g_array_unref (mem3);
+}
+
+static void
+test_cpms_response_nokia_c6 (void *f, gpointer d)
+{
+    /* Use different sets for each on purpose, even if weird */
+    const gchar *reply = "+CPMS: (),(),()";
+    GArray *mem1 = NULL;
+    GArray *mem2 = NULL;
+    GArray *mem3 = NULL;
+
+    trace ("\nTesting Nokia C6 response...\n");
+
+    g_assert (mm_3gpp_parse_cpms_test_response (reply, &mem1, &mem2, &mem3));
+    g_assert_cmpuint (mem1->len, ==, 0);
+    g_assert_cmpuint (mem2->len, ==, 0);
+    g_assert_cmpuint (mem3->len, ==, 0);
+
+    g_array_unref (mem1);
+    g_array_unref (mem2);
+    g_array_unref (mem3);
+}
+
+static void
+test_cpms_response_mixed (void *f, gpointer d)
+{
+    /*
+     * First:    ("ME","MT")  2-item group
+     * Second:   "ME"         1 item
+     * Third:    ("SM")       1-item group
+     */
+    const gchar *reply = "+CPMS: (\"ME\",\"MT\"),\"ME\",(\"SM\")";
+    GArray *mem1 = NULL;
+    GArray *mem2 = NULL;
+    GArray *mem3 = NULL;
+
+    trace ("\nTesting mixed +CPMS=? response...\n");
+
+    g_assert (mm_3gpp_parse_cpms_test_response (reply, &mem1, &mem2, &mem3));
+    g_assert_cmpuint (mem1->len, ==, 2);
+    g_assert (is_storage_supported (mem1, MM_SMS_STORAGE_ME));
+    g_assert (is_storage_supported (mem1, MM_SMS_STORAGE_MT));
+    g_assert_cmpuint (mem2->len, ==, 1);
+    g_assert (is_storage_supported (mem2, MM_SMS_STORAGE_ME));
+    g_assert_cmpuint (mem3->len, ==, 1);
+    g_assert (is_storage_supported (mem3, MM_SMS_STORAGE_SM));
+
+    g_array_unref (mem1);
+    g_array_unref (mem2);
+    g_array_unref (mem3);
+}
+
+static void
+test_cpms_response_mixed_spaces (void *f, gpointer d)
+{
+    /* Test with whitespaces here and there */
+    const gchar *reply = "+CPMS:     (  \"ME\"  ,  \"MT\"  )   ,  \"ME\" ,   (  \"SM\"  )";
+    GArray *mem1 = NULL;
+    GArray *mem2 = NULL;
+    GArray *mem3 = NULL;
+
+    trace ("\nTesting mixed +CPMS=? response with spaces...\n");
+
+    g_assert (mm_3gpp_parse_cpms_test_response (reply, &mem1, &mem2, &mem3));
+    g_assert_cmpuint (mem1->len, ==, 2);
+    g_assert (is_storage_supported (mem1, MM_SMS_STORAGE_ME));
+    g_assert (is_storage_supported (mem1, MM_SMS_STORAGE_MT));
+    g_assert_cmpuint (mem2->len, ==, 1);
+    g_assert (is_storage_supported (mem2, MM_SMS_STORAGE_ME));
+    g_assert_cmpuint (mem3->len, ==, 1);
+    g_assert (is_storage_supported (mem3, MM_SMS_STORAGE_SM));
+
+    g_array_unref (mem1);
+    g_array_unref (mem2);
+    g_array_unref (mem3);
+}
+
+static void
+test_cpms_response_empty_fields (void *f, gpointer d)
+{
+    /*
+     * First:    ()    Empty group
+     * Second:         Empty item
+     * Third:    (  )  Empty group with spaces
+     */
+    const gchar *reply = "+CPMS: (),,(  )";
+    GArray *mem1 = NULL;
+    GArray *mem2 = NULL;
+    GArray *mem3 = NULL;
+
+    trace ("\nTesting mixed +CPMS=? response...\n");
+
+    g_assert (mm_3gpp_parse_cpms_test_response (reply, &mem1, &mem2, &mem3));
+    g_assert_cmpuint (mem1->len, ==, 0);
+    g_assert_cmpuint (mem2->len, ==, 0);
+    g_assert_cmpuint (mem3->len, ==, 0);
+
+    g_array_unref (mem1);
+    g_array_unref (mem2);
+    g_array_unref (mem3);
+}
+
+typedef struct {
+    const gchar *query;
+    MMSmsStorage mem1_want;
+    MMSmsStorage mem2_want;
+} CpmsQueryTest;
+
+CpmsQueryTest cpms_query_test[] = {
+    {"+CPMS: \"ME\",1,100,\"MT\",5,100,\"TA\",1,100", 2, 3},
+    {"+CPMS: \"SM\",100,100,\"SR\",5,10,\"TA\",1,100", 1, 4},
+    {"+CPMS: \"XX\",100,100,\"BM\",5,10,\"TA\",1,100", 0, 5},
+    {"+CPMS: \"XX\",100,100,\"YY\",5,10,\"TA\",1,100", 0, 0},
+    {NULL, 0, 0}
+};
+
+static void
+test_cpms_query_response (void *f, gpointer d) {
+    MMSmsStorage mem1;
+    MMSmsStorage mem2;
+    gboolean ret;
+    GError *error = NULL;
+    int i;
+
+    for (i = 0; cpms_query_test[i].query != NULL; i++){
+        ret = mm_3gpp_parse_cpms_query_response (cpms_query_test[i].query,
+                                                 &mem1,
+                                                 &mem2,
+                                                 &error);
+        g_assert(ret);
+        g_assert_no_error (error);
+        g_assert_cmpuint (cpms_query_test[i].mem1_want, ==, mem1);
+        g_assert_cmpuint (cpms_query_test[i].mem2_want, ==, mem2);
+    }
 }
 
 /*****************************************************************************/
@@ -2353,6 +2849,13 @@ typedef struct {
 } CclkTest;
 
 static const CclkTest cclk_tests[] = {
+    { "+CCLK: \"14/08/05,04:00:21\"", TRUE, TRUE, FALSE,
+        "2014-08-05T04:00:21+00:00", 0 },
+    { "+CCLK: \"14/08/05,04:00:21\"", TRUE, FALSE, TRUE,
+        "2014-08-05T04:00:21+00:00", 0 },
+    { "+CCLK: \"14/08/05,04:00:21\"", TRUE, TRUE, TRUE,
+        "2014-08-05T04:00:21+00:00", 0 },
+
     { "+CCLK: \"14/08/05,04:00:21+40\"", TRUE, TRUE, FALSE,
         "2014-08-05T04:00:21+10:00", 600 },
     { "+CCLK: \"14/08/05,04:00:21+40\"", TRUE, FALSE, TRUE,
@@ -2411,6 +2914,448 @@ test_cclk_response (void)
     }
 }
 
+
+/*****************************************************************************/
+/* Test +CRSM responses */
+
+typedef struct {
+    const gchar *str;
+    gboolean ret;
+    guint sw1;
+    guint sw2;
+    gchar *hex;
+} CrsmTest;
+
+static const CrsmTest crsm_tests[] = {
+    { "+CRSM: 144, 0, 0054485552415941FFFFFFFFFFFFFFFFFF", TRUE, 144, 0, "0054485552415941FFFFFFFFFFFFFFFFFF" },
+    { "+CRSM: 144, 0,0054485552415941FFFFFFFFFFFFFFFFFF", TRUE, 144, 0, "0054485552415941FFFFFFFFFFFFFFFFFF" },
+    { "+CRSM: 144, 0, \"0054485552415941FFFFFFFFFFFFFFFFFF\"", TRUE, 144, 0, "0054485552415941FFFFFFFFFFFFFFFFFF" },
+    { "+CRSM: 144, 0,\"0054485552415941FFFFFFFFFFFFFFFFFF\"", TRUE, 144, 0, "0054485552415941FFFFFFFFFFFFFFFFFF" },
+    { NULL, FALSE, 0, 0, NULL }
+};
+
+static void
+test_crsm_response (void)
+{
+    guint i;
+
+    for (i = 0; crsm_tests[i].str; i++) {
+        GError *error = NULL;
+        guint sw1 = 0;
+        guint sw2 = 0;
+        gchar *hex = 0;
+        gboolean ret;
+
+        ret = mm_3gpp_parse_crsm_response (crsm_tests[i].str,
+                                           &sw1,
+                                           &sw2,
+                                           &hex,
+                                           &error);
+
+        g_assert (ret == crsm_tests[i].ret);
+        g_assert (ret == (error ? FALSE : TRUE));
+
+        g_clear_error (&error);
+
+        g_assert (sw1 == crsm_tests[i].sw1);
+        g_assert (sw2 == crsm_tests[i].sw2);
+
+        g_assert_cmpstr (crsm_tests[i].hex, ==, hex);
+
+        g_free(hex);
+    }
+}
+
+/*****************************************************************************/
+/* Test CGCONTRDP=N responses */
+
+typedef struct {
+    const gchar *str;
+    guint        cid;
+    guint        bearer_id;
+    const gchar *apn;
+    const gchar *local_address;
+    const gchar *subnet;
+    const gchar *gateway_address;
+    const gchar *dns_primary_address;
+    const gchar *dns_secondary_address;
+} CgcontrdpResponseTest;
+
+static const CgcontrdpResponseTest cgcontrdp_response_tests[] = {
+    /* Post TS 27.007 v9.4.0 format */
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\",\"2.197.17.49.255.255.255.255\",\"2.197.17.49\",\"10.207.43.46\",\"10.206.56.132\",\"0.0.0.0\",\"0.0.0.0\",0",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+        .local_address = "2.197.17.49",
+        .subnet = "255.255.255.255",
+        .gateway_address = "2.197.17.49",
+        .dns_primary_address = "10.207.43.46",
+        .dns_secondary_address = "10.206.56.132",
+    },
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\",\"2.197.17.49.255.255.255.255\",\"2.197.17.49\",\"10.207.43.46\"",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+        .local_address = "2.197.17.49",
+        .subnet = "255.255.255.255",
+        .gateway_address = "2.197.17.49",
+        .dns_primary_address = "10.207.43.46",
+    },
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\",\"2.197.17.49.255.255.255.255\",\"2.197.17.49\"",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+        .local_address = "2.197.17.49",
+        .subnet = "255.255.255.255",
+        .gateway_address = "2.197.17.49",
+    },
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\",\"2.197.17.49.255.255.255.255\"",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+        .local_address = "2.197.17.49",
+        .subnet = "255.255.255.255",
+    },
+    /* Pre TS 27.007 v9.4.0 format */
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\",\"2.197.17.49\",\"255.255.255.255\",\"2.197.17.49\",\"10.207.43.46\",\"10.206.56.132\",\"0.0.0.0\",\"0.0.0.0\"",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+        .local_address = "2.197.17.49",
+        .subnet = "255.255.255.255",
+        .gateway_address = "2.197.17.49",
+        .dns_primary_address = "10.207.43.46",
+        .dns_secondary_address = "10.206.56.132",
+    },
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\",\"2.197.17.49\",\"255.255.255.255\",\"2.197.17.49\",\"10.207.43.46\"",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+        .local_address = "2.197.17.49",
+        .subnet = "255.255.255.255",
+        .gateway_address = "2.197.17.49",
+        .dns_primary_address = "10.207.43.46",
+    },
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\",\"2.197.17.49\",\"255.255.255.255\",\"2.197.17.49\"",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+        .local_address = "2.197.17.49",
+        .subnet = "255.255.255.255",
+        .gateway_address = "2.197.17.49",
+    },
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\",\"2.197.17.49\",\"255.255.255.255\"",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+        .local_address = "2.197.17.49",
+        .subnet = "255.255.255.255",
+    },
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\",\"2.197.17.49\"",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+        .local_address = "2.197.17.49",
+    },
+    /* Common */
+    {
+        .str = "+CGCONTRDP: 4,5,\"ibox.tim.it.mnc001.mcc222.gprs\"",
+        .cid = 4,
+        .bearer_id = 5,
+        .apn = "ibox.tim.it.mnc001.mcc222.gprs",
+    },
+    {
+        .str = "+CGCONTRDP: 4,5,\"\"",
+        .cid = 4,
+        .bearer_id = 5,
+    },
+};
+
+static void
+test_cgcontrdp_response (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (cgcontrdp_response_tests); i++) {
+        GError   *error = NULL;
+        gboolean  success;
+        guint     cid = G_MAXUINT;
+        guint     bearer_id = G_MAXUINT;
+        gchar    *apn = NULL;
+        gchar    *local_address = NULL;
+        gchar    *subnet = NULL;
+        gchar    *gateway_address = NULL;
+        gchar    *dns_primary_address = NULL;
+        gchar    *dns_secondary_address = NULL;
+
+        success = mm_3gpp_parse_cgcontrdp_response (cgcontrdp_response_tests[i].str,
+                                                    &cid,
+                                                    &bearer_id,
+                                                    &apn,
+                                                    &local_address,
+                                                    &subnet,
+                                                    &gateway_address,
+                                                    &dns_primary_address,
+                                                    &dns_secondary_address,
+                                                    &error);
+        g_assert_no_error (error);
+        g_assert (success);
+        g_assert_cmpuint (cgcontrdp_response_tests[i].cid,                   ==, cid);
+        g_assert_cmpuint (cgcontrdp_response_tests[i].bearer_id,             ==, bearer_id);
+        g_assert_cmpstr  (cgcontrdp_response_tests[i].apn,                   ==, apn);
+        g_assert_cmpstr  (cgcontrdp_response_tests[i].local_address,         ==, local_address);
+        g_assert_cmpstr  (cgcontrdp_response_tests[i].subnet,                ==, subnet);
+        g_assert_cmpstr  (cgcontrdp_response_tests[i].gateway_address,       ==, gateway_address);
+        g_assert_cmpstr  (cgcontrdp_response_tests[i].dns_primary_address,   ==, dns_primary_address);
+        g_assert_cmpstr  (cgcontrdp_response_tests[i].dns_secondary_address, ==, dns_secondary_address);
+
+        g_free (apn);
+        g_free (local_address);
+        g_free (subnet);
+        g_free (gateway_address);
+        g_free (dns_primary_address);
+        g_free (dns_secondary_address);
+    }
+}
+
+/*****************************************************************************/
+/* Test CFUN? response */
+
+typedef struct {
+    const gchar *str;
+    guint        state;
+} CfunQueryTest;
+
+static const CfunQueryTest cfun_query_tests[] = {
+    { "+CFUN: 1",     1 },
+    { "+CFUN: 1,0",   1 },
+    { "+CFUN: 0",     0 },
+    { "+CFUN: 0,0",   0 },
+    { "+CFUN: 19",   19 },
+    { "+CFUN: 19,0", 19 },
+};
+
+static void
+test_cfun_response (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (cfun_query_tests); i++) {
+        GError   *error = NULL;
+        gboolean  success;
+        guint     state = G_MAXUINT;
+
+        success = mm_3gpp_parse_cfun_query_response (cfun_query_tests[i].str, &state, &error);
+        g_assert_no_error (error);
+        g_assert (success);
+        g_assert_cmpuint (cfun_query_tests[i].state, ==, state);
+    }
+}
+
+/*****************************************************************************/
+/* Test +CESQ responses */
+
+typedef struct {
+    const gchar *str;
+
+    gboolean gsm_info;
+    guint    rxlev;
+    gdouble  rssi;
+    guint    ber;
+
+    gboolean umts_info;
+    guint    rscp_level;
+    gdouble  rscp;
+    guint    ecn0_level;
+    gdouble  ecio;
+
+    gboolean lte_info;
+    guint    rsrq_level;
+    gdouble  rsrq;
+    guint    rsrp_level;
+    gdouble  rsrp;
+} CesqResponseTest;
+
+static const CesqResponseTest cesq_response_tests[] = {
+    {
+        .str       = "+CESQ: 99,99,255,255,20,80",
+        .gsm_info  = FALSE, .rxlev = 99, .ber = 99,
+        .umts_info = FALSE, .rscp_level = 255, .ecn0_level = 255,
+        .lte_info  = TRUE,  .rsrq_level = 20, .rsrq = -10.0, .rsrp_level = 80, .rsrp = -61.0,
+    },
+    {
+        .str       = "+CESQ: 99,99,95,40,255,255",
+        .gsm_info  = FALSE, .rxlev = 99, .ber = 99,
+        .umts_info = TRUE,  .rscp_level = 95, .rscp = -26.0, .ecn0_level = 40, .ecio = -4.5,
+        .lte_info  = FALSE, .rsrq_level = 255, .rsrp_level = 255,
+    },
+    {
+        .str       = "+CESQ: 10,6,255,255,255,255",
+        .gsm_info  = TRUE,  .rxlev = 10, .rssi = -101.0, .ber = 6,
+        .umts_info = FALSE, .rscp_level = 255, .ecn0_level = 255,
+        .lte_info  = FALSE, .rsrq_level = 255, .rsrp_level = 255,
+    }
+};
+
+static void
+test_cesq_response (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (cesq_response_tests); i++) {
+        GError   *error = NULL;
+        gboolean  success;
+        guint rxlev = G_MAXUINT;
+        guint ber = G_MAXUINT;
+        guint rscp = G_MAXUINT;
+        guint ecn0 = G_MAXUINT;
+        guint rsrq = G_MAXUINT;
+        guint rsrp = G_MAXUINT;
+
+        success = mm_3gpp_parse_cesq_response (cesq_response_tests[i].str,
+                                               &rxlev, &ber,
+                                               &rscp, &ecn0,
+                                               &rsrq, &rsrp,
+                                               &error);
+        g_assert_no_error (error);
+        g_assert (success);
+
+        g_assert_cmpuint (cesq_response_tests[i].rxlev,      ==, rxlev);
+        g_assert_cmpuint (cesq_response_tests[i].ber,        ==, ber);
+        g_assert_cmpuint (cesq_response_tests[i].rscp_level, ==, rscp);
+        g_assert_cmpuint (cesq_response_tests[i].ecn0_level, ==, ecn0);
+        g_assert_cmpuint (cesq_response_tests[i].rsrq_level, ==, rsrq);
+        g_assert_cmpuint (cesq_response_tests[i].rsrp_level, ==, rsrp);
+    }
+}
+
+static void
+test_cesq_response_to_signal (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (cesq_response_tests); i++) {
+        GError   *error = NULL;
+        gboolean  success;
+        MMSignal *gsm  = NULL;
+        MMSignal *umts = NULL;
+        MMSignal *lte  = NULL;
+
+        success = mm_3gpp_cesq_response_to_signal_info (cesq_response_tests[i].str,
+                                                        &gsm, &umts, &lte,
+                                                        &error);
+        g_assert_no_error (error);
+        g_assert (success);
+
+        if (cesq_response_tests[i].gsm_info) {
+            g_assert (gsm);
+            g_assert_cmpfloat_tolerance (mm_signal_get_rssi (gsm), cesq_response_tests[i].rssi, 0.1);
+            g_object_unref (gsm);
+        } else
+            g_assert (!gsm);
+
+        if (cesq_response_tests[i].umts_info) {
+            g_assert (umts);
+            g_assert_cmpfloat_tolerance (mm_signal_get_rscp (umts), cesq_response_tests[i].rscp, 0.1);
+            g_assert_cmpfloat_tolerance (mm_signal_get_ecio (umts), cesq_response_tests[i].ecio, 0.1);
+            g_object_unref (umts);
+        } else
+            g_assert (!umts);
+
+        if (cesq_response_tests[i].lte_info) {
+            g_assert (lte);
+            g_assert_cmpfloat_tolerance (mm_signal_get_rsrq (lte), cesq_response_tests[i].rsrq, 0.1);
+            g_assert_cmpfloat_tolerance (mm_signal_get_rsrp (lte), cesq_response_tests[i].rsrp, 0.1);
+            g_object_unref (lte);
+        } else
+            g_assert (!lte);
+    }
+}
+
+typedef struct {
+    const gchar       *str;
+    MMModemPowerState  state;
+} CfunQueryGenericTest;
+
+static const CfunQueryGenericTest cfun_query_generic_tests[] = {
+    { "+CFUN: 1",     MM_MODEM_POWER_STATE_ON  },
+    { "+CFUN: 1,0",   MM_MODEM_POWER_STATE_ON  },
+    { "+CFUN: 0",     MM_MODEM_POWER_STATE_OFF },
+    { "+CFUN: 0,0",   MM_MODEM_POWER_STATE_OFF },
+    { "+CFUN: 4",     MM_MODEM_POWER_STATE_LOW },
+    { "+CFUN: 4,0",   MM_MODEM_POWER_STATE_LOW },
+};
+
+static void
+test_cfun_generic_response (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (cfun_query_generic_tests); i++) {
+        GError   *error = NULL;
+        gboolean  success;
+        MMModemPowerState state = MM_MODEM_POWER_STATE_UNKNOWN;
+
+        success = mm_3gpp_parse_cfun_query_generic_response (cfun_query_generic_tests[i].str, &state, &error);
+        g_assert_no_error (error);
+        g_assert (success);
+        g_assert_cmpuint (cfun_query_generic_tests[i].state, ==, state);
+    }
+}
+
+/*****************************************************************************/
+
+typedef struct {
+    gchar *str;
+    gint expected_number_list[9];
+} TestParseNumberList;
+
+static const TestParseNumberList test_parse_number_list_item [] = {
+    { "1-6",          { 1, 2, 3, 4, 5, 6, -1 } },
+    { "0,1,2,4,6",    { 0, 1, 2, 4, 6, -1 } },
+    { "1,3-5,7,9-11", { 1, 3, 4, 5, 7, 9, 10, 11, -1 } },
+    { "9-11,7,3-5",   { 3, 4, 5, 7, 9, 10, 11, -1 } },
+    { "",             { -1 } },
+    { NULL,           { -1 } },
+};
+
+static void
+test_parse_uint_list (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (test_parse_number_list_item); i++) {
+        GArray *array;
+        GError *error = NULL;
+        guint   j;
+
+        array = mm_parse_uint_list (test_parse_number_list_item[i].str, &error);
+        g_assert_no_error (error);
+        if (test_parse_number_list_item[i].expected_number_list[0] == -1) {
+            g_assert (!array);
+            continue;
+        }
+
+        g_assert (array);
+        for (j = 0; j < array->len; j++) {
+            g_assert_cmpint (test_parse_number_list_item[i].expected_number_list[j], !=, -1);
+            g_assert_cmpuint (test_parse_number_list_item[i].expected_number_list[j], ==, g_array_index (array, guint, j));
+        }
+        g_assert_cmpint (test_parse_number_list_item[i].expected_number_list[array->len], ==, -1);
+        g_array_unref (array);
+    }
+}
+
 /*****************************************************************************/
 
 void
@@ -2442,7 +3387,6 @@ int main (int argc, char **argv)
     gint result;
     DevidItem *item = &devids[0];
 
-    g_type_init ();
     g_test_init (&argc, &argv, NULL);
 
     suite = g_test_get_root ();
@@ -2479,6 +3423,8 @@ int main (int argc, char **argv)
     g_test_suite_add (suite, TESTCASE (test_cops_response_gsm_invalid, NULL));
     g_test_suite_add (suite, TESTCASE (test_cops_response_umts_invalid, NULL));
 
+    g_test_suite_add (suite, TESTCASE (test_cops_query, NULL));
+
     g_test_suite_add (suite, TESTCASE (test_creg1_solicited, reg_data));
     g_test_suite_add (suite, TESTCASE (test_creg1_unsolicited, reg_data));
     g_test_suite_add (suite, TESTCASE (test_creg2_mercury_solicited, reg_data));
@@ -2498,6 +3444,8 @@ int main (int argc, char **argv)
     g_test_suite_add (suite, TESTCASE (test_creg2_leading_zeros_solicited, reg_data));
     g_test_suite_add (suite, TESTCASE (test_creg2_no_leading_zeros_unsolicited, reg_data));
     g_test_suite_add (suite, TESTCASE (test_creg2_leading_zeros_unsolicited, reg_data));
+    g_test_suite_add (suite, TESTCASE (test_creg2_ublox_solicited, reg_data));
+    g_test_suite_add (suite, TESTCASE (test_creg2_ublox_unsolicited, reg_data));
 
     g_test_suite_add (suite, TESTCASE (test_cgreg1_solicited, reg_data));
     g_test_suite_add (suite, TESTCASE (test_cgreg1_unsolicited, reg_data));
@@ -2506,6 +3454,8 @@ int main (int argc, char **argv)
     g_test_suite_add (suite, TESTCASE (test_cgreg2_md400_unsolicited, reg_data));
     g_test_suite_add (suite, TESTCASE (test_cgreg2_x220_unsolicited, reg_data));
     g_test_suite_add (suite, TESTCASE (test_cgreg2_unsolicited_with_rac, reg_data));
+    g_test_suite_add (suite, TESTCASE (test_cgreg2_thuraya_solicited, reg_data));
+    g_test_suite_add (suite, TESTCASE (test_cgreg2_thuraya_unsolicited, reg_data));
 
     g_test_suite_add (suite, TESTCASE (test_cereg1_solicited, reg_data));
     g_test_suite_add (suite, TESTCASE (test_cereg1_unsolicited, reg_data));
@@ -2541,15 +3491,30 @@ int main (int argc, char **argv)
         item++;
     }
 
-    g_test_suite_add (suite, TESTCASE (test_cpms_response_cinterion, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cpms_response_cinterion,    NULL));
+    g_test_suite_add (suite, TESTCASE (test_cpms_response_huawei_mu609, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cpms_response_nokia_c6,     NULL));
+    g_test_suite_add (suite, TESTCASE (test_cpms_response_mixed,        NULL));
+    g_test_suite_add (suite, TESTCASE (test_cpms_response_mixed_spaces, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cpms_response_empty_fields, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cpms_query_response,        NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_cmp_apn_name, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_cgdcont_test_response_single, NULL));
     g_test_suite_add (suite, TESTCASE (test_cgdcont_test_response_multiple, NULL));
     g_test_suite_add (suite, TESTCASE (test_cgdcont_test_response_multiple_and_ignore, NULL));
     g_test_suite_add (suite, TESTCASE (test_cgdcont_test_response_single_context, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cgdcont_test_response_thuraya, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cgdcont_test_response_cinterion_phs8, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_cgdcont_read_response_nokia, NULL));
     g_test_suite_add (suite, TESTCASE (test_cgdcont_read_response_samsung, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_cgact_read_response_none, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cgact_read_response_single_inactive, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cgact_read_response_single_active, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cgact_read_response_multiple, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_cnum_response_generic, NULL));
     g_test_suite_add (suite, TESTCASE (test_cnum_response_generic_without_detail, NULL));
@@ -2568,11 +3533,26 @@ int main (int argc, char **argv)
     g_test_suite_add (suite, TESTCASE (test_cmgl_response_pantech, NULL));
     g_test_suite_add (suite, TESTCASE (test_cmgl_response_pantech_multiple, NULL));
 
+    g_test_suite_add (suite, TESTCASE (test_cmgr_response_generic, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cmgr_response_telit, NULL));
+
     g_test_suite_add (suite, TESTCASE (test_supported_mode_filter, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_supported_capability_filter, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_cclk_response, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_crsm_response, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_cgcontrdp_response, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_cfun_response, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cfun_generic_response, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_cesq_response, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cesq_response_to_signal, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_parse_uint_list, NULL));
 
     result = g_test_run ();
 

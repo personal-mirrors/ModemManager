@@ -1,14 +1,19 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /*
- * This program is free software; you can redistribute it and/or modify
+ * mmcli -- Control modem status & access information from the command line
+ *
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * the Free Software Foundation, either version 2 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details:
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) 2011 Aleksander Morgado <aleksander@gnu.org>
  */
@@ -30,14 +35,14 @@ MMManager *mmcli_get_manager_sync   (GDBusConnection *connection);
 
 
 void     mmcli_get_modem         (GDBusConnection *connection,
-                                  const gchar *path_or_index,
+                                  const gchar *modem_str,
                                   GCancellable *cancellable,
                                   GAsyncReadyCallback callback,
                                   gpointer user_data);
 MMObject *mmcli_get_modem_finish (GAsyncResult *res,
                                   MMManager **o_manager);
 MMObject *mmcli_get_modem_sync   (GDBusConnection *connection,
-                                  const gchar *path_or_index,
+                                  const gchar *modem_str,
                                   MMManager **o_manager);
 
 void      mmcli_get_bearer        (GDBusConnection *connection,
@@ -79,6 +84,20 @@ MMSms *mmcli_get_sms_sync   (GDBusConnection *connection,
                              MMManager **manager,
                              MMObject **object);
 
+void    mmcli_get_call        (GDBusConnection *connection,
+                               const gchar *path_or_index,
+                               GCancellable *cancellable,
+                               GAsyncReadyCallback callback,
+                               gpointer user_data);
+MMCall *mmcli_get_call_finish (GAsyncResult *res,
+                               MMManager **manager,
+                               MMObject **object);
+MMCall *mmcli_get_call_sync   (GDBusConnection *connection,
+                               const gchar *path_or_index,
+                               MMManager **manager,
+                               MMObject **object);
+
+
 const gchar *mmcli_get_state_reason_string (MMModemStateChangeReason reason);
 
 GOptionGroup *mmcli_get_common_option_group (void);
@@ -86,6 +105,7 @@ const gchar  *mmcli_get_common_modem_string (void);
 const gchar  *mmcli_get_common_bearer_string (void);
 const gchar  *mmcli_get_common_sim_string (void);
 const gchar  *mmcli_get_common_sms_string (void);
+const gchar  *mmcli_get_common_call_string (void);
 
 gchar *mmcli_prefix_newlines (const gchar *prefix,
                               const gchar *str);

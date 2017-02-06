@@ -68,6 +68,168 @@ mm_strip_tag (const gchar *str, const gchar *cmd)
 
 /*****************************************************************************/
 
+gchar **
+mm_split_string_groups (const gchar *str)
+{
+    GPtrArray *array;
+    const gchar *start;
+    const gchar *next;
+
+    array = g_ptr_array_new ();
+
+    /*
+     * Manually parse splitting groups. Groups may be single elements, or otherwise
+     * lists given between parenthesis, e.g.:
+     *
+     *    ("SM","ME"),("SM","ME"),("SM","ME")
+     *    "SM","SM","SM"
+     *    "SM",("SM","ME"),("SM","ME")
+     */
+
+    /* Iterate string splitting groups */
+    for (start = str; start; start = next) {
+        gchar *item;
+        gssize len = -1;
+
+        /* skip leading whitespaces */
+        while (*start == ' ')
+            start++;
+
+        if (*start == '(') {
+            start++;
+            next = strchr (start, ')');
+            if (next) {
+                len = next - start;
+                next = strchr (next, ',');
+                if (next)
+                    next++;
+            }
+        } else {
+            next = strchr (start, ',');
+            if (next) {
+                len = next - start;
+                next++;
+            }
+        }
+
+        if (len < 0)
+            item = g_strdup (start);
+        else
+            item = g_strndup (start, len);
+
+        g_ptr_array_add (array, item);
+    }
+
+    if (array->len > 0) {
+        g_ptr_array_add (array, NULL);
+        return (gchar **) g_ptr_array_free (array, FALSE);
+    }
+
+    g_ptr_array_unref (array);
+    return NULL;
+}
+
+/*****************************************************************************/
+
+static int uint_compare_func (gconstpointer a, gconstpointer b)
+{
+   return (*(guint *)a - *(guint *)b);
+}
+
+GArray *
+mm_parse_uint_list (const gchar  *str,
+                    GError      **error)
+{
+    GArray *array;
+    gchar  *dupstr;
+    gchar  *aux;
+    GError *inner_error = NULL;
+
+    if (!str || !str[0])
+        return NULL;
+
+    /* Parses into a GArray of guints, the list of numbers given in the string,
+     * also supporting number intervals.
+     * E.g.:
+     *   1-6      --> 1,2,3,4,5,6
+     *   1,2,4-6  --> 1,2,4,5,6
+     */
+    array = g_array_new (FALSE, FALSE, sizeof (guint));
+    aux = dupstr = g_strdup (str);
+
+    while (aux) {
+        gchar *next;
+        gchar *interval;
+
+        next = strchr (aux, ',');
+        if (next) {
+            *next = '\0';
+            next++;
+        }
+
+        interval = strchr (aux, '-');
+        if (interval) {
+            guint start = 0;
+            guint stop = 0;
+
+            *interval = '\0';
+            interval++;
+
+            if (!mm_get_uint_from_str (aux, &start)) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                           "couldn't parse interval start integer: '%s'", aux);
+                goto out;
+            }
+            if (!mm_get_uint_from_str (interval, &stop)) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                           "couldn't parse interval stop integer: '%s'", interval);
+                goto out;
+            }
+
+            if (start > stop) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                           "interval start (%u) cannot be bigger than interval stop (%u)", start, stop);
+                goto out;
+            }
+
+            for (; start <= stop; start++)
+                g_array_append_val (array, start);
+        } else {
+            guint num;
+
+            if (!mm_get_uint_from_str (aux, &num)) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                           "couldn't parse integer: '%s'", aux);
+                goto out;
+            }
+
+            g_array_append_val (array, num);
+        }
+
+        aux = next;
+    }
+
+    if (!array->len)
+        inner_error = g_error_new (MM_CORE_ERROR,
+                                   MM_CORE_ERROR_FAILED,
+                                   "couldn't parse list of integers: '%s'", str);
+    else
+        g_array_sort (array, uint_compare_func);
+
+out:
+    g_free (dupstr);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        g_array_unref (array);
+        return NULL;
+    }
+
+    return array;
+}
+
+/*****************************************************************************/
+
 guint
 mm_count_bits_set (gulong number)
 {
@@ -128,7 +290,7 @@ mm_create_device_identifier (guint vid,
         g_checksum_update (sum, (const guchar *) &str_vid[0], strlen (str_vid));
         g_string_append_printf (msg, "%08x", vid);
     }
-    if (vid) {
+    if (pid) {
         snprintf (str_pid, sizeof (str_pid) - 1, "%08x", pid);
         g_checksum_update (sum, (const guchar *) &str_pid[0], strlen (str_pid));
         g_string_append_printf (msg, "%08x", pid);
@@ -323,6 +485,46 @@ mm_filter_supported_capabilities (MMModemCapability all,
 
 /*****************************************************************************/
 
+GRegex *
+mm_voice_ring_regex_get (void)
+{
+    /* Example:
+     * <CR><LF>RING<CR><LF>
+     */
+    return g_regex_new ("\\r\\nRING\\r\\n",
+                        G_REGEX_RAW | G_REGEX_OPTIMIZE,
+                        0,
+                        NULL);
+}
+
+GRegex *
+mm_voice_cring_regex_get (void)
+{
+    /* Example:
+     * <CR><LF>+CRING: VOICE<CR><LF>
+     * <CR><LF>+CRING: DATA<CR><LF>
+     */
+    return g_regex_new ("\\r\\n\\+CRING:\\s*(\\S+)\\r\\n",
+                        G_REGEX_RAW | G_REGEX_OPTIMIZE,
+                        0,
+                        NULL);
+}
+
+GRegex *
+mm_voice_clip_regex_get (void)
+{
+    /* Example:
+     * <CR><LF>+CLIP: "+393351391306",145,,,,0<CR><LF>
+     *                 \_ Number      \_ Type \_ Validity
+     */
+    return g_regex_new ("\\r\\n\\+CLIP:\\s*(\\S+),\\s*(\\d+),\\s*,\\s*,\\s*,\\s*(\\d+)\\r\\n",
+                        G_REGEX_RAW | G_REGEX_OPTIMIZE,
+                        0,
+                        NULL);
+}
+
+/*************************************************************************/
+
 /* +CREG: <stat>                      (GSM 07.07 CREG=1 unsolicited) */
 #define CREG1 "\\+(CREG|CGREG|CEREG):\\s*0*([0-9])"
 
@@ -331,6 +533,7 @@ mm_filter_supported_capabilities (MMModemCapability all,
 
 /* +CREG: <stat>,<lac>,<ci>           (GSM 07.07 CREG=2 unsolicited) */
 #define CREG3 "\\+(CREG|CGREG|CEREG):\\s*0*([0-9]),\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)"
+#define CREG11 "\\+(CREG|CGREG|CEREG):\\s*0*([0-9]),\\s*(\"[^\"\\s]*\")\\s*,\\s*(\"[^\"\\s]*\")"
 
 /* +CREG: <n>,<stat>,<lac>,<ci>       (GSM 07.07 solicited and some CREG=2 unsolicited) */
 #define CREG4 "\\+(CREG|CGREG|CEREG):\\s*([0-9]),\\s*([0-9])\\s*,\\s*([^,]*)\\s*,\\s*([^,\\s]*)"
@@ -359,7 +562,7 @@ mm_filter_supported_capabilities (MMModemCapability all,
 GPtrArray *
 mm_3gpp_creg_regex_get (gboolean solicited)
 {
-    GPtrArray *array = g_ptr_array_sized_new (12);
+    GPtrArray *array = g_ptr_array_sized_new (13);
     GRegex *regex;
 
     /* #1 */
@@ -439,6 +642,14 @@ mm_3gpp_creg_regex_get (gboolean solicited)
         regex = g_regex_new (CREG10 "$", G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     else
         regex = g_regex_new ("\\r\\n" CREG10 "\\r\\n", G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+    g_assert (regex);
+    g_ptr_array_add (array, regex);
+
+    /* #11 */
+    if (solicited)
+        regex = g_regex_new (CREG11 "$", G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+    else
+        regex = g_regex_new ("\\r\\n" CREG11 "\\r\\n", G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     g_assert (regex);
     g_ptr_array_add (array, regex);
 
@@ -737,6 +948,133 @@ mm_3gpp_parse_cops_test_response (const gchar *reply,
 
 /*************************************************************************/
 
+gboolean
+mm_3gpp_parse_cops_read_response (const gchar              *response,
+                                  guint                    *out_mode,
+                                  guint                    *out_format,
+                                  gchar                   **out_operator,
+                                  MMModemAccessTechnology  *out_act,
+                                  GError                  **error)
+{
+    GRegex *r;
+    GMatchInfo *match_info;
+    GError *inner_error = NULL;
+    guint mode = 0;
+    guint format = 0;
+    gchar *operator = NULL;
+    guint actval = 0;
+    MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+
+    g_assert (out_mode || out_format || out_operator || out_act);
+
+    /* We assume the response to be either:
+     *   +COPS: <mode>,<format>,<oper>
+     * or:
+     *   +COPS: <mode>,<format>,<oper>,<AcT>
+     */
+    r = g_regex_new ("\\+COPS:\\s*(\\d+),(\\d+),([^,]*)(?:,(\\d+))?(?:\\r\\n)?", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (inner_error)
+        goto out;
+
+    if (!g_match_info_matches (match_info)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't match response");
+        goto out;
+    }
+
+    if (out_mode && !mm_get_uint_from_match_info (match_info, 1, &mode)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing mode");
+        goto out;
+    }
+
+    if (out_format && !mm_get_uint_from_match_info (match_info, 2, &format)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing format");
+        goto out;
+    }
+
+    if (out_operator && !(operator = mm_get_string_unquoted_from_match_info (match_info, 3))) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing operator");
+        goto out;
+    }
+
+    /* AcT is optional */
+    if (out_act && g_match_info_get_match_count (match_info) >= 5) {
+        if (!mm_get_uint_from_match_info (match_info, 4, &actval)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing AcT");
+            goto out;
+        }
+        act = get_mm_access_tech_from_etsi_access_tech (actval);
+    }
+
+out:
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        g_free (operator);
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    if (out_mode)
+        *out_mode = mode;
+    if (out_format)
+        *out_format = format;
+    if (out_operator)
+        *out_operator = operator;
+    if (out_act)
+        *out_act = act;
+    return TRUE;
+}
+
+/*************************************************************************/
+/* Logic to compare two APN names */
+
+gboolean
+mm_3gpp_cmp_apn_name (const gchar *requested,
+                      const gchar *existing)
+{
+    size_t requested_len;
+    size_t existing_len;
+
+    /* Both must be given to compare properly */
+    if (!existing || !existing[0] || !requested || !requested[0])
+        return FALSE;
+
+    requested_len = strlen (requested);
+
+    /*
+     * 1) The requested APN should be at least the prefix of the existing one.
+     */
+    if (g_ascii_strncasecmp (existing, requested, requested_len) != 0)
+        return FALSE;
+
+    /*
+     * 2) If the existing one is actually the same as the requested one (i.e.
+     *    there are no more different chars in the existing one), we're done.
+     */
+    if (existing[requested_len] == '\0')
+        return TRUE;
+
+    existing_len = strlen (existing);
+
+    /* 3) Special handling for PDP contexts reported by u-blox modems once the
+     *    contexts have been activated at least once:
+     *      "ac.vodafone.es.MNC001.MCC214.GPRS" should match "ac.vodafone.es"
+     */
+    if ((existing_len > (requested_len + 14)) &&
+        g_ascii_strncasecmp (&existing[requested_len], ".mnc", 4) == 0 &&
+        g_ascii_strncasecmp (&existing[requested_len + 7], ".mcc", 4) == 0)
+        return TRUE;
+
+    /* No match */
+    return FALSE;
+}
+
+/*************************************************************************/
 
 static void
 mm_3gpp_pdp_context_format_free (MM3gppPdpContextFormat *format)
@@ -764,7 +1102,7 @@ mm_3gpp_parse_cgdcont_test_response (const gchar *response,
         return NULL;
     }
 
-    r = g_regex_new ("\\+CGDCONT:\\s*\\((\\d+)-?(\\d+)?\\),\\(?\"(\\S+)\"",
+    r = g_regex_new ("\\+CGDCONT:\\s*\\(\\s*(\\d+)\\s*-?\\s*(\\d+)?[^\\)]*\\)\\s*,\\s*\\(?\"(\\S+)\"",
                      G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW,
                      0, &inner_error);
     g_assert (r != NULL);
@@ -852,7 +1190,7 @@ mm_3gpp_parse_cgdcont_read_response (const gchar *reply,
         return NULL;
 
     list = NULL;
-    r = g_regex_new ("\\+CGDCONT:\\s*(\\d+)\\s*,([^,\\)]*),([^,\\)]*),([^,\\)]*)",
+    r = g_regex_new ("\\+CGDCONT:\\s*(\\d+)\\s*,([^, \\)]*)\\s*,([^, \\)]*)\\s*,([^, \\)]*)",
                      G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW,
                      0, &inner_error);
     if (r) {
@@ -900,6 +1238,90 @@ mm_3gpp_parse_cgdcont_read_response (const gchar *reply,
     }
 
     list = g_list_sort (list, (GCompareFunc)mm_3gpp_pdp_context_cmp);
+
+    return list;
+}
+
+/*************************************************************************/
+
+static void
+mm_3gpp_pdp_context_active_free (MM3gppPdpContextActive *pdp_active)
+{
+    g_slice_free (MM3gppPdpContextActive, pdp_active);
+}
+
+void
+mm_3gpp_pdp_context_active_list_free (GList *pdp_active_list)
+{
+    g_list_free_full (pdp_active_list, (GDestroyNotify) mm_3gpp_pdp_context_active_free);
+}
+
+static gint
+mm_3gpp_pdp_context_active_cmp (MM3gppPdpContextActive *a,
+                                MM3gppPdpContextActive *b)
+{
+    return (a->cid - b->cid);
+}
+
+GList *
+mm_3gpp_parse_cgact_read_response (const gchar *reply,
+                                   GError **error)
+{
+    GError *inner_error = NULL;
+    GRegex *r;
+    GMatchInfo *match_info;
+    GList *list;
+
+    if (!reply || !reply[0])
+        /* Nothing configured, all done */
+        return NULL;
+
+    list = NULL;
+    r = g_regex_new ("\\+CGACT:\\s*(\\d+),(\\d+)",
+                     G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW, 0, &inner_error);
+    g_assert (r);
+
+    g_regex_match_full (r, reply, strlen (reply), 0, 0, &match_info, &inner_error);
+    while (!inner_error && g_match_info_matches (match_info)) {
+        MM3gppPdpContextActive *pdp_active;
+        guint cid = 0;
+        guint aux = 0;
+
+        if (!mm_get_uint_from_match_info (match_info, 1, &cid)) {
+            inner_error = g_error_new (MM_CORE_ERROR,
+                                       MM_CORE_ERROR_FAILED,
+                                       "Couldn't parse CID from reply: '%s'",
+                                       reply);
+            break;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 2, &aux) || (aux != 0 && aux != 1)) {
+            inner_error = g_error_new (MM_CORE_ERROR,
+                                       MM_CORE_ERROR_FAILED,
+                                       "Couldn't parse context status from reply: '%s'",
+                                       reply);
+            break;
+        }
+
+        pdp_active = g_slice_new0 (MM3gppPdpContextActive);
+        pdp_active->cid = cid;
+        pdp_active->active = (gboolean) aux;
+        list = g_list_prepend (list, pdp_active);
+
+        g_match_info_next (match_info, &inner_error);
+    }
+
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        mm_3gpp_pdp_context_active_list_free (list);
+        g_propagate_error (error, inner_error);
+        g_prefix_error (error, "Couldn't properly parse list of active/inactive PDP contexts. ");
+        return NULL;
+    }
+
+    list = g_list_sort (list, (GCompareFunc) mm_3gpp_pdp_context_active_cmp);
 
     return list;
 }
@@ -1050,13 +1472,19 @@ mm_3gpp_parse_creg_response (GMatchInfo *info,
 
     /* Status */
     str = g_match_info_fetch (info, istat);
-    stat = parse_uint (str, 10, 0, 5, &success);
+    stat = parse_uint (str, 10, 0, G_MAXUINT, &success);
     g_free (str);
     if (!success) {
         g_set_error_literal (error,
                              MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                              "Could not parse the registration status response");
         return FALSE;
+    }
+
+    /* 'roaming (csfb not preferred)' is the last valid state */
+    if (stat > MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING_CSFB_NOT_PREFERRED) {
+        mm_warn ("Registration State '%lu' is unknown", stat);
+        stat = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
     }
 
     /* Location Area Code */
@@ -1083,12 +1511,6 @@ mm_3gpp_parse_creg_response (GMatchInfo *info,
         g_free (str);
         if (!foo)
             act = -1;
-    }
-
-    /* 'roaming' is the last valid state */
-    if (stat > MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING) {
-        mm_warn ("Registration State '%lu' is unknown", stat);
-        stat = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
     }
 
     *out_reg_state = (MMModem3gppRegistrationState) stat;
@@ -1161,6 +1583,645 @@ mm_3gpp_parse_cmgf_test_response (const gchar *reply,
 
 /*************************************************************************/
 
+MM3gppPduInfo *
+mm_3gpp_parse_cmgr_read_response (const gchar *reply,
+                                  guint index,
+                                  GError **error)
+{
+    GRegex *r;
+    GMatchInfo *match_info;
+    gint count;
+    gint status;
+    gchar *pdu;
+    MM3gppPduInfo *info = NULL;
+
+    /* +CMGR: <stat>,<alpha>,<length>(whitespace)<pdu> */
+    /* The <alpha> and <length> fields are matched, but not currently used */
+    r = g_regex_new ("\\+CMGR:\\s*(\\d+)\\s*,([^,]*),\\s*(\\d+)\\s*([^\\r\\n]*)", 0, 0, NULL);
+    g_assert (r);
+
+    if (!g_regex_match_full (r, reply, strlen (reply), 0, 0, &match_info, NULL)) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Failed to parse CMGR read result: response didn't match '%s'",
+                     reply);
+        goto done;
+    }
+
+    /* g_match_info_get_match_count includes match #0 */
+    if ((count = g_match_info_get_match_count (match_info)) != 5) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Failed to match CMGR fields (matched %d) '%s'",
+                     count,
+                     reply);
+        goto done;
+    }
+
+    if (!mm_get_int_from_match_info (match_info, 1, &status)) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Failed to extract CMGR status field '%s'",
+                     reply);
+        goto done;
+    }
+
+
+    pdu = mm_get_string_unquoted_from_match_info (match_info, 4);
+    if (!pdu) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Failed to extract CMGR pdu field '%s'",
+                     reply);
+        goto done;
+    }
+
+    info = g_new0 (MM3gppPduInfo, 1);
+    info->index = index;
+    info->status = status;
+    info->pdu = pdu;
+
+done:
+    g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    return info;
+}
+
+/*****************************************************************************/
+/* AT+CRSM response parser */
+
+gboolean
+mm_3gpp_parse_crsm_response (const gchar *reply,
+                             guint *sw1,
+                             guint *sw2,
+                             gchar **hex,
+                             GError **error)
+{
+    GRegex *r;
+    GMatchInfo *match_info;
+
+    g_assert (sw1 != NULL);
+    g_assert (sw2 != NULL);
+    g_assert (hex != NULL);
+
+    *sw1 = 0;
+    *sw2 = 0;
+    *hex = NULL;
+
+    if (!reply || !g_str_has_prefix (reply, "+CRSM:")) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Missing +CRSM prefix");
+        return FALSE;
+    }
+
+    r = g_regex_new ("\\+CRSM:\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*\"?([0-9a-fA-F]+)\"?",
+                     G_REGEX_RAW, 0, NULL);
+    g_assert (r != NULL);
+
+    if (g_regex_match_full (r, reply, strlen (reply), 0, 0, &match_info, NULL) &&
+        mm_get_uint_from_match_info (match_info, 1, sw1) &&
+        mm_get_uint_from_match_info (match_info, 2, sw2))
+        *hex = mm_get_string_unquoted_from_match_info (match_info, 3);
+
+    g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (*hex == NULL) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Failed to parse CRSM query result '%s'",
+                     reply);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*************************************************************************/
+/* CGCONTRDP=N response parser */
+
+static gboolean
+split_local_address_and_subnet (const gchar  *str,
+                                gchar       **local_address,
+                                gchar       **subnet)
+{
+    const gchar *separator;
+    guint count = 0;
+
+    /* E.g. split: "2.43.2.44.255.255.255.255"
+     * into:
+     *    local address: "2.43.2.44",
+     *    subnet: "255.255.255.255"
+     */
+    g_assert (str);
+    g_assert (local_address);
+    g_assert (subnet);
+
+    separator = str;
+    while (1) {
+        separator = strchr (separator, '.');
+        if (separator) {
+            count++;
+            if (count == 4) {
+                if (local_address)
+                    *local_address = g_strndup (str, (separator - str));
+                if (subnet)
+                    *subnet = g_strdup (++separator);
+                return TRUE;
+            }
+            separator++;
+            continue;
+        }
+
+        /* Not even the full IP? report error parsing */
+        if (count < 3)
+            return FALSE;
+
+        if (count == 3) {
+            if (local_address)
+                *local_address = g_strdup (str);
+            if (subnet)
+                *subnet = NULL;
+            return TRUE;
+        }
+    }
+}
+
+gboolean
+mm_3gpp_parse_cgcontrdp_response (const gchar  *response,
+                                  guint        *out_cid,
+                                  guint        *out_bearer_id,
+                                  gchar       **out_apn,
+                                  gchar       **out_local_address,
+                                  gchar       **out_subnet,
+                                  gchar       **out_gateway_address,
+                                  gchar       **out_dns_primary_address,
+                                  gchar       **out_dns_secondary_address,
+                                  GError      **error)
+{
+    GRegex     *r;
+    GMatchInfo *match_info;
+    GError     *inner_error = NULL;
+    guint       cid = 0;
+    guint       bearer_id = 0;
+    gchar      *apn = NULL;
+    gchar      *local_address_and_subnet = NULL;
+    gchar      *local_address = NULL;
+    gchar      *subnet = NULL;
+    gchar      *gateway_address = NULL;
+    gchar      *dns_primary_address = NULL;
+    gchar      *dns_secondary_address = NULL;
+    guint       field_format_extra_index = 0;
+
+    /* Response may be e.g.:
+     * +CGCONTRDP: 4,5,"ibox.tim.it.mnc001.mcc222.gprs","2.197.17.49.255.255.255.255","2.197.17.49","10.207.43.46","10.206.56.132","0.0.0.0","0.0.0.0",0
+     *
+     * We assume only ONE line is returned; because we request +CGCONTRDP with
+     * a specific N CID. Also, we don't parse all fields, we stop after
+     * secondary DNS.
+     *
+     * Only the 3 first parameters (cid, bearer id, apn) are mandatory in the
+     * response, all the others are optional, but, we'll anyway assume that APN
+     * may be empty.
+     *
+     * The format of the response changed in TS 27.007 v9.4.0, we try to detect
+     * both formats ('a' if >= v9.4.0, 'b' if < v9.4.0) with a single regex here.
+     */
+    r = g_regex_new ("\\+CGCONTRDP: "
+                     "(\\d+),(\\d+),([^,]*)" /* cid, bearer id, apn */
+                     "(?:,([^,]*))?" /* (a)ip+mask        or (b)ip */
+                     "(?:,([^,]*))?" /* (a)gateway        or (b)mask */
+                     "(?:,([^,]*))?" /* (a)dns1           or (b)gateway */
+                     "(?:,([^,]*))?" /* (a)dns2           or (b)dns1 */
+                     "(?:,([^,]*))?" /* (a)p-cscf primary or (b)dns2 */
+                     "(?:,(.*))?"    /* others, ignored */
+                     "(?:\\r\\n)?",
+                     0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (inner_error)
+        goto out;
+
+    if (!g_match_info_matches (match_info)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS, "Couldn't match +CGCONTRDP response");
+        goto out;
+    }
+
+    if (out_cid && !mm_get_uint_from_match_info (match_info, 1, &cid)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing cid");
+        goto out;
+    }
+
+    if (out_bearer_id && !mm_get_uint_from_match_info (match_info, 2, &bearer_id)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing bearer id");
+        goto out;
+    }
+
+    /* Remaining strings are optional or empty allowed */
+
+    if (out_apn)
+        apn = mm_get_string_unquoted_from_match_info (match_info, 3);
+
+    /*
+     * The +CGCONTRDP=[cid] response format before version TS 27.007 v9.4.0 had
+     * the subnet in its own comma-separated field. Try to detect that.
+     */
+    local_address_and_subnet = mm_get_string_unquoted_from_match_info (match_info, 4);
+    if (local_address_and_subnet && !split_local_address_and_subnet (local_address_and_subnet, &local_address, &subnet)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing local address and subnet");
+        goto out;
+    }
+    /* If we don't have a subnet in field 4, we're using the old format with subnet in an extra field */
+    if (!subnet) {
+        if (out_subnet)
+            subnet = mm_get_string_unquoted_from_match_info (match_info, 5);
+        field_format_extra_index = 1;
+    }
+
+    if (out_gateway_address)
+        gateway_address = mm_get_string_unquoted_from_match_info (match_info, 5 + field_format_extra_index);
+
+    if (out_dns_primary_address)
+        dns_primary_address = mm_get_string_unquoted_from_match_info (match_info, 6 + field_format_extra_index);
+
+    if (out_dns_secondary_address)
+        dns_secondary_address = mm_get_string_unquoted_from_match_info (match_info, 7 + field_format_extra_index);
+
+out:
+
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    g_free (local_address_and_subnet);
+
+    if (inner_error) {
+        g_free (apn);
+        g_free (local_address);
+        g_free (subnet);
+        g_free (gateway_address);
+        g_free (dns_primary_address);
+        g_free (dns_secondary_address);
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    if (out_cid)
+        *out_cid = cid;
+    if (out_bearer_id)
+        *out_bearer_id = bearer_id;
+    if (out_apn)
+        *out_apn = apn;
+
+    /* Local address and subnet may always be retrieved, even if not requested
+     * by the caller, as we need them to know which +CGCONTRDP=[cid] response is
+     * being parsed. So make sure we free them if not needed. */
+    if (out_local_address)
+        *out_local_address = local_address;
+    else
+        g_free (local_address);
+    if (out_subnet)
+        *out_subnet = subnet;
+    else
+        g_free (subnet);
+
+    if (out_gateway_address)
+        *out_gateway_address = gateway_address;
+    if (out_dns_primary_address)
+        *out_dns_primary_address = dns_primary_address;
+    if (out_dns_secondary_address)
+        *out_dns_secondary_address = dns_secondary_address;
+    return TRUE;
+}
+
+/*************************************************************************/
+
+gboolean
+mm_3gpp_parse_cfun_query_response (const gchar  *response,
+                                   guint        *out_state,
+                                   GError      **error)
+{
+    GRegex     *r;
+    GMatchInfo *match_info;
+    GError     *inner_error = NULL;
+    guint       state = G_MAXUINT;
+
+    g_assert (out_state != NULL);
+
+    /* Response may be e.g.:
+     * +CFUN: 1,0
+     *   ..but we don't care about the second number
+     */
+    r = g_regex_new ("\\+CFUN: (\\d+)(?:,(?:\\d+))?(?:\\r\\n)?", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (inner_error)
+        goto out;
+
+    if (!g_match_info_matches (match_info)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                   "Couldn't parse +CFUN response: %s", response);
+        goto out;
+    }
+
+    if (!mm_get_uint_from_match_info (match_info, 1, &state)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                   "Couldn't read power state value");
+        goto out;
+    }
+
+    *out_state = state;
+
+out:
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*****************************************************************************/
+/* +CESQ response parser */
+
+gboolean
+mm_3gpp_parse_cesq_response (const gchar  *response,
+                             guint        *out_rxlev,
+                             guint        *out_ber,
+                             guint        *out_rscp,
+                             guint        *out_ecn0,
+                             guint        *out_rsrq,
+                             guint        *out_rsrp,
+                             GError      **error)
+{
+    GRegex     *r;
+    GMatchInfo *match_info;
+    GError     *inner_error = NULL;
+    guint       rxlev = 0;
+    guint       ber = 0;
+    guint       rscp = 0;
+    guint       ecn0 = 0;
+    guint       rsrq = 0;
+    guint       rsrp = 0;
+    gboolean    success = FALSE;
+
+    g_assert (out_rxlev);
+    g_assert (out_ber);
+    g_assert (out_rscp);
+    g_assert (out_ecn0);
+    g_assert (out_rsrq);
+    g_assert (out_rsrp);
+
+    /* Response may be e.g.:
+     * +CESQ: 99,99,255,255,20,80
+     */
+    r = g_regex_new ("\\+CESQ: (\\d+),(\\d+),(\\d+),(\\d+),(\\d+),(\\d+)(?:\\r\\n)?", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (!inner_error && g_match_info_matches (match_info)) {
+        if (!mm_get_uint_from_match_info (match_info, 1, &rxlev)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read RXLEV");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 2, &ber)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read BER");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 3, &rscp)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read RSCP");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 4, &ecn0)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read Ec/N0");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 5, &rsrq)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read RSRQ");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 6, &rsrp)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read RSRP");
+            goto out;
+        }
+        success = TRUE;
+    }
+
+out:
+
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    if (!success) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Couldn't parse +CESQ response: %s", response);
+        return FALSE;
+    }
+
+    *out_rxlev = rxlev;
+    *out_ber = ber;
+    *out_rscp = rscp;
+    *out_ecn0 = ecn0;
+    *out_rsrq = rsrq;
+    *out_rsrp = rsrp;
+    return TRUE;
+}
+
+static gboolean
+rxlev_to_rssi (guint    rxlev,
+               gdouble *out_rssi)
+{
+    if (rxlev <= 63) {
+        *out_rssi = -111.0 + rxlev;
+        return TRUE;
+    }
+
+    if (rxlev != 99)
+        mm_warn ("unexpected rxlev: %u", rxlev);
+    return FALSE;
+}
+
+static gboolean
+rscp_level_to_rscp (guint    rscp_level,
+                    gdouble *out_rscp)
+{
+    if (rscp_level <= 96) {
+        *out_rscp = -121.0 + rscp_level;
+        return TRUE;
+    }
+
+    if (rscp_level != 255)
+        mm_warn ("unexpected rscp level: %u", rscp_level);
+    return FALSE;
+}
+
+static gboolean
+ecn0_level_to_ecio (guint    ecn0_level,
+                    gdouble *out_ecio)
+{
+    if (ecn0_level <= 49) {
+        *out_ecio = -24.5 + (((gdouble) ecn0_level) * 0.5);
+        return TRUE;
+    }
+
+    if (ecn0_level != 255)
+        mm_warn ("unexpected Ec/N0 level: %u", ecn0_level);
+    return FALSE;
+}
+
+static gboolean
+rsrq_level_to_rsrq (guint    rsrq_level,
+                    gdouble *out_rsrq)
+{
+    if (rsrq_level <= 34) {
+        *out_rsrq = -20.0 + (((gdouble) rsrq_level) * 0.5);
+        return TRUE;
+    }
+
+    if (rsrq_level != 255)
+        mm_warn ("unexpected RSRQ level: %u", rsrq_level);
+    return FALSE;
+}
+
+static gboolean
+rsrp_level_to_rsrp (guint    rsrp_level,
+                    gdouble *out_rsrp)
+{
+    if (rsrp_level <= 97) {
+        *out_rsrp = -141.0 + rsrp_level;
+        return TRUE;
+    }
+
+    if (rsrp_level != 255)
+        mm_warn ("unexpected RSRP level: %u", rsrp_level);
+    return FALSE;
+}
+
+gboolean
+mm_3gpp_cesq_response_to_signal_info (const gchar  *response,
+                                      MMSignal    **out_gsm,
+                                      MMSignal    **out_umts,
+                                      MMSignal    **out_lte,
+                                      GError      **error)
+{
+    guint     rxlev = 0;
+    guint     ber = 0;
+    guint     rscp_level = 0;
+    guint     ecn0_level = 0;
+    guint     rsrq_level = 0;
+    guint     rsrp_level = 0;
+    gdouble   rssi = -G_MAXDOUBLE;
+    gdouble   rscp = -G_MAXDOUBLE;
+    gdouble   ecio = -G_MAXDOUBLE;
+    gdouble   rsrq = -G_MAXDOUBLE;
+    gdouble   rsrp = -G_MAXDOUBLE;
+    MMSignal *gsm = NULL;
+    MMSignal *umts = NULL;
+    MMSignal *lte = NULL;
+
+    if (!mm_3gpp_parse_cesq_response (response,
+                                      &rxlev, &ber,
+                                      &rscp_level, &ecn0_level,
+                                      &rsrq_level, &rsrp_level,
+                                      error))
+        return FALSE;
+
+    /* GERAN RSSI */
+    if (rxlev_to_rssi (rxlev, &rssi)) {
+        gsm = mm_signal_new ();
+        mm_signal_set_rssi (gsm, rssi);
+    }
+
+    /* ignore BER */
+
+    /* UMTS RSCP */
+    if (rscp_level_to_rscp (rscp_level, &rscp)) {
+        umts = mm_signal_new ();
+        mm_signal_set_rscp (umts, rscp);
+    }
+
+    /* UMTS EcIo (assumed EcN0) */
+    if (ecn0_level_to_ecio (ecn0_level, &ecio)) {
+        if (!umts)
+            umts = mm_signal_new ();
+        mm_signal_set_ecio (umts, ecio);
+    }
+
+    /* LTE RSRQ */
+    if (rsrq_level_to_rsrq (rsrq_level, &rsrq)) {
+        lte = mm_signal_new ();
+        mm_signal_set_rsrq (lte, rsrq);
+    }
+
+    /* LTE RSRP */
+    if (rsrp_level_to_rsrp (rsrp_level, &rsrp)) {
+        if (!lte)
+            lte = mm_signal_new ();
+        mm_signal_set_rsrp (lte, rsrp);
+    }
+
+    if (!gsm && !umts && !lte) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Couldn't build detailed signal info");
+        return FALSE;
+    }
+
+    if (gsm)
+        *out_gsm = gsm;
+    if (umts)
+        *out_umts = umts;
+    if (lte)
+        *out_lte = lte;
+
+    return TRUE;
+}
+
+gboolean
+mm_3gpp_parse_cfun_query_generic_response (const gchar        *response,
+                                           MMModemPowerState  *out_state,
+                                           GError            **error)
+{
+    guint state;
+
+    if (!mm_3gpp_parse_cfun_query_response (response, &state, error))
+        return FALSE;
+
+    switch (state) {
+    case 0:
+        *out_state = MM_MODEM_POWER_STATE_OFF;
+        return TRUE;
+    case 1:
+        *out_state = MM_MODEM_POWER_STATE_ON;
+        return TRUE;
+    case 4:
+        *out_state = MM_MODEM_POWER_STATE_LOW;
+        return TRUE;
+    default:
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Unknown +CFUN state: %u", state);
+        return FALSE;
+    }
+}
+
+/*************************************************************************/
+
 static MMSmsStorage
 storage_from_str (const gchar *str)
 {
@@ -1196,32 +2257,37 @@ mm_3gpp_parse_cpms_test_response (const gchar *reply,
     g_assert (mem2 != NULL);
     g_assert (mem3 != NULL);
 
-    /*
-     * +CPMS: ("SM","ME"),("SM","ME"),("SM","ME")
-     */
-    split = g_strsplit_set (mm_strip_tag (reply, "+CPMS:"), "()", -1);
+#define N_EXPECTED_GROUPS 3
+
+    split = mm_split_string_groups (mm_strip_tag (reply, "+CPMS:"));
     if (!split)
         return FALSE;
+
+    if (g_strv_length (split) != N_EXPECTED_GROUPS) {
+        mm_warn ("Cannot parse +CPMS test response: invalid number of groups (%u != %u)",
+                 g_strv_length (split), N_EXPECTED_GROUPS);
+        g_strfreev (split);
+        return FALSE;
+    }
 
     r = g_regex_new ("\\s*\"([^,\\)]+)\"\\s*", 0, 0, NULL);
     g_assert (r);
 
-    for (i = 0; split[i]; i++) {
-        GMatchInfo *match_info;
+    for (i = 0; i < N_EXPECTED_GROUPS; i++) {
+        GMatchInfo *match_info = NULL;
+        GArray *array;
+
+        /* We always return a valid array, even if it may be empty */
+        array = g_array_new (FALSE, FALSE, sizeof (MMSmsStorage));
 
         /* Got a range group to match */
         if (g_regex_match_full (r, split[i], strlen (split[i]), 0, 0, &match_info, NULL)) {
-            GArray *array = NULL;
-
             while (g_match_info_matches (match_info)) {
                 gchar *str;
 
                 str = g_match_info_fetch (match_info, 1);
                 if (str) {
                     MMSmsStorage storage;
-
-                    if (!array)
-                        array = g_array_new (FALSE, FALSE, sizeof (MMSmsStorage));
 
                     storage = storage_from_str (str);
                     g_array_append_val (array, storage);
@@ -1230,18 +2296,17 @@ mm_3gpp_parse_cpms_test_response (const gchar *reply,
 
                 g_match_info_next (match_info, NULL);
             }
-
-            if (!tmp1)
-                tmp1 = array;
-            else if (!tmp2)
-                tmp2 = array;
-            else if (!tmp3)
-                tmp3 = array;
         }
         g_match_info_free (match_info);
 
-        if (tmp3 != NULL)
-            break; /* once we got the last group, exit... */
+        if (!tmp1)
+            tmp1 = array;
+        else if (!tmp2)
+            tmp2 = array;
+        else if (!tmp3)
+            tmp3 = array;
+        else
+            g_assert_not_reached ();
     }
 
     g_strfreev (split);
@@ -1251,7 +2316,8 @@ mm_3gpp_parse_cpms_test_response (const gchar *reply,
     g_warn_if_fail (tmp2 != NULL);
     g_warn_if_fail (tmp3 != NULL);
 
-    /* Only return TRUE if all sets have been parsed correctly */
+    /* Only return TRUE if all sets have been parsed correctly
+     * (even if the arrays may be empty) */
     if (tmp1 && tmp2 && tmp3) {
         *mem1 = tmp1;
         *mem2 = tmp2;
@@ -1267,6 +2333,82 @@ mm_3gpp_parse_cpms_test_response (const gchar *reply,
     if (tmp3)
         g_array_unref (tmp3);
     return FALSE;
+}
+
+/**********************************************************************
+ * AT+CPMS?
+ * +CPMS: <memr>,<usedr>,<totalr>,<memw>,<usedw>,<totalw>, <mems>,<useds>,<totals>
+ */
+
+#define CPMS_QUERY_REGEX "\\+CPMS:\\s*\"(?P<memr>.*)\",[0-9]+,[0-9]+,\"(?P<memw>.*)\",[0-9]+,[0-9]+,\"(?P<mems>.*)\",[0-9]+,[0-9]"
+
+gboolean
+mm_3gpp_parse_cpms_query_response (const gchar *reply,
+                                   MMSmsStorage *memr,
+                                   MMSmsStorage *memw,
+                                   GError **error)
+{
+    GRegex *r = NULL;
+    gboolean ret = FALSE;
+    GMatchInfo *match_info = NULL;
+
+    r = g_regex_new (CPMS_QUERY_REGEX, G_REGEX_RAW, 0, NULL);
+
+    g_assert(r);
+
+    if (!g_regex_match (r, reply, 0, &match_info)) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Could not parse CPMS query reponse '%s'", reply);
+        goto end;
+    }
+
+    if (!g_match_info_matches(match_info)) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Could not find matches in CPMS query reply '%s'", reply);
+        goto end;
+    }
+
+    if (!mm_3gpp_get_cpms_storage_match (match_info, "memr", memr, error)) {
+        goto end;
+    }
+
+    if (!mm_3gpp_get_cpms_storage_match (match_info, "memw", memw, error)) {
+        goto end;
+    }
+
+    ret = TRUE;
+
+end:
+    if (r != NULL)
+        g_regex_unref (r);
+
+    if (match_info != NULL)
+        g_match_info_free (match_info);
+
+    return ret;
+}
+
+gboolean
+mm_3gpp_get_cpms_storage_match (GMatchInfo *match_info,
+                                const gchar *match_name,
+                                MMSmsStorage *storage,
+                                GError **error)
+{
+    gboolean ret = TRUE;
+    gchar *str = NULL;
+
+    str = g_match_info_fetch_named(match_info, match_name);
+    if (str == NULL || str[0] == '\0') {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Could not find '%s' from CPMS reply", match_name);
+        ret = FALSE;
+    } else {
+        *storage = storage_from_str (str);
+    }
+
+    g_free (str);
+
+    return ret;
 }
 
 /*************************************************************************/
@@ -1658,7 +2800,7 @@ done:
 
 /*************************************************************************/
 
-static void
+void
 mm_3gpp_pdu_info_free (MM3gppPduInfo *info)
 {
     g_free (info->pdu);
@@ -1775,6 +2917,7 @@ MMModemAccessTechnology
 mm_string_to_access_tech (const gchar *string)
 {
     MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+    gsize len;
 
     g_return_val_if_fail (string != NULL, MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
 
@@ -1788,14 +2931,15 @@ mm_string_to_access_tech (const gchar *string)
     else if (strcasestr (string, "HSPA"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_HSPA;
 
-
     if (strcasestr (string, "HSUPA"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_HSUPA;
 
     if (strcasestr (string, "HSDPA"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_HSDPA;
 
-    if (strcasestr (string, "UMTS") || strcasestr (string, "3G"))
+    if (strcasestr (string, "UMTS") ||
+        strcasestr (string, "3G") ||
+        strcasestr (string, "WCDMA"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
 
     if (strcasestr (string, "EDGE"))
@@ -1819,62 +2963,50 @@ mm_string_to_access_tech (const gchar *string)
     if (strcasestr (string, "1xRTT") || strcasestr (string, "CDMA2000 1X"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_1XRTT;
 
+    /* Check "EVDO" and "CDMA" as standalone strings since their characters
+     * are included in other strings too.
+     */
+    len = strlen (string);
+    if (strncmp (string, "EVDO", 4) && (len >= 4 && !isalnum (string[4])))
+        act |= MM_MODEM_ACCESS_TECHNOLOGY_EVDO0;
+    if (strncmp (string, "CDMA", 4) && (len >= 4 && !isalnum (string[4])))
+        act |= MM_MODEM_ACCESS_TECHNOLOGY_1XRTT;
+    if (strncmp (string, "CDMA-EVDO", 9) && (len >= 9 && !isalnum (string[9])))
+        act |= MM_MODEM_ACCESS_TECHNOLOGY_1XRTT | MM_MODEM_ACCESS_TECHNOLOGY_EVDO0;
+
     return act;
 }
 
 /*************************************************************************/
 
-gchar *
-mm_3gpp_parse_operator (const gchar *reply,
-                        MMModemCharset cur_charset)
+void
+mm_3gpp_normalize_operator_name (gchar          **operator,
+                                 MMModemCharset   cur_charset)
 {
-    gchar *operator = NULL;
+    g_assert (operator);
 
-    if (reply && !strncmp (reply, "+COPS: ", 7)) {
-        /* Got valid reply */
-        GRegex *r;
-        GMatchInfo *match_info;
+    if (*operator == NULL)
+        return;
 
-        reply += 7;
-        r = g_regex_new ("(\\d),(\\d),\"(.+)\"", G_REGEX_UNGREEDY, 0, NULL);
-        if (!r)
-            return NULL;
-
-        g_regex_match (r, reply, 0, &match_info);
-        if (g_match_info_matches (match_info))
-            operator = g_match_info_fetch (match_info, 3);
-
-        g_match_info_free (match_info);
-        g_regex_unref (r);
+    /* Some modems (Option & HSO) return the operator name as a hexadecimal
+     * string of the bytes of the operator name as encoded by the current
+     * character set.
+     */
+    if (cur_charset == MM_MODEM_CHARSET_UCS2) {
+        /* In this case we're already checking UTF-8 validity */
+        *operator = mm_charset_take_and_convert_to_utf8 (*operator, MM_MODEM_CHARSET_UCS2);
     }
+    /* Ensure the operator name is valid UTF-8 so that we can send it
+     * through D-Bus and such.
+     */
+    else if (!g_utf8_validate (*operator, -1, NULL))
+        g_clear_pointer (operator, g_free);
 
-    if (operator) {
-        /* Some modems (Option & HSO) return the operator name as a hexadecimal
-         * string of the bytes of the operator name as encoded by the current
-         * character set.
-         */
-        if (cur_charset == MM_MODEM_CHARSET_UCS2) {
-            /* In this case we're already checking UTF-8 validity */
-            operator = mm_charset_take_and_convert_to_utf8 (operator, MM_MODEM_CHARSET_UCS2);
-        }
-        /* Ensure the operator name is valid UTF-8 so that we can send it
-         * through D-Bus and such.
-         */
-        else if (!g_utf8_validate (operator, -1, NULL)) {
-            g_free (operator);
-            return NULL;
-        }
-
-        /* Some modems (Novatel LTE) return the operator name as "Unknown" when
-         * it fails to obtain the operator name. Return NULL in such case.
-         */
-        if (operator && g_ascii_strcasecmp (operator, "unknown") == 0) {
-            g_free (operator);
-            return NULL;
-        }
-    }
-
-    return operator;
+    /* Some modems (Novatel LTE) return the operator name as "Unknown" when
+     * it fails to obtain the operator name. Return NULL in such case.
+     */
+    if (*operator && g_ascii_strcasecmp (*operator, "unknown") == 0)
+        g_clear_pointer (operator, g_free);
 }
 
 /*************************************************************************/
@@ -2641,7 +3773,7 @@ mm_parse_cclk_response (const char *response,
     g_assert (iso8601p || tzp); /* at least one */
 
     /* Sample reply: +CCLK: "15/03/05,14:14:26-32" */
-    r = g_regex_new ("[+]CCLK: \"(\\d+)/(\\d+)/(\\d+),(\\d+):(\\d+):(\\d+)([-+]\\d+)\"", 0, 0, NULL);
+    r = g_regex_new ("[+]CCLK: \"(\\d+)/(\\d+)/(\\d+),(\\d+):(\\d+):(\\d+)([-+]\\d+)?\"", 0, 0, NULL);
     g_assert (r != NULL);
 
     if (!g_regex_match_full (r, response, -1, 0, 0, &match_info, &match_error)) {
@@ -2649,46 +3781,68 @@ mm_parse_cclk_response (const char *response,
             g_propagate_error (error, match_error);
             g_prefix_error (error, "Could not parse +CCLK results: ");
         } else {
-            g_set_error_literal (error,
-                                 MM_CORE_ERROR,
-                                 MM_CORE_ERROR_FAILED,
-                                 "Couldn't match +CCLK reply");
+            g_set_error (error,
+                         MM_CORE_ERROR,
+                         MM_CORE_ERROR_FAILED,
+                         "Couldn't match +CCLK reply: %s", response);
         }
-    } else {
-        /* Remember that g_match_info_get_match_count() includes match #0 */
-        g_assert (g_match_info_get_match_count (match_info) >= 8);
-
-        if (mm_get_uint_from_match_info (match_info, 1, &year) &&
-            mm_get_uint_from_match_info (match_info, 2, &month) &&
-            mm_get_uint_from_match_info (match_info, 3, &day) &&
-            mm_get_uint_from_match_info (match_info, 4, &hour) &&
-            mm_get_uint_from_match_info (match_info, 5, &minute) &&
-            mm_get_uint_from_match_info (match_info, 6, &second) &&
-            mm_get_int_from_match_info  (match_info, 7, &tz)) {
-            /* adjust year */
-            year += 2000;
-            /*
-             * tz = timezone offset in 15 minute intervals
-             */
-            if (iso8601p) {
-                /* Return ISO-8601 format date/time string */
-                *iso8601p = mm_new_iso8601_time (year, month, day, hour,
-                                                 minute, second,
-                                                 TRUE, (tz * 15));
-            }
-            if (tzp) {
-                *tzp = mm_network_timezone_new ();
-                mm_network_timezone_set_offset (*tzp, tz * 15);
-            }
-
-            ret = TRUE;
-        } else {
-            g_set_error_literal (error,
-                                 MM_CORE_ERROR,
-                                 MM_CORE_ERROR_FAILED,
-                                 "Failed to parse +CCLK reply");
-        }
+        goto out;
     }
+
+    /* Remember that g_match_info_get_match_count() includes match #0 */
+    g_assert (g_match_info_get_match_count (match_info) >= 7);
+
+    /* Parse mandatory date and time fields */
+    if (!mm_get_uint_from_match_info (match_info, 1, &year)   ||
+        !mm_get_uint_from_match_info (match_info, 2, &month)  ||
+        !mm_get_uint_from_match_info (match_info, 3, &day)    ||
+        !mm_get_uint_from_match_info (match_info, 4, &hour)   ||
+        !mm_get_uint_from_match_info (match_info, 5, &minute) ||
+        !mm_get_uint_from_match_info (match_info, 6, &second)) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Failed to parse +CCLK reply: %s", response);
+        goto out;
+    }
+
+    /* Read optional time zone offset; if not given assume UTC (tz = 0).
+     * Note that timezone offset is given in 15 minute intervals.
+     */
+    if ((g_match_info_get_match_count (match_info) >= 8) &&
+        (!mm_get_int_from_match_info (match_info, 7, &tz))) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Failed to parse timezone in +CCLK reply: %s", response);
+        goto out;
+    }
+
+    /* Adjust year to support YYYY format, as per +CSDF in 3GPP TS 27.007. Also,
+     * don't assume the reported date is actually the current real one, as some
+     * devices report an initial date of e.g. January 1st 1980. */
+    if (year < 100) {
+        if (year >= 70)
+            year += 1900;
+        else
+            year += 2000;
+    }
+
+    if (tzp) {
+        *tzp = mm_network_timezone_new ();
+        mm_network_timezone_set_offset (*tzp, tz * 15);
+    }
+
+    if (iso8601p) {
+        /* Return ISO-8601 format date/time string */
+        *iso8601p = mm_new_iso8601_time (year, month, day, hour,
+                                         minute, second,
+                                         TRUE, (tz * 15));
+    }
+
+    ret = TRUE;
+
+ out:
 
     if (match_info)
         g_match_info_free (match_info);

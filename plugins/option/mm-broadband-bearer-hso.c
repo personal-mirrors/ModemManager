@@ -438,7 +438,7 @@ connect_timed_out_cb (MMBroadbandBearerHso *self)
     /* It's probably pointless to try to reset this here, but anyway... */
     connect_reset (ctx);
 
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -844,6 +844,9 @@ mm_broadband_bearer_hso_class_init (MMBroadbandBearerHsoClass *klass)
     g_type_class_add_private (object_class, sizeof (MMBroadbandBearerHsoPrivate));
 
     base_bearer_class->report_connection_status = report_connection_status;
+    base_bearer_class->load_connection_status = NULL;
+    base_bearer_class->load_connection_status_finish = NULL;
+
     broadband_bearer_class->dial_3gpp = dial_3gpp;
     broadband_bearer_class->dial_3gpp_finish = dial_3gpp_finish;
     broadband_bearer_class->get_ip_config_3gpp = get_ip_config_3gpp;
