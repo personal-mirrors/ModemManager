@@ -111,7 +111,7 @@ broadband_bearer_mbm_new_ready (GObject *source,
     else
         g_simple_async_result_set_op_res_gpointer (simple,
                                                    bearer,
-                                                   (GDestroyNotify)g_object_unref);
+                                                   g_object_unref);
     g_simple_async_result_complete (simple);
     g_object_unref (simple);
 }
@@ -862,7 +862,7 @@ set_unsolicited_events_handlers (MMBroadbandModemMbm *self,
     ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
 
     /* Enable unsolicited events in given port */
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < G_N_ELEMENTS (ports); i++) {
         if (!ports[i])
             continue;
 
@@ -1017,6 +1017,7 @@ parent_enable_unsolicited_events_ready (MMIfaceModem3gpp *self,
         g_simple_async_result_take_error (simple, error);
         g_simple_async_result_complete (simple);
         g_object_unref (simple);
+        return;
     }
 
     /* Our own enable now */
@@ -1461,7 +1462,7 @@ setup_ports (MMBroadbandModem *_self)
     ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
 
     /* Setup unsolicited handlers which should be always on */
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < G_N_ELEMENTS (ports); i++) {
         if (!ports[i])
             continue;
 

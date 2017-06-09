@@ -46,6 +46,7 @@ static void iface_modem_messaging_init (MMIfaceModemMessaging *iface);
 static void iface_modem_location_init (MMIfaceModemLocation *iface);
 
 static MMIfaceModem *iface_modem_parent;
+static MMIfaceModem3gpp *iface_modem_3gpp_parent;
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemCinterion, mm_broadband_modem_cinterion, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
@@ -60,9 +61,6 @@ typedef enum {
 } FeatureSupport;
 
 struct _MMBroadbandModemCinterionPrivate {
-    /* Flag to know if we should try AT^SIND or not to get psinfo */
-    gboolean sind_psinfo;
-
     /* Command to go into sleep mode */
     gchar *sleep_mode_cmd;
 
@@ -79,37 +77,13 @@ struct _MMBroadbandModemCinterionPrivate {
     GArray *cnmi_supported_ds;
     GArray *cnmi_supported_bfr;
 
-    /*Flags for SWWAN support*/
+    /* +CIEV 'psinfo' indications */
+    GRegex *ciev_psinfo_regex;
+
+    /* Flags for feature support checks */
     FeatureSupport swwan_support;
+    FeatureSupport sind_psinfo_support;
 };
-
-/*****************************************************************************/
-/* Unsolicited events enabling */
-
-static gboolean
-enable_unsolicited_events_finish (MMIfaceModem3gpp *self,
-                                  GAsyncResult *res,
-                                  GError **error)
-{
-    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
-}
-
-static void
-enable_unsolicited_events (MMIfaceModem3gpp *self,
-                           GAsyncReadyCallback callback,
-                           gpointer user_data)
-{
-    /* AT=CMER=[<mode>[,<keyp>[,<disp>[,<ind>[,<bfr>]]]]]
-     *  but <ind> should be either not set, or equal to 0 or 2.
-     * Enabled with 2.
-     */
-    mm_base_modem_at_command (MM_BASE_MODEM (self),
-                              "+CMER=3,0,0,2",
-                              3,
-                              FALSE,
-                              callback,
-                              user_data);
-}
 
 /*****************************************************************************/
 /* Enable unsolicited events (SMS indications) (Messaging interface) */
@@ -599,175 +573,56 @@ modem_power_off (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* ACCESS TECHNOLOGIES */
+/* Access technologies polling */
 
 static gboolean
-load_access_technologies_finish (MMIfaceModem *self,
-                                 GAsyncResult *res,
-                                 MMModemAccessTechnology *access_technologies,
-                                 guint *mask,
-                                 GError **error)
+load_access_technologies_finish (MMIfaceModem             *self,
+                                 GAsyncResult             *res,
+                                 MMModemAccessTechnology  *access_technologies,
+                                 guint                    *mask,
+                                 GError                  **error)
 {
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+    gssize val;
+
+    if ((val = g_task_propagate_int (G_TASK (res), error)) < 0)
         return FALSE;
 
-    *access_technologies = (MMModemAccessTechnology) GPOINTER_TO_UINT (
-        g_simple_async_result_get_op_res_gpointer (
-            G_SIMPLE_ASYNC_RESULT (res)));
+    *access_technologies = (MMModemAccessTechnology) val;
     *mask = MM_MODEM_ACCESS_TECHNOLOGY_ANY;
     return TRUE;
 }
 
 static void
-smong_query_ready (MMBroadbandModemCinterion *self,
+smong_query_ready (MMBaseModem  *self,
                    GAsyncResult *res,
-                   GSimpleAsyncResult *operation_result)
+                   GTask        *task)
 {
     const gchar             *response;
     GError                  *error = NULL;
     MMModemAccessTechnology  access_tech;
 
-    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
-    if (!response) {
-        /* Let the error be critical. */
-        g_simple_async_result_take_error (operation_result, error);
-    } else if (!mm_cinterion_parse_smong_response (response, &access_tech, &error)) {
-        /* We'll reset here the flag to try to use SIND/psinfo the next time */
-        self->priv->sind_psinfo = TRUE;
-        g_simple_async_result_take_error (operation_result, error);
-    } else {
-        /* We'll default to use SMONG then */
-        self->priv->sind_psinfo = FALSE;
-        g_simple_async_result_set_op_res_gpointer (operation_result, GUINT_TO_POINTER (access_tech), NULL);
-    }
-
-    g_simple_async_result_complete (operation_result);
-    g_object_unref (operation_result);
-}
-
-static MMModemAccessTechnology
-get_access_technology_from_psinfo (const gchar *psinfo,
-                                   GError **error)
-{
-    guint psinfoval;
-
-    if (mm_get_uint_from_str (psinfo, &psinfoval)) {
-        switch (psinfoval) {
-        case 0:
-            return MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
-        case 1:
-        case 2:
-            return MM_MODEM_ACCESS_TECHNOLOGY_GPRS;
-        case 3:
-        case 4:
-            return MM_MODEM_ACCESS_TECHNOLOGY_EDGE;
-        case 5:
-        case 6:
-            return MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
-        case 7:
-        case 8:
-            return MM_MODEM_ACCESS_TECHNOLOGY_HSDPA;
-        case 9:
-        case 10:
-            return (MM_MODEM_ACCESS_TECHNOLOGY_HSDPA | MM_MODEM_ACCESS_TECHNOLOGY_HSUPA);
-        case 16:
-        case 17:
-            return MM_MODEM_ACCESS_TECHNOLOGY_LTE;
-        default:
-            mm_dbg ("Unable to identify access technology in case:%i", psinfoval);
-            break;
-        }
-    }
+    response = mm_base_modem_at_command_finish (self, res, &error);
+    if (!response || !mm_cinterion_parse_smong_response (response, &access_tech, &error))
+        g_task_return_error (task, error);
     else
-        mm_err ("FAILED get_access_technology_from_psinfo-int");
-
-    g_set_error (error,
-                 MM_CORE_ERROR,
-                 MM_CORE_ERROR_INVALID_ARGS,
-                 "Couldn't get network capabilities, "
-                 "invalid psinfo value: '%s'",
-                 psinfo);
-    return MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+        g_task_return_int (task, (gssize) access_tech);
+    g_object_unref (task);
 }
 
 static void
-sind_query_ready (MMBroadbandModemCinterion *self,
-                  GAsyncResult *res,
-                  GSimpleAsyncResult *operation_result)
+load_access_technologies (MMIfaceModem        *_self,
+                          GAsyncReadyCallback  callback,
+                          gpointer             user_data)
 {
-    const gchar *response;
-    GError *error = NULL;
-    GMatchInfo *match_info = NULL;
-    GRegex *regex;
+    MMBroadbandModemCinterion *self = MM_BROADBAND_MODEM_CINTERION (_self);
+    GTask                     *task;
 
-    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
-    if (!response) {
-        /* Let the error be critical. */
-        g_simple_async_result_take_error (operation_result, error);
-        g_simple_async_result_complete (operation_result);
-        g_object_unref (operation_result);
-        return;
-    }
+    task = g_task_new (self, NULL, callback, user_data);
 
-    /* The AT^SIND? command replies a list of several different indicators.
-     * We will only look for 'psinfo' which is the one which may tell us
-     * the available network access technology. Note that only 3G-enabled
-     * devices seem to have this indicator.
-     *
-     * AT+SIND?
-     * ^SIND: battchg,1,1
-     * ^SIND: signal,1,99
-     * ...
-     */
-    regex = g_regex_new ("\\r\\n\\^SIND:\\s*psinfo,\\s*(\\d*),\\s*(\\d*)", 0, 0, NULL);
-    if (g_regex_match_full (regex, response, strlen (response), 0, 0, &match_info, NULL)) {
-        MMModemAccessTechnology act;
-        gchar *ind_value;
-
-        ind_value = g_match_info_fetch (match_info, 2);
-        act = get_access_technology_from_psinfo (ind_value, &error);
-        g_free (ind_value);
-        g_simple_async_result_set_op_res_gpointer (operation_result, GUINT_TO_POINTER (act), NULL);
-        g_simple_async_result_complete (operation_result);
-        g_object_unref (operation_result);
-    } else {
-        /* If there was no 'psinfo' indicator, we'll try AT^SMONG and read the cell
-         * info table. */
-        mm_base_modem_at_command (
-            MM_BASE_MODEM (self),
-            "^SMONG",
-            3,
-            FALSE,
-            (GAsyncReadyCallback)smong_query_ready,
-            operation_result);
-    }
-
-    g_match_info_free (match_info);
-    g_regex_unref (regex);
-}
-
-static void
-load_access_technologies (MMIfaceModem *self,
-                          GAsyncReadyCallback callback,
-                          gpointer user_data)
-{
-    MMBroadbandModemCinterion *broadband = MM_BROADBAND_MODEM_CINTERION (self);
-    GSimpleAsyncResult *result;
-
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        load_access_technologies);
-
-    if (broadband->priv->sind_psinfo) {
-        /* TODO: Trigger off psinfo URC instead of this polling. */
-        mm_base_modem_at_command (
-            MM_BASE_MODEM (self),
-            "^SIND?",
-            3,
-            FALSE,
-            (GAsyncReadyCallback)sind_query_ready,
-            result);
+    /* Abort access technology polling if ^SIND psinfo URCs are enabled */
+    if (self->priv->sind_psinfo_support == FEATURE_SUPPORTED) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED, "No need to poll access technologies");
+        g_object_unref (task);
         return;
     }
 
@@ -777,27 +632,312 @@ load_access_technologies (MMIfaceModem *self,
         3,
         FALSE,
         (GAsyncReadyCallback)smong_query_ready,
-        result);
+        task);
+}
+
+/*****************************************************************************/
+/* Disable unsolicited events (3GPP interface) */
+
+static gboolean
+modem_3gpp_disable_unsolicited_events_finish (MMIfaceModem3gpp  *self,
+                                              GAsyncResult      *res,
+                                              GError           **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+parent_disable_unsolicited_events_ready (MMIfaceModem3gpp *self,
+                                         GAsyncResult     *res,
+                                         GTask            *task)
+{
+    GError *error = NULL;
+
+    if (!iface_modem_3gpp_parent->disable_unsolicited_events_finish (self, res, &error)) {
+        mm_warn ("Couldn't disable parent 3GPP unsolicited events: %s", error->message);
+        g_error_free (error);
+    }
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+parent_disable_unsolicited_messages (GTask *task)
+{
+    /* Chain up parent's disable */
+    iface_modem_3gpp_parent->disable_unsolicited_events (
+        MM_IFACE_MODEM_3GPP (g_task_get_source_object (task)),
+        (GAsyncReadyCallback)parent_disable_unsolicited_events_ready,
+        task);
+}
+
+static void
+sind_psinfo_disable_ready (MMBaseModem  *self,
+                           GAsyncResult *res,
+                           GTask        *task)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_at_command_finish (self, res, &error)) {
+        mm_warn ("Couldn't disable ^SIND psinfo notifications: %s", error->message);
+        g_error_free (error);
+    }
+
+    parent_disable_unsolicited_messages (task);
+}
+
+static void
+modem_3gpp_disable_unsolicited_events (MMIfaceModem3gpp    *_self,
+                                       GAsyncReadyCallback  callback,
+                                       gpointer             user_data)
+{
+    MMBroadbandModemCinterion *self;
+    GTask                     *task;
+
+    self = MM_BROADBAND_MODEM_CINTERION (_self);
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    if (self->priv->sind_psinfo_support == FEATURE_SUPPORTED) {
+        /* Disable access technology update reporting */
+        mm_base_modem_at_command (MM_BASE_MODEM (self),
+                                  "AT^SIND=\"psinfo\",0",
+                                  3,
+                                  FALSE,
+                                  (GAsyncReadyCallback)sind_psinfo_disable_ready,
+                                  task);
+        return;
+    }
+
+    parent_disable_unsolicited_messages (task);
+}
+
+/*****************************************************************************/
+/* Enable unsolicited events (3GPP interface) */
+
+static gboolean
+modem_3gpp_enable_unsolicited_events_finish (MMIfaceModem3gpp  *self,
+                                             GAsyncResult      *res,
+                                             GError           **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+sind_psinfo_enable_ready (MMBaseModem  *_self,
+                          GAsyncResult *res,
+                          GTask        *task)
+{
+    MMBroadbandModemCinterion *self;
+    GError                    *error = NULL;
+    const gchar               *response;
+    guint                      mode;
+    guint                      val;
+
+    self = MM_BROADBAND_MODEM_CINTERION (_self);
+    if (!(response = mm_base_modem_at_command_finish (_self, res, &error))) {
+        self->priv->sind_psinfo_support = FEATURE_NOT_SUPPORTED;
+        mm_warn ("Couldn't enable ^SIND psinfo notifications: %s", error->message);
+        g_error_free (error);
+    } else if (!mm_cinterion_parse_sind_response (response, NULL, &mode, &val, &error)) {
+        self->priv->sind_psinfo_support = FEATURE_NOT_SUPPORTED;
+        mm_warn ("Couldn't parse ^SIND psinfo response: %s", error->message);
+        g_error_free (error);
+    } else {
+        /* Flag ^SIND psinfo supported so that we don't poll */
+        self->priv->sind_psinfo_support = FEATURE_SUPPORTED;
+
+        /* Report initial access technology gathered right away */
+        mm_dbg ("Reporting initial access technologies...");
+        mm_iface_modem_update_access_technologies (MM_IFACE_MODEM (self),
+                                                   mm_cinterion_get_access_technology_from_sind_psinfo (val),
+                                                   MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK);
+    }
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+parent_enable_unsolicited_events_ready (MMIfaceModem3gpp *_self,
+                                        GAsyncResult     *res,
+                                        GTask            *task)
+{
+    MMBroadbandModemCinterion *self;
+    GError                    *error = NULL;
+
+    self = MM_BROADBAND_MODEM_CINTERION (_self);
+
+    if (!iface_modem_3gpp_parent->enable_unsolicited_events_finish (_self, res, &error)) {
+        mm_warn ("Couldn't enable parent 3GPP unsolicited events: %s", error->message);
+        g_error_free (error);
+    }
+
+    if (self->priv->sind_psinfo_support != FEATURE_NOT_SUPPORTED) {
+        /* Enable access technology update reporting */
+        mm_base_modem_at_command (MM_BASE_MODEM (self),
+                                  "AT^SIND=\"psinfo\",1",
+                                  3,
+                                  FALSE,
+                                  (GAsyncReadyCallback)sind_psinfo_enable_ready,
+                                  task);
+        return;
+    }
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_enable_unsolicited_events (MMIfaceModem3gpp    *self,
+                                      GAsyncReadyCallback  callback,
+                                      gpointer             user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* Chain up parent's enable */
+    iface_modem_3gpp_parent->enable_unsolicited_events (
+        self,
+        (GAsyncReadyCallback)parent_enable_unsolicited_events_ready,
+        task);
+}
+
+/*****************************************************************************/
+/* Setup/Cleanup unsolicited events (3GPP interface) */
+
+static void
+sind_psinfo_received (MMPortSerialAt            *port,
+                      GMatchInfo                *match_info,
+                      MMBroadbandModemCinterion *self)
+{
+    guint val;
+
+    if (!mm_get_uint_from_match_info (match_info, 1, &val)) {
+        mm_dbg ("Failed to convert psinfo value");
+        return;
+    }
+
+    mm_iface_modem_update_access_technologies (MM_IFACE_MODEM (self),
+                                               mm_cinterion_get_access_technology_from_sind_psinfo (val),
+                                               MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK);
+}
+
+static void
+set_unsolicited_events_handlers (MMBroadbandModemCinterion *self,
+                                 gboolean                   enable)
+{
+    MMPortSerialAt *ports[2];
+    guint           i;
+
+    ports[0] = mm_base_modem_peek_port_primary   (MM_BASE_MODEM (self));
+    ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
+
+    /* Enable unsolicited events in given port */
+    for (i = 0; i < G_N_ELEMENTS (ports); i++) {
+        if (!ports[i])
+            continue;
+
+        mm_port_serial_at_add_unsolicited_msg_handler (
+            ports[i],
+            self->priv->ciev_psinfo_regex,
+            enable ? (MMPortSerialAtUnsolicitedMsgFn)sind_psinfo_received : NULL,
+            enable ? self : NULL,
+            NULL);
+    }
+}
+
+static gboolean
+modem_3gpp_setup_cleanup_unsolicited_events_finish (MMIfaceModem3gpp  *self,
+                                                    GAsyncResult      *res,
+                                                    GError           **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+parent_setup_unsolicited_events_ready (MMIfaceModem3gpp *self,
+                                       GAsyncResult     *res,
+                                       GTask            *task)
+{
+    GError *error = NULL;
+
+    if (!iface_modem_3gpp_parent->setup_unsolicited_events_finish (self, res, &error))
+        g_task_return_error (task, error);
+    else {
+        /* Our own setup now */
+        set_unsolicited_events_handlers (MM_BROADBAND_MODEM_CINTERION (self), TRUE);
+        g_task_return_boolean (task, TRUE);
+    }
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_setup_unsolicited_events (MMIfaceModem3gpp    *self,
+                                     GAsyncReadyCallback  callback,
+                                     gpointer             user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* Chain up parent's setup */
+    iface_modem_3gpp_parent->setup_unsolicited_events (
+        self,
+        (GAsyncReadyCallback)parent_setup_unsolicited_events_ready,
+        task);
+}
+
+static void
+parent_cleanup_unsolicited_events_ready (MMIfaceModem3gpp *self,
+                                         GAsyncResult     *res,
+                                         GTask            *task)
+{
+    GError *error = NULL;
+
+    if (!iface_modem_3gpp_parent->cleanup_unsolicited_events_finish (self, res, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_cleanup_unsolicited_events (MMIfaceModem3gpp    *self,
+                                       GAsyncReadyCallback  callback,
+                                       gpointer             user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* Our own cleanup first */
+    set_unsolicited_events_handlers (MM_BROADBAND_MODEM_CINTERION (self), FALSE);
+
+    /* And now chain up parent's cleanup */
+    iface_modem_3gpp_parent->cleanup_unsolicited_events (
+        self,
+        (GAsyncReadyCallback)parent_cleanup_unsolicited_events_ready,
+        task);
 }
 
 /*****************************************************************************/
 /* Load supported modes (Modem interface) */
 
 static GArray *
-load_supported_modes_finish (MMIfaceModem *self,
-                             GAsyncResult *res,
-                             GError **error)
+load_supported_modes_finish (MMIfaceModem  *self,
+                             GAsyncResult  *res,
+                             GError       **error)
 {
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
-        return NULL;
-
-    return g_array_ref (g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res)));
+    return g_task_propagate_pointer (G_TASK (res), error);
 }
 
 static void
 parent_load_supported_modes_ready (MMIfaceModem *self,
                                    GAsyncResult *res,
-                                   GSimpleAsyncResult *simple)
+                                   GTask        *task)
 {
     GError *error = NULL;
     GArray *all;
@@ -807,9 +947,8 @@ parent_load_supported_modes_ready (MMIfaceModem *self,
 
     all = iface_modem_parent->load_supported_modes_finish (self, res, &error);
     if (!all) {
-        g_simple_async_result_take_error (simple, error);
-        g_simple_async_result_complete (simple);
-        g_object_unref (simple);
+        g_task_return_error (task, error);
+        g_object_unref (task);
         return;
     }
 
@@ -824,19 +963,30 @@ parent_load_supported_modes_ready (MMIfaceModem *self,
     mode.allowed = MM_MODEM_MODE_3G;
     mode.preferred = MM_MODEM_MODE_NONE;
     g_array_append_val (combinations, mode);
-    /* 2G and 3G */
-    mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-    mode.preferred = MM_MODEM_MODE_NONE;
-    g_array_append_val (combinations, mode);
+
+    if (mm_iface_modem_is_4g (self)) {
+        /* 4G only */
+        mode.allowed = MM_MODEM_MODE_4G;
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+        /* 2G, 3G and 4G */
+        mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+    } else {
+        /* 2G and 3G */
+        mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+        mode.preferred = MM_MODEM_MODE_NONE;
+        g_array_append_val (combinations, mode);
+    }
 
     /* Filter out those unsupported modes */
     filtered = mm_filter_supported_modes (all, combinations);
     g_array_unref (all);
     g_array_unref (combinations);
 
-    g_simple_async_result_set_op_res_gpointer (simple, filtered, (GDestroyNotify) g_array_unref);
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+    g_task_return_pointer (task, filtered, (GDestroyNotify) g_array_unref);
+    g_object_unref (task);
 }
 
 static void
@@ -848,105 +998,87 @@ load_supported_modes (MMIfaceModem *self,
     iface_modem_parent->load_supported_modes (
         MM_IFACE_MODEM (self),
         (GAsyncReadyCallback)parent_load_supported_modes_ready,
-        g_simple_async_result_new (G_OBJECT (self),
-                                   callback,
-                                   user_data,
-                                   load_supported_modes));
+        g_task_new (self, NULL, callback, user_data));
 }
 
 /*****************************************************************************/
 /* Set current modes (Modem interface) */
 
 static gboolean
-set_current_modes_finish (MMIfaceModem *self,
-                          GAsyncResult *res,
-                          GError **error)
+set_current_modes_finish (MMIfaceModem  *self,
+                          GAsyncResult  *res,
+                          GError       **error)
 {
-    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
 allowed_access_technology_update_ready (MMBroadbandModemCinterion *self,
-                                        GAsyncResult *res,
-                                        GSimpleAsyncResult *operation_result)
+                                        GAsyncResult              *res,
+                                        GTask                     *task)
 {
     GError *error = NULL;
 
     mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
     if (error)
-        /* Let the error be critical. */
-        g_simple_async_result_take_error (operation_result, error);
-    else {
-        /* Request immediate access tech update */
-        mm_iface_modem_refresh_access_technologies (MM_IFACE_MODEM (self));
-        g_simple_async_result_set_op_res_gboolean (operation_result, TRUE);
-    }
-    g_simple_async_result_complete (operation_result);
-    g_object_unref (operation_result);
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
 }
 
 static void
-set_current_modes (MMIfaceModem *_self,
-                   MMModemMode allowed,
-                   MMModemMode preferred,
-                   GAsyncReadyCallback callback,
-                   gpointer user_data)
+set_current_modes (MMIfaceModem        *_self,
+                   MMModemMode          allowed,
+                   MMModemMode          preferred,
+                   GAsyncReadyCallback  callback,
+                   gpointer             user_data)
 {
-    GSimpleAsyncResult *result;
     MMBroadbandModemCinterion *self = MM_BROADBAND_MODEM_CINTERION (_self);
+    gchar                     *command;
+    GTask                     *task;
 
     g_assert (preferred == MM_MODEM_MODE_NONE);
 
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        set_current_modes);
+    task = g_task_new (self, NULL, callback, user_data);
 
-    /* For dual 2G/3G devices... */
-    if (mm_iface_modem_is_2g (_self) &&
-        mm_iface_modem_is_3g (_self)) {
-        gchar *command;
+    /* We will try to simulate the possible allowed modes here. The
+     * Cinterion devices do not seem to allow setting preferred access
+     * technology in devices, but they allow restricting to a given
+     * one:
+     * - 2G-only is forced by forcing GERAN RAT (AcT=0)
+     * - 3G-only is forced by forcing UTRAN RAT (AcT=2)
+     * - 4G-only is forced by forcing E-UTRAN RAT (AcT=7)
+     * - for the remaining ones, we default to automatic selection of RAT,
+     *   which is based on the quality of the connection.
+     */
 
-        /* We will try to simulate the possible allowed modes here. The
-         * Cinterion devices do not seem to allow setting preferred access
-         * technology in 3G devices, but they allow restricting to a given
-         * one:
-         * - 2G-only is forced by forcing GERAN RAT (AcT=0)
-         * - 3G-only is forced by forcing UTRAN RAT (AcT=2)
-         * - for the remaining ones, we default to automatic selection of RAT,
-         *   which is based on the quality of the connection.
-         */
-
-        if (allowed == MM_MODEM_MODE_3G)
-            command = g_strdup ("+COPS=,,,2");
-        else if (allowed == MM_MODEM_MODE_2G)
-            command = g_strdup ("+COPS=,,,0");
-        else if (allowed == (MM_MODEM_MODE_3G | MM_MODEM_MODE_2G)) {
-            /* no AcT given, defaults to Auto. For this case, we cannot provide
-             * AT+COPS=,,, (i.e. just without a last value). Instead, we need to
-             * re-run the last manual/automatic selection command which succeeded,
-             * (or auto by default if none was launched) */
-            if (self->priv->manual_operator_id)
-                command = g_strdup_printf ("+COPS=1,2,\"%s\"", self->priv->manual_operator_id);
-            else
-                command = g_strdup ("+COPS=0");
-        } else
-            g_assert_not_reached ();
-
-        mm_base_modem_at_command (
-            MM_BASE_MODEM (self),
-            command,
-            20,
-            FALSE,
-            (GAsyncReadyCallback)allowed_access_technology_update_ready,
-            result);
-        g_free (command);
-        return;
+    if (mm_iface_modem_is_4g (_self) && allowed == MM_MODEM_MODE_4G)
+        command = g_strdup ("+COPS=,,,7");
+    else if (mm_iface_modem_is_3g (_self) && allowed == MM_MODEM_MODE_3G)
+        command = g_strdup ("+COPS=,,,2");
+    else if (mm_iface_modem_is_2g (_self) && allowed == MM_MODEM_MODE_2G)
+        command = g_strdup ("+COPS=,,,0");
+    else {
+        /* For any other combination (e.g. ANY or  no AcT given, defaults to Auto. For this case, we cannot provide
+         * AT+COPS=,,, (i.e. just without a last value). Instead, we need to
+         * re-run the last manual/automatic selection command which succeeded,
+         * (or auto by default if none was launched) */
+        if (self->priv->manual_operator_id)
+            command = g_strdup_printf ("+COPS=1,2,\"%s\"", self->priv->manual_operator_id);
+        else
+            command = g_strdup ("+COPS=0");
     }
 
-    /* For 2G-only and 3G-only devices, we already stated that we don't
-     * support mode switching. */
-    g_assert_not_reached ();
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        command,
+        20,
+        FALSE,
+        (GAsyncReadyCallback)allowed_access_technology_update_ready,
+        task);
+
+    g_free (command);
 }
 
 /*****************************************************************************/
@@ -1174,11 +1306,8 @@ scfg_set_ready (MMBaseModem *self,
     if (!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error))
         /* Let the error be critical */
         g_simple_async_result_take_error (operation_result, error);
-    else {
-        /* Request immediate access tech update */
-        mm_iface_modem_refresh_access_technologies (MM_IFACE_MODEM (self));
+    else
         g_simple_async_result_set_op_res_gboolean (operation_result, TRUE);
-    }
 
     g_simple_async_result_complete (operation_result);
     g_object_unref (operation_result);
@@ -1438,7 +1567,7 @@ load_unlock_retries_context_step (LoadUnlockRetriesContext *ctx)
     if (ctx->i == G_N_ELEMENTS (unlock_retries_map)) {
         g_simple_async_result_set_op_res_gpointer (ctx->result,
                                                    g_object_ref (ctx->retries),
-                                                   (GDestroyNotify)g_object_unref);
+                                                   g_object_unref);
         load_unlock_retries_context_complete_and_free (ctx);
         return;
     }
@@ -1560,7 +1689,7 @@ after_sim_unlock_context_step (AfterSimUnlockContext *ctx)
     /* Recheck */
     ctx->retries--;
     mm_base_modem_at_command (MM_BASE_MODEM (ctx->self),
-                              "^SIND=\"simstatus\",1",
+                              "^SIND=\"simstatus\",2",
                               3,
                               FALSE,
                               (GAsyncReadyCallback)simstatus_check_ready,
@@ -1583,18 +1712,6 @@ after_sim_unlock (MMIfaceModem *self,
     ctx->retries = MAX_AFTER_SIM_UNLOCK_RETRIES;
 
     after_sim_unlock_context_step (ctx);
-}
-
-/*****************************************************************************/
-/* Setup ports (Broadband modem class) */
-
-static void
-setup_ports (MMBroadbandModem *self)
-{
-    /* Call parent's setup ports first always */
-    MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_cinterion_parent_class)->setup_ports (self);
-
-    mm_common_cinterion_setup_gps_port (self);
 }
 
 /*****************************************************************************/
@@ -1643,7 +1760,7 @@ broadband_bearer_cinterion_new_ready (GObject             *source,
     if (!bearer)
         g_simple_async_result_take_error (ctx->result, error);
     else
-        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, (GDestroyNotify)g_object_unref);
+        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, g_object_unref);
     create_bearer_context_complete_and_free (ctx);
 }
 
@@ -1659,7 +1776,7 @@ broadband_bearer_new_ready (GObject             *source,
     if (!bearer)
         g_simple_async_result_take_error (ctx->result, error);
     else
-        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, (GDestroyNotify)g_object_unref);
+        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, g_object_unref);
     create_bearer_context_complete_and_free (ctx);
 }
 
@@ -1776,8 +1893,11 @@ mm_broadband_modem_cinterion_init (MMBroadbandModemCinterion *self)
                                               MMBroadbandModemCinterionPrivate);
 
     /* Initialize private variables */
-    self->priv->sind_psinfo = TRUE; /* Initially, always try to get psinfo */
-    self->priv->swwan_support = FEATURE_SUPPORT_UNKNOWN;
+    self->priv->sind_psinfo_support = FEATURE_SUPPORT_UNKNOWN;
+    self->priv->swwan_support       = FEATURE_SUPPORT_UNKNOWN;
+
+    self->priv->ciev_psinfo_regex = g_regex_new ("\\r\\n\\+CIEV: psinfo,(\\d+)\\r\\n",
+                                                 G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 }
 
 static void
@@ -1798,6 +1918,8 @@ finalize (GObject *object)
         g_array_unref (self->priv->cnmi_supported_ds);
     if (self->priv->cnmi_supported_bfr)
         g_array_unref (self->priv->cnmi_supported_bfr);
+
+    g_regex_unref (self->priv->ciev_psinfo_regex);
 
     G_OBJECT_CLASS (mm_broadband_modem_cinterion_parent_class)->finalize (object);
 }
@@ -1836,8 +1958,18 @@ iface_modem_init (MMIfaceModem *iface)
 static void
 iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
 {
-    iface->enable_unsolicited_events = enable_unsolicited_events;
-    iface->enable_unsolicited_events_finish = enable_unsolicited_events_finish;
+    iface_modem_3gpp_parent = g_type_interface_peek_parent (iface);
+
+    iface->enable_unsolicited_events = modem_3gpp_enable_unsolicited_events;
+    iface->enable_unsolicited_events_finish = modem_3gpp_enable_unsolicited_events_finish;
+    iface->disable_unsolicited_events = modem_3gpp_disable_unsolicited_events;
+    iface->disable_unsolicited_events_finish = modem_3gpp_disable_unsolicited_events_finish;
+
+    iface->setup_unsolicited_events = modem_3gpp_setup_unsolicited_events;
+    iface->setup_unsolicited_events_finish = modem_3gpp_setup_cleanup_unsolicited_events_finish;
+    iface->cleanup_unsolicited_events = modem_3gpp_cleanup_unsolicited_events;
+    iface->cleanup_unsolicited_events_finish = modem_3gpp_setup_cleanup_unsolicited_events_finish;
+
     iface->register_in_network = register_in_network;
     iface->register_in_network_finish = register_in_network_finish;
 }
@@ -1868,11 +2000,9 @@ static void
 mm_broadband_modem_cinterion_class_init (MMBroadbandModemCinterionClass *klass)
 {
     GObjectClass *object_class = G_OBJECT_CLASS (klass);
-    MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
 
     g_type_class_add_private (object_class, sizeof (MMBroadbandModemCinterionPrivate));
 
     /* Virtual methods */
     object_class->finalize = finalize;
-    broadband_modem_class->setup_ports = setup_ports;
 }

@@ -35,6 +35,7 @@
 #include "mm-log.h"
 #include "mm-modem-helpers.h"
 #include "mm-port-enums-types.h"
+#include "mm-helper-enums-types.h"
 
 static void async_initable_iface_init (GAsyncInitableIface *iface);
 
@@ -48,12 +49,23 @@ typedef enum {
     CONNECTION_TYPE_CDMA,
 } ConnectionType;
 
+enum {
+    PROP_0,
+    PROP_FLOW_CONTROL,
+    PROP_LAST
+};
+
+static GParamSpec *properties[PROP_LAST];
+
 struct _MMBroadbandBearerPrivate {
     /*-- Common stuff --*/
     /* Data port used when modem is connected */
     MMPort *port;
     /* Current connection type */
     ConnectionType connection_type;
+
+    /* PPP specific */
+    MMFlowControl flow_control;
 
     /*-- 3GPP specific --*/
     /* CID of the PDP context */
@@ -254,7 +266,24 @@ dial_cdma_ready (MMBaseModem *modem,
         return;
     }
 
-    /* else... Yuhu! */
+    /* Configure flow control to use while connected */
+    if (ctx->self->priv->flow_control != MM_FLOW_CONTROL_NONE) {
+        gchar *flow_control_str;
+
+        flow_control_str = mm_flow_control_build_string_from_mask (ctx->self->priv->flow_control);
+        mm_dbg ("[%s] Setting flow control: %s", mm_port_get_device (ctx->data), flow_control_str);
+        g_free (flow_control_str);
+
+        if (!mm_port_serial_set_flow_control (MM_PORT_SERIAL (ctx->data), ctx->self->priv->flow_control, &error)) {
+            mm_warn ("Couldn't set flow control settings: %s", error->message);
+            g_clear_error (&error);
+        }
+    }
+
+    /* The ATD command has succeeded, and therefore the TTY is in data mode now.
+     * Instead of waiting for setting the port as connected later in
+     * connect_succeeded(), we do it right away so that we stop our polling. */
+    mm_port_set_connected (ctx->data, TRUE);
 
     /* Keep port open during connection */
     ctx->close_data_on_exit = FALSE;
@@ -554,6 +583,8 @@ atd_ready (MMBaseModem *modem,
            GAsyncResult *res,
            Dial3gppContext *ctx)
 {
+    GError *error = NULL;
+
     /* DO NOT check for cancellable here. If we got here without errors, the
      * bearer is really connected and therefore we need to reflect that in
      * the state machine. */
@@ -573,9 +604,28 @@ atd_ready (MMBaseModem *modem,
         return;
     }
 
+    /* Configure flow control to use while connected */
+    if (ctx->self->priv->flow_control != MM_FLOW_CONTROL_NONE) {
+        gchar *flow_control_str;
+
+        flow_control_str = mm_flow_control_build_string_from_mask (ctx->self->priv->flow_control);
+        mm_dbg ("[%s] Setting flow control: %s", mm_port_get_device (MM_PORT (ctx->dial_port)), flow_control_str);
+        g_free (flow_control_str);
+
+        if (!mm_port_serial_set_flow_control (MM_PORT_SERIAL (ctx->dial_port), ctx->self->priv->flow_control, &error)) {
+            mm_warn ("Couldn't set flow control settings: %s", error->message);
+            g_clear_error (&error);
+        }
+    }
+
+    /* The ATD command has succeeded, and therefore the TTY is in data mode now.
+     * Instead of waiting for setting the port as connected later in
+     * connect_succeeded(), we do it right away so that we stop our polling. */
+    mm_port_set_connected (MM_PORT (ctx->dial_port), TRUE);
+
     g_simple_async_result_set_op_res_gpointer (ctx->result,
                                                g_object_ref (ctx->dial_port),
-                                               (GDestroyNotify)g_object_unref);
+                                               g_object_unref);
     dial_3gpp_context_complete_and_free (ctx);
 }
 
@@ -1177,7 +1227,8 @@ connect_succeeded (ConnectContext *ctx,
     ctx->self->priv->port = g_object_ref (mm_bearer_connect_result_peek_data (result));
     ctx->self->priv->connection_type = connection_type;
 
-    /* Port is connected; update the state */
+    /* Port is connected; update the state. For ATD based connections, the port
+     * may already be set as connected, but no big deal. */
     mm_port_set_connected (ctx->self->priv->port, TRUE);
 
     /* Set operation result */
@@ -1446,6 +1497,16 @@ data_flash_cdma_ready (MMPortSerial *data,
 
     mm_port_serial_flash_finish (data, res, &error);
 
+    /* Cleanup flow control */
+    if (ctx->self->priv->flow_control != MM_FLOW_CONTROL_NONE) {
+        GError *flow_control_error = NULL;
+
+        if (!mm_port_serial_set_flow_control (MM_PORT_SERIAL (data), MM_FLOW_CONTROL_NONE, &flow_control_error)) {
+            mm_dbg ("Couldn't reset flow control settings: %s", flow_control_error->message);
+            g_clear_error (&flow_control_error);
+        }
+    }
+
     /* We kept the serial port open during connection, now we close that open
      * count */
     mm_port_serial_close (data);
@@ -1562,6 +1623,16 @@ data_flash_3gpp_ready (MMPortSerial *data,
     GError *error = NULL;
 
     mm_port_serial_flash_finish (data, res, &error);
+
+    /* Cleanup flow control */
+    if (ctx->self->priv->flow_control != MM_FLOW_CONTROL_NONE) {
+        GError *flow_control_error = NULL;
+
+        if (!mm_port_serial_set_flow_control (MM_PORT_SERIAL (data), MM_FLOW_CONTROL_NONE, &flow_control_error)) {
+            mm_dbg ("Couldn't reset flow control settings: %s", flow_control_error->message);
+            g_clear_error (&flow_control_error);
+        }
+    }
 
     /* We kept the serial port open during connection, now we close that open
      * count */
@@ -1983,30 +2054,45 @@ load_connection_status (MMBaseBearer        *self,
                         GAsyncReadyCallback  callback,
                         gpointer             user_data)
 {
-    GTask       *task;
-    MMBaseModem *modem = NULL;
+    GTask          *task;
+    MMBaseModem    *modem = NULL;
+    MMPortSerialAt *port;
 
     task = g_task_new (self, NULL, callback, user_data);
-
-    if (!MM_BROADBAND_BEARER (self)->priv->cid) {
-        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                                 "Couldn't load connection status: cid not defined");
-        g_object_unref (task);
-        return;
-    }
 
     g_object_get (MM_BASE_BEARER (self),
                   MM_BASE_BEARER_MODEM, &modem,
                   NULL);
 
-    mm_base_modem_at_command (MM_BASE_MODEM (modem),
-                              "+CGACT?",
-                              3,
-                              FALSE,
-                              (GAsyncReadyCallback) cgact_periodic_query_ready,
-                              task);
+    /* If CID not defined, error out */
+    if (!MM_BROADBAND_BEARER (self)->priv->cid) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "Couldn't load connection status: cid not defined");
+        g_object_unref (task);
+        goto out;
+    }
 
-    g_object_unref (modem);
+    /* If no control port available, error out */
+    port = mm_base_modem_peek_best_at_port (modem, NULL);
+    if (!port) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "Couldn't load connection status: no control port available");
+        g_object_unref (task);
+        goto out;
+    }
+
+    mm_base_modem_at_command_full (MM_BASE_MODEM (modem),
+                                   port,
+                                   "+CGACT?",
+                                   3,
+                                   FALSE, /* allow cached */
+                                   FALSE, /* raw */
+                                   NULL, /* cancellable */
+                                   (GAsyncReadyCallback) cgact_periodic_query_ready,
+                                   task);
+
+out:
+    g_clear_object (&modem);
 }
 
 /*****************************************************************************/
@@ -2228,15 +2314,59 @@ mm_broadband_bearer_new (MMBroadbandModem *modem,
                          GAsyncReadyCallback callback,
                          gpointer user_data)
 {
+    MMFlowControl flow_control;
+
+    /* Inherit flow control from modem object directly */
+    g_object_get (modem,
+                  MM_BROADBAND_MODEM_FLOW_CONTROL, &flow_control,
+                  NULL);
+
     g_async_initable_new_async (
         MM_TYPE_BROADBAND_BEARER,
         G_PRIORITY_DEFAULT,
         cancellable,
         callback,
         user_data,
-        MM_BASE_BEARER_MODEM,  modem,
-        MM_BASE_BEARER_CONFIG, properties,
+        MM_BASE_BEARER_MODEM,             modem,
+        MM_BASE_BEARER_CONFIG,            properties,
+        MM_BROADBAND_BEARER_FLOW_CONTROL, flow_control,
         NULL);
+}
+
+static void
+set_property (GObject      *object,
+              guint         prop_id,
+              const GValue *value,
+              GParamSpec   *pspec)
+{
+    MMBroadbandBearer *self = MM_BROADBAND_BEARER (object);
+
+    switch (prop_id) {
+    case PROP_FLOW_CONTROL:
+        self->priv->flow_control = g_value_get_flags (value);
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+        break;
+    }
+}
+
+static void
+get_property (GObject    *object,
+              guint       prop_id,
+              GValue     *value,
+              GParamSpec *pspec)
+{
+    MMBroadbandBearer *self = MM_BROADBAND_BEARER (object);
+
+    switch (prop_id) {
+    case PROP_FLOW_CONTROL:
+        g_value_set_flags (value, self->priv->flow_control);
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+        break;
+    }
 }
 
 static void
@@ -2249,6 +2379,7 @@ mm_broadband_bearer_init (MMBroadbandBearer *self)
 
     /* Set defaults */
     self->priv->connection_type = CONNECTION_TYPE_NONE;
+    self->priv->flow_control    = MM_FLOW_CONTROL_NONE;
 }
 
 static void
@@ -2276,8 +2407,9 @@ mm_broadband_bearer_class_init (MMBroadbandBearerClass *klass)
 
     g_type_class_add_private (object_class, sizeof (MMBroadbandBearerPrivate));
 
-    /* Virtual methods */
-    object_class->dispose = dispose;
+    object_class->get_property = get_property;
+    object_class->set_property = set_property;
+    object_class->dispose      = dispose;
 
     base_bearer_class->connect = connect;
     base_bearer_class->connect_finish = connect_finish;
@@ -2301,4 +2433,13 @@ mm_broadband_bearer_class_init (MMBroadbandBearerClass *klass)
     klass->disconnect_3gpp_finish = detailed_disconnect_finish;
     klass->disconnect_cdma = disconnect_cdma;
     klass->disconnect_cdma_finish = detailed_disconnect_finish;
+
+    properties[PROP_FLOW_CONTROL] =
+        g_param_spec_flags (MM_BROADBAND_BEARER_FLOW_CONTROL,
+                            "Flow control",
+                            "Flow control settings to use during connection",
+                            MM_TYPE_FLOW_CONTROL,
+                            MM_FLOW_CONTROL_NONE,
+                            G_PARAM_READWRITE);
+    g_object_class_install_property (object_class, PROP_FLOW_CONTROL, properties[PROP_FLOW_CONTROL]);
 }

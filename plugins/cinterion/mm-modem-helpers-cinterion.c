@@ -76,6 +76,7 @@ static const CinterionBand cinterion_bands[] = {
  *     ^SCFG: "Radio/NWSM",("0","1","2")
  *     ...
  *
+ *     ^SCFG: "Radio/Band\",("1"-"147")
  */
 
 gboolean
@@ -94,7 +95,7 @@ mm_cinterion_parse_scfg_test (const gchar *response,
         return FALSE;
     }
 
-    r = g_regex_new ("\\^SCFG:\\s*\"Radio/Band\",\\(\"([0-9a-fA-F]*)-([0-9a-fA-F]*)\",.*\\)",
+    r = g_regex_new ("\\^SCFG:\\s*\"Radio/Band\",\\((?:\")?([0-9]*)(?:\")?-(?:\")?([0-9]*)(?:\")?.*\\)",
                      G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW,
                      0, NULL);
     g_assert (r != NULL);
@@ -622,4 +623,37 @@ mm_cinterion_parse_smong_response (const gchar              *response,
 
     g_assert (access_tech != MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
     return TRUE;
+}
+
+/*****************************************************************************/
+/* ^SIND psinfo helper */
+
+MMModemAccessTechnology
+mm_cinterion_get_access_technology_from_sind_psinfo (guint val)
+{
+    switch (val) {
+    case 0:
+        return MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+    case 1:
+    case 2:
+        return MM_MODEM_ACCESS_TECHNOLOGY_GPRS;
+    case 3:
+    case 4:
+        return MM_MODEM_ACCESS_TECHNOLOGY_EDGE;
+    case 5:
+    case 6:
+        return MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
+    case 7:
+    case 8:
+        return MM_MODEM_ACCESS_TECHNOLOGY_HSDPA;
+    case 9:
+    case 10:
+        return (MM_MODEM_ACCESS_TECHNOLOGY_HSDPA | MM_MODEM_ACCESS_TECHNOLOGY_HSUPA);
+    case 16:
+    case 17:
+        return MM_MODEM_ACCESS_TECHNOLOGY_LTE;
+    default:
+        mm_dbg ("Unable to identify access technology from psinfo reported value: %u", val);
+        return MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+    }
 }

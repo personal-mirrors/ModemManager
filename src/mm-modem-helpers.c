@@ -240,6 +240,16 @@ mm_count_bits_set (gulong number)
     return c;
 }
 
+guint
+mm_find_bit_set (gulong number)
+{
+    guint c = 0;
+
+    for (c = 0; !(number & 0x1); c++)
+        number >>= 1;
+    return c;
+}
+
 /*****************************************************************************/
 
 gchar *
@@ -525,6 +535,119 @@ mm_voice_clip_regex_get (void)
 
 /*************************************************************************/
 
+static MMFlowControl
+flow_control_array_to_mask (GArray      *array,
+                            const gchar *item)
+{
+    MMFlowControl mask = MM_FLOW_CONTROL_UNKNOWN;
+    guint         i;
+
+    for (i = 0; i < array->len; i++) {
+        guint mode;
+
+        mode = g_array_index (array, guint, i);
+        switch (mode) {
+            case 0:
+                mm_dbg ("%s supports no flow control", item);
+                mask |= MM_FLOW_CONTROL_NONE;
+                break;
+            case 1:
+                mm_dbg ("%s supports XON/XOFF flow control", item);
+                mask |= MM_FLOW_CONTROL_XON_XOFF;
+                break;
+            case 2:
+                mm_dbg ("%s supports RTS/CTS flow control", item);
+                mask |= MM_FLOW_CONTROL_RTS_CTS;
+                break;
+            default:
+                break;
+        }
+    }
+
+    return mask;
+}
+
+static MMFlowControl
+flow_control_match_info_to_mask (GMatchInfo   *match_info,
+                                 guint         index,
+                                 const gchar  *item,
+                                 GError      **error)
+{
+    MMFlowControl  mask  = MM_FLOW_CONTROL_UNKNOWN;
+    gchar         *aux   = NULL;
+    GArray        *array = NULL;
+
+    if (!(aux = mm_get_string_unquoted_from_match_info (match_info, index))) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Error retrieving list of supported %s flow control methods", item);
+        goto out;
+    }
+
+    if (!(array = mm_parse_uint_list (aux, error))) {
+        g_prefix_error (error, "Error parsing list of supported %s flow control methods: ", item);
+        goto out;
+    }
+
+    if ((mask = flow_control_array_to_mask (array, item)) == MM_FLOW_CONTROL_UNKNOWN) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "No known %s flow control method given", item);
+        goto out;
+    }
+
+out:
+    g_clear_pointer (&aux,  g_free);
+    g_clear_pointer (&array, g_array_unref);
+
+    return mask;
+}
+
+MMFlowControl
+mm_parse_ifc_test_response (const gchar  *response,
+                            GError      **error)
+{
+    GRegex        *r;
+    GError        *inner_error = NULL;
+    GMatchInfo    *match_info  = NULL;
+    MMFlowControl  te_mask     = MM_FLOW_CONTROL_UNKNOWN;
+    MMFlowControl  ta_mask     = MM_FLOW_CONTROL_UNKNOWN;
+    MMFlowControl  mask        = MM_FLOW_CONTROL_UNKNOWN;
+
+    r = g_regex_new ("(?:\\+IFC:)?\\s*\\((.*)\\),\\((.*)\\)(?:\\r\\n)?", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (inner_error)
+        goto out;
+
+    if (!g_match_info_matches (match_info)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't match response");
+        goto out;
+    }
+
+    /* Parse TE flow control methods */
+    if ((te_mask = flow_control_match_info_to_mask (match_info, 1, "TE", &inner_error)) == MM_FLOW_CONTROL_UNKNOWN)
+        goto out;
+
+    /* Parse TA flow control methods */
+    if ((ta_mask = flow_control_match_info_to_mask (match_info, 2, "TA", &inner_error)) == MM_FLOW_CONTROL_UNKNOWN)
+        goto out;
+
+    /* Only those methods in both TA and TE will be the ones we report */
+    mask = te_mask & ta_mask;
+
+out:
+
+    g_clear_pointer (&match_info, g_match_info_free);
+    g_regex_unref (r);
+
+    if (inner_error)
+        g_propagate_error (error, inner_error);
+
+    return mask;
+}
+
+/*************************************************************************/
+
 /* +CREG: <stat>                      (GSM 07.07 CREG=1 unsolicited) */
 #define CREG1 "\\+(CREG|CGREG|CEREG):\\s*0*([0-9])"
 
@@ -722,6 +845,149 @@ mm_3gpp_cds_regex_get (void)
                         G_REGEX_RAW | G_REGEX_OPTIMIZE,
                         0,
                         NULL);
+}
+
+/*************************************************************************/
+/* AT+WS46=? response parser
+ *
+ * More than one numeric ID may appear in the list, that's why
+ * they are checked separately.
+ *
+ * NOTE: ignore WS46 prefix or it will break Cinterion handling.
+ *
+ * For the specific case of '25', we will check if any other mode supports
+ * 4G, and if there is none, we'll remove 4G caps from it.
+ */
+
+typedef struct {
+    guint       ws46;
+    MMModemMode mode;
+} Ws46Mode;
+
+/* 3GPP TS 27.007 r14, section 5.9: select wireless network +WS46 */
+static const Ws46Mode ws46_modes[] = {
+    /* GSM Digital Cellular Systems (GERAN only) */
+    { 12, MM_MODEM_MODE_2G },
+    /* UTRAN only */
+    { 22, MM_MODEM_MODE_3G },
+    /* 3GPP Systems (GERAN, UTRAN and E-UTRAN) */
+    { 25, MM_MODEM_MODE_ANY },
+    /* E-UTRAN only */
+    { 28, MM_MODEM_MODE_4G },
+    /* GERAN and UTRAN */
+    { 29, MM_MODEM_MODE_2G | MM_MODEM_MODE_3G },
+    /* GERAN and E-UTRAN */
+    { 30, MM_MODEM_MODE_2G | MM_MODEM_MODE_4G },
+    /* UERAN and E-UTRAN */
+    { 31, MM_MODEM_MODE_3G | MM_MODEM_MODE_4G },
+};
+
+GArray *
+mm_3gpp_parse_ws46_test_response (const gchar  *response,
+                                  GError      **error)
+{
+    GArray     *modes = NULL;
+    GRegex     *r;
+    GError     *inner_error = NULL;
+    GMatchInfo *match_info = NULL;
+    gchar      *full_list = NULL;
+    gchar     **split;
+    guint       i;
+    gboolean    supported_4g = FALSE;
+    gboolean    supported_3g = FALSE;
+    gboolean    supported_2g = FALSE;
+
+    r = g_regex_new ("(?:\\+WS46:)?\\s*\\((.*)\\)(?:\\r\\n)?", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (inner_error)
+        goto out;
+
+    if (!g_match_info_matches (match_info)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't match response");
+        goto out;
+    }
+
+    if (!(full_list = mm_get_string_unquoted_from_match_info (match_info, 1))) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing full list string");
+        goto out;
+    }
+
+    split = g_strsplit (full_list, ",", -1);
+    modes = g_array_new (FALSE, FALSE, sizeof (MMModemMode));
+
+    for (i = 0; split && split[i]; i++) {
+        guint val;
+        guint j;
+
+        if (!mm_get_uint_from_str (split[i], &val)) {
+            g_warning ("Invalid +WS46 mode reported: %s", split[i]);
+            continue;
+        }
+
+        for (j = 0; j < G_N_ELEMENTS (ws46_modes); j++) {
+            if (ws46_modes[j].ws46 == val) {
+                if (val != 25) {
+                    if (ws46_modes[j].mode & MM_MODEM_MODE_4G)
+                        supported_4g = TRUE;
+                    if (ws46_modes[j].mode & MM_MODEM_MODE_3G)
+                        supported_3g = TRUE;
+                    if (ws46_modes[j].mode & MM_MODEM_MODE_2G)
+                        supported_2g = TRUE;
+                }
+                g_array_append_val (modes, ws46_modes[j].mode);
+                break;
+            }
+        }
+
+        if (j == G_N_ELEMENTS (ws46_modes))
+            g_warning ("Unknown +WS46 mode reported: %s", split[i]);
+    }
+
+    g_strfreev (split);
+
+    if (modes->len == 0) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "No valid modes reported");
+        g_clear_pointer (&modes, g_array_unref);
+        goto out;
+    }
+
+    /* Fixup the ANY value, based on which are the supported modes */
+    for (i = 0; i < modes->len; i++) {
+        MMModemMode *mode;
+
+        mode = &g_array_index (modes, MMModemMode, i);
+        if (*mode == MM_MODEM_MODE_ANY) {
+            *mode = 0;
+            if (supported_2g)
+                *mode |= MM_MODEM_MODE_2G;
+            if (supported_3g)
+                *mode |= MM_MODEM_MODE_3G;
+            if (supported_4g)
+                *mode |= MM_MODEM_MODE_4G;
+
+            if (*mode == 0) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "No way to fixup the ANY value");
+                g_clear_pointer (&modes, g_array_unref);
+                goto out;
+            }
+        }
+    }
+
+out:
+    g_free (full_list);
+
+    g_clear_pointer (&match_info, g_match_info_free);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return NULL;
+    }
+
+    g_assert (modes && modes->len);
+    return modes;
 }
 
 /*************************************************************************/
@@ -2591,6 +2857,119 @@ mm_3gpp_parse_cnum_exec_response (const gchar *reply,
 
 /*************************************************************************/
 
+gchar *
+mm_3gpp_build_cmer_set_request (MM3gppCmerMode mode,
+                                MM3gppCmerInd  ind)
+{
+    guint mode_val;
+    guint ind_val;
+
+    if (mode == MM_3GPP_CMER_MODE_DISCARD_URCS)
+        return g_strdup ("+CMER=0");
+    if (mode < MM_3GPP_CMER_MODE_DISCARD_URCS || mode > MM_3GPP_CMER_MODE_FORWARD_URCS)
+        return NULL;
+    mode_val = mm_find_bit_set (mode);
+
+    if (ind < MM_3GPP_CMER_IND_DISABLE || ind > MM_3GPP_CMER_IND_ENABLE_ALL)
+        return NULL;
+    ind_val = mm_find_bit_set (ind);
+
+    return g_strdup_printf ("+CMER=%u,0,0,%u", mode_val, ind_val);
+}
+
+gboolean
+mm_3gpp_parse_cmer_test_response (const gchar     *response,
+                                  MM3gppCmerMode  *out_supported_modes,
+                                  MM3gppCmerInd   *out_supported_inds,
+                                  GError         **error)
+{
+    gchar          **split;
+    GError          *inner_error = NULL;
+    GArray          *array_supported_modes = NULL;
+    GArray          *array_supported_inds = NULL;
+    gchar           *aux   = NULL;
+    gboolean         ret = FALSE;
+    MM3gppCmerMode   supported_modes = 0;
+    MM3gppCmerInd    supported_inds = 0;
+    guint            i;
+
+    /*
+     * AT+CMER=?
+     *  +CMER: 1,0,0,(0-1),0
+     *
+     * AT+CMER=?
+     *  +CMER: (0-3),(0),(0),(0-1),(0-1)
+     *
+     * AT+CMER=?
+     *  +CMER: (1,2),0,0,(0-1),0
+     */
+
+    split = mm_split_string_groups (mm_strip_tag (response, "+CMER:"));
+    if (!split) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't split +CMER test response in groups");
+        goto out;
+    }
+
+    /* We want 1st and 4th groups */
+    if (g_strv_length (split) < 4) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Missing groups in +CMER test response (%u < 4)", g_strv_length (split));
+        goto out;
+    }
+
+    /* Modes in 1st group */
+    if (!(array_supported_modes = mm_parse_uint_list (split[0], &inner_error)))
+        goto out;
+    g_clear_pointer (&aux, g_free);
+
+    /* Ind settings in 4th group */
+    if (!(array_supported_inds = mm_parse_uint_list (split[3], &inner_error)))
+        goto out;
+    g_clear_pointer (&aux, g_free);
+
+    for (i = 0; i < array_supported_modes->len; i++) {
+        guint mode_val;
+
+        mode_val = g_array_index (array_supported_modes, guint, i);
+        if (mode_val <= 3)
+            supported_modes |= (MM3gppCmerMode) (1 << mode_val);
+        else
+            mm_dbg ("Unknown +CMER mode reported: %u", mode_val);
+    }
+
+    for (i = 0; i < array_supported_inds->len; i++) {
+        guint ind_val;
+
+        ind_val = g_array_index (array_supported_inds, guint, i);
+        if (ind_val <= 2)
+            supported_inds |= (MM3gppCmerInd) (1 << ind_val);
+        else
+            mm_dbg ("Unknown +CMER ind reported: %u", ind_val);
+    }
+
+    if (out_supported_modes)
+        *out_supported_modes = supported_modes;
+    if (out_supported_inds)
+        *out_supported_inds = supported_inds;
+    ret = TRUE;
+
+out:
+
+    if (array_supported_modes)
+        g_array_unref (array_supported_modes);
+    if (array_supported_inds)
+        g_array_unref (array_supported_inds);
+    g_clear_pointer (&aux, g_free);
+
+    g_strfreev (split);
+
+    if (inner_error)
+        g_propagate_error (error, inner_error);
+
+    return ret;
+}
+
+/*************************************************************************/
+
 struct MM3gppCindResponse {
     gchar *desc;
     guint idx;
@@ -2980,27 +3359,35 @@ mm_string_to_access_tech (const gchar *string)
 /*************************************************************************/
 
 void
-mm_3gpp_normalize_operator_name (gchar          **operator,
-                                 MMModemCharset   cur_charset)
+mm_3gpp_normalize_operator (gchar          **operator,
+                            MMModemCharset   cur_charset)
 {
     g_assert (operator);
 
     if (*operator == NULL)
         return;
 
-    /* Some modems (Option & HSO) return the operator name as a hexadecimal
-     * string of the bytes of the operator name as encoded by the current
-     * character set.
-     */
+    /* Despite +CSCS? may claim supporting UCS2, Some modems (e.g. Huawei)
+     * always report the operator name in ASCII in a +COPS response. */
     if (cur_charset == MM_MODEM_CHARSET_UCS2) {
+        gchar *tmp;
+
+        tmp = g_strdup (*operator);
         /* In this case we're already checking UTF-8 validity */
-        *operator = mm_charset_take_and_convert_to_utf8 (*operator, MM_MODEM_CHARSET_UCS2);
+        tmp = mm_charset_take_and_convert_to_utf8 (tmp, cur_charset);
+        if (tmp) {
+            g_clear_pointer (operator, g_free);
+            *operator = tmp;
+            goto out;
+        }
     }
-    /* Ensure the operator name is valid UTF-8 so that we can send it
-     * through D-Bus and such.
-     */
-    else if (!g_utf8_validate (*operator, -1, NULL))
+
+    /* Charset is unknown or there was an error in conversion; try to see
+     * if the contents we got are valid UTF-8 already. */
+    if (!g_utf8_validate (*operator, -1, NULL))
         g_clear_pointer (operator, g_free);
+
+out:
 
     /* Some modems (Novatel LTE) return the operator name as "Unknown" when
      * it fails to obtain the operator name. Return NULL in such case.

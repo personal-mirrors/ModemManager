@@ -871,7 +871,7 @@ create_bearer_step (GTask *task)
 
     case CREATE_BEARER_STEP_LAST:
         g_assert (ctx->bearer);
-        g_task_return_pointer (task, g_object_ref (ctx->bearer), (GDestroyNotify) g_object_unref);
+        g_task_return_pointer (task, g_object_ref (ctx->bearer), g_object_unref);
         g_object_unref (task);
         return;
     }
@@ -896,6 +896,32 @@ modem_create_bearer (MMIfaceModem        *self,
     task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, (GDestroyNotify) create_bearer_context_free);
     create_bearer_step (task);
+}
+
+/*****************************************************************************/
+/* Setup ports (Broadband modem class) */
+
+static void
+setup_ports (MMBroadbandModem *self)
+{
+    MMPortSerialAt *ports[2];
+    guint           i;
+
+    /* Call parent's setup ports first always */
+    MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_ublox_parent_class)->setup_ports (self);
+
+    ports[0] = mm_base_modem_peek_port_primary   (MM_BASE_MODEM (self));
+    ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
+
+    /* Configure AT ports */
+    for (i = 0; i < G_N_ELEMENTS (ports); i++) {
+        if (!ports[i])
+            continue;
+
+        g_object_set (ports[i],
+                      MM_PORT_SERIAL_SEND_DELAY, (guint64) 0,
+                      NULL);
+    }
 }
 
 /*****************************************************************************/
@@ -962,7 +988,10 @@ iface_modem_init (MMIfaceModem *iface)
 static void
 mm_broadband_modem_ublox_class_init (MMBroadbandModemUbloxClass *klass)
 {
-    GObjectClass *object_class = G_OBJECT_CLASS (klass);
+    GObjectClass          *object_class = G_OBJECT_CLASS (klass);
+    MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
 
     g_type_class_add_private (object_class, sizeof (MMBroadbandModemUbloxPrivate));
+
+    broadband_modem_class->setup_ports = setup_ports;
 }

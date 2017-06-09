@@ -54,7 +54,6 @@ udevrulesdir = $(UDEV_BASE_DIR)/rules.d
 udevrules_DATA = \
 	77-mm-usb-device-blacklist.rules \
 	77-mm-pcmcia-device-blacklist.rules \
-	77-mm-platform-serial-whitelist.rules \
 	77-mm-usb-serial-adapters-greylist.rules \
 	80-mm-candidate.rules \
 	$(NULL)
@@ -66,6 +65,28 @@ EXTRA_DIST += $(udevrules_DATA)
 ################################################################################
 
 noinst_LTLIBRARIES += libhelpers.la
+
+HELPER_ENUMS_INPUTS = \
+	$(srcdir)/mm-modem-helpers.h \
+	$(NULL)
+
+HELPER_ENUMS_GENERATED = \
+	mm-helper-enums-types.h \
+	mm-helper-enums-types.c \
+	$(NULL)
+
+mm-helper-enums-types.h: Makefile.am $(HELPER_ENUMS_INPUTS) $(top_srcdir)/build-aux/mm-enums-template.h
+	$(AM_V_GEN) $(GLIB_MKENUMS) \
+		--fhead "#include \"mm-modem-helpers.h\"\n#ifndef __MM_HELPER_ENUMS_TYPES_H__\n#define __MM_HELPER_ENUMS_TYPES_H__\n" \
+		--template $(top_srcdir)/build-aux/mm-enums-template.h \
+		--ftail "#endif /* __MM_HELPER_ENUMS_TYPES_H__ */\n" \
+		$(HELPER_ENUMS_INPUTS) > $@
+
+mm-helper-enums-types.c: Makefile.am $(top_srcdir)/build-aux/mm-enums-template.c mm-helper-enums-types.h
+	$(AM_V_GEN) $(GLIB_MKENUMS) \
+		--fhead "#include \"mm-helper-enums-types.h\"" \
+		--template $(top_srcdir)/build-aux/mm-enums-template.c \
+		$(HELPER_ENUMS_INPUTS) > $@
 
 libhelpers_la_SOURCES = \
 	mm-error-helpers.c \
@@ -82,6 +103,8 @@ libhelpers_la_SOURCES = \
 	mm-sms-part-cdma.c \
 	$(NULL)
 
+nodist_libhelpers_la_SOURCES = $(HELPER_ENUMS_GENERATED)
+
 if WITH_QMI
 libhelpers_la_SOURCES += \
 	mm-modem-helpers-qmi.c \
@@ -95,6 +118,10 @@ libhelpers_la_SOURCES += \
 	mm-modem-helpers-mbim.h \
 	$(NULL)
 endif
+
+# Request to build enum types before anything else
+BUILT_SOURCES += $(HELPER_ENUMS_GENERATED)
+CLEANFILES    += $(HELPER_ENUMS_GENERATED)
 
 ################################################################################
 # kerneldevice library

@@ -110,6 +110,7 @@ struct _MMBroadbandModemHuaweiPrivate {
     GRegex *cend_regex;
     GRegex *ddtmf_regex;
     GRegex *cschannelinfo_regex;
+    GRegex *eons_regex;
 
     /* Regex to ignore */
     GRegex *boot_regex;
@@ -1932,7 +1933,7 @@ set_3gpp_unsolicited_events_handlers (MMBroadbandModemHuawei *self,
             NULL);
     }
 
-    g_list_free_full (ports, (GDestroyNotify)g_object_unref);
+    g_list_free_full (ports, g_object_unref);
 }
 
 static gboolean
@@ -2171,55 +2172,6 @@ modem_3gpp_disable_unsolicited_events (MMIfaceModem3gpp *self,
 }
 
 /*****************************************************************************/
-/* Operator Name loading (3GPP interface) */
-
-static gchar *
-modem_3gpp_load_operator_name_finish (MMIfaceModem3gpp *self,
-                                      GAsyncResult *res,
-                                      GError **error)
-{
-    const gchar *result;
-    gchar *operator_name = NULL;
-
-    result = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
-    if (!result)
-        return NULL;
-
-    if (!mm_3gpp_parse_cops_read_response (result,
-                                           NULL, /* mode */
-                                           NULL, /* format */
-                                           &operator_name,
-                                           NULL, /* act */
-                                           error))
-        return NULL;
-
-    /* Despite +CSCS? may claim supporting UCS2, Huawei modems always report the
-     * operator name in ASCII in a +COPS response. Thus, we ignore the current
-     * charset claimed by the modem and assume the charset is IRA when parsing
-     * the operator name.
-     */
-    mm_3gpp_normalize_operator_name (&operator_name, MM_MODEM_CHARSET_IRA);
-    if (operator_name)
-        mm_dbg ("loaded Operator Name: %s", operator_name);
-
-    return operator_name;
-}
-
-static void
-modem_3gpp_load_operator_name (MMIfaceModem3gpp *self,
-                               GAsyncReadyCallback callback,
-                               gpointer user_data)
-{
-    mm_dbg ("loading Operator Name (huawei)...");
-    mm_base_modem_at_command (MM_BASE_MODEM (self),
-                              "+COPS=3,0;+COPS?",
-                              3,
-                              FALSE,
-                              callback,
-                              user_data);
-}
-
-/*****************************************************************************/
 /* Create Bearer (Modem interface) */
 
 typedef struct {
@@ -2265,7 +2217,7 @@ broadband_bearer_huawei_new_ready (GObject *source,
     if (!bearer)
         g_simple_async_result_take_error (ctx->result, error);
     else
-        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, (GDestroyNotify)g_object_unref);
+        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, g_object_unref);
     create_bearer_context_complete_and_free (ctx);
 }
 
@@ -2281,7 +2233,7 @@ broadband_bearer_new_ready (GObject *source,
     if (!bearer)
         g_simple_async_result_take_error (ctx->result, error);
     else
-        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, (GDestroyNotify)g_object_unref);
+        g_simple_async_result_set_op_res_gpointer (ctx->result, bearer, g_object_unref);
     create_bearer_context_complete_and_free (ctx);
 }
 
@@ -2367,7 +2319,7 @@ ensure_ndisdup_support_checked (MMBroadbandModemHuawei *self,
 
     /* First, check for devices which support NDISDUP on any AT port. These
      * devices are tagged by udev */
-    if (mm_kernel_device_get_property_as_boolean (mm_port_peek_kernel_device (port), "ID_MM_HUAWEI_NDISDUP_SUPPORTED")) {
+    if (mm_kernel_device_get_global_property_as_boolean (mm_port_peek_kernel_device (port), "ID_MM_HUAWEI_NDISDUP_SUPPORTED")) {
         mm_dbg ("This device (%s) can support ndisdup feature", mm_port_get_device (port));
         self->priv->ndisdup_support = FEATURE_SUPPORTED;
     }
@@ -2666,7 +2618,7 @@ set_cdma_unsolicited_events_handlers (MMBroadbandModemHuawei *self,
             NULL);
     }
 
-    g_list_free_full (ports, (GDestroyNotify)g_object_unref);
+    g_list_free_full (ports, g_object_unref);
 }
 
 static gboolean
@@ -3149,9 +3101,15 @@ set_voice_unsolicited_events_handlers (MMBroadbandModemHuawei *self,
             port,
             self->priv->cschannelinfo_regex,
             NULL, NULL, NULL);
+
+        /* Ignore this message (Huawei ME909s-120 firmware. 23.613.61.00.00) */
+        mm_port_serial_at_add_unsolicited_msg_handler (
+            port,
+            self->priv->eons_regex,
+            NULL, NULL, NULL);
     }
 
-    g_list_free_full (ports, (GDestroyNotify)g_object_unref);
+    g_list_free_full (ports, g_object_unref);
 }
 
 static gboolean
@@ -3479,7 +3437,7 @@ enable_disable_unsolicited_rfswitch_event_handler (MMBroadbandModemHuawei *self,
             enable);
     }
 
-    g_list_free_full (ports, (GDestroyNotify)g_object_unref);
+    g_list_free_full (ports, g_object_unref);
 }
 
 static void
@@ -4326,7 +4284,7 @@ set_ignored_unsolicited_events_handlers (MMBroadbandModemHuawei *self)
             NULL, NULL, NULL);
     }
 
-    g_list_free_full (ports, (GDestroyNotify)g_object_unref);
+    g_list_free_full (ports, g_object_unref);
 }
 
 static void
@@ -4474,6 +4432,11 @@ mm_broadband_modem_huawei_init (MMBroadbandModemHuawei *self)
     self->priv->cschannelinfo_regex = g_regex_new ("\\r\\n\\^CSCHANNELINFO:\\s*(\\d+),(\\d+)\\r\\n",
                                                     G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 
+    /* Voice: Unknown message that's broke ATA command
+     * <CR><LF>^EONS:<type><CR><LF>
+     */
+    self->priv->eons_regex = g_regex_new ("\\r\\n\\^EONS:\\s*(\\d+)\\r\\n",
+                                          G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 
     self->priv->ndisdup_support = FEATURE_SUPPORT_UNKNOWN;
     self->priv->rfswitch_support = FEATURE_SUPPORT_UNKNOWN;
@@ -4529,6 +4492,7 @@ finalize (GObject *object)
     g_regex_unref (self->priv->cend_regex);
     g_regex_unref (self->priv->ddtmf_regex);
     g_regex_unref (self->priv->cschannelinfo_regex);
+    g_regex_unref (self->priv->eons_regex);
 
     if (self->priv->syscfg_supported_modes)
         g_array_unref (self->priv->syscfg_supported_modes);
@@ -4590,8 +4554,6 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->enable_unsolicited_events_finish = modem_3gpp_enable_unsolicited_events_finish;
     iface->disable_unsolicited_events = modem_3gpp_disable_unsolicited_events;
     iface->disable_unsolicited_events_finish = modem_3gpp_disable_unsolicited_events_finish;
-    iface->load_operator_name = modem_3gpp_load_operator_name;
-    iface->load_operator_name_finish = modem_3gpp_load_operator_name_finish;
 }
 
 static void

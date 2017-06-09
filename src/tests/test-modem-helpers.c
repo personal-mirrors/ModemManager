@@ -33,6 +33,189 @@
     g_assert_cmpfloat (fabs (val1 - val2), <, tolerance)
 
 /*****************************************************************************/
+/* Test IFC=? responses */
+
+static void
+test_ifc_response (const gchar         *str,
+                   const MMFlowControl  expected)
+{
+    MMFlowControl  mask;
+    GError        *error = NULL;
+
+    mask = mm_parse_ifc_test_response (str, &error);
+    g_assert_no_error (error);
+    g_assert_cmpuint (mask, ==, expected);
+}
+
+static void
+test_ifc_response_all_simple (void)
+{
+    test_ifc_response ("+IFC (0,1,2),(0,1,2)", (MM_FLOW_CONTROL_NONE | MM_FLOW_CONTROL_XON_XOFF | MM_FLOW_CONTROL_RTS_CTS));
+}
+
+static void
+test_ifc_response_all_groups (void)
+{
+    test_ifc_response ("+IFC (0-2),(0-2)", (MM_FLOW_CONTROL_NONE | MM_FLOW_CONTROL_XON_XOFF | MM_FLOW_CONTROL_RTS_CTS));
+}
+
+static void
+test_ifc_response_none_only (void)
+{
+    test_ifc_response ("+IFC (0),(0)", MM_FLOW_CONTROL_NONE);
+}
+
+static void
+test_ifc_response_xon_xoff_only (void)
+{
+    test_ifc_response ("+IFC (1),(1)", MM_FLOW_CONTROL_XON_XOFF);
+}
+
+static void
+test_ifc_response_rts_cts_only (void)
+{
+    test_ifc_response ("+IFC (2),(2)", MM_FLOW_CONTROL_RTS_CTS);
+}
+
+static void
+test_ifc_response_no_xon_xoff (void)
+{
+    test_ifc_response ("+IFC (0,2),(0,2)", (MM_FLOW_CONTROL_NONE | MM_FLOW_CONTROL_RTS_CTS));
+}
+
+static void
+test_ifc_response_no_xon_xoff_in_ta (void)
+{
+    test_ifc_response ("+IFC (0,1,2),(0,2)", (MM_FLOW_CONTROL_NONE | MM_FLOW_CONTROL_RTS_CTS));
+}
+
+static void
+test_ifc_response_no_xon_xoff_in_te (void)
+{
+    test_ifc_response ("+IFC (0,2),(0,1,2)", (MM_FLOW_CONTROL_NONE | MM_FLOW_CONTROL_RTS_CTS));
+}
+
+static void
+test_ifc_response_no_rts_cts_simple (void)
+{
+    test_ifc_response ("+IFC (0,1),(0,1)", (MM_FLOW_CONTROL_NONE | MM_FLOW_CONTROL_XON_XOFF));
+}
+
+static void
+test_ifc_response_no_rts_cts_groups (void)
+{
+    test_ifc_response ("+IFC (0-1),(0-1)", (MM_FLOW_CONTROL_NONE | MM_FLOW_CONTROL_XON_XOFF));
+}
+
+static void
+test_ifc_response_all_simple_and_unknown (void)
+{
+    test_ifc_response ("+IFC (0,1,2,3),(0,1,2)", (MM_FLOW_CONTROL_NONE | MM_FLOW_CONTROL_XON_XOFF | MM_FLOW_CONTROL_RTS_CTS));
+}
+
+static void
+test_ifc_response_all_groups_and_unknown (void)
+{
+    test_ifc_response ("+IFC (0-3),(0-2)", (MM_FLOW_CONTROL_NONE | MM_FLOW_CONTROL_XON_XOFF | MM_FLOW_CONTROL_RTS_CTS));
+}
+
+/*****************************************************************************/
+/* Test WS46=? responses */
+
+static void
+test_ws46_response (const gchar       *str,
+                    const MMModemMode *expected,
+                    guint              n_expected)
+{
+    guint   i;
+    GArray *modes;
+    GError *error = NULL;
+
+    modes = mm_3gpp_parse_ws46_test_response (str, &error);
+    g_assert_no_error (error);
+    g_assert (modes != NULL);
+    g_assert_cmpuint (modes->len, ==, n_expected);
+
+    for (i = 0; i < n_expected; i++) {
+        guint j;
+
+        for (j = 0; j < modes->len; j++) {
+            if (expected[i] == g_array_index (modes, MMModemMode, j))
+                break;
+        }
+        g_assert_cmpuint (j, !=, modes->len);
+    }
+    g_array_unref (modes);
+}
+
+static void
+test_ws46_response_generic_2g3g4g (void)
+{
+    static const MMModemMode expected[] = {
+        MM_MODEM_MODE_2G,
+        MM_MODEM_MODE_3G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G,
+        MM_MODEM_MODE_4G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_3G,
+    };
+    const gchar *str = "+WS46: (12,22,25,28,29)";
+
+    test_ws46_response (str, expected, G_N_ELEMENTS (expected));
+}
+
+static void
+test_ws46_response_generic_2g3g (void)
+{
+    static const MMModemMode expected[] = {
+        MM_MODEM_MODE_2G,
+        MM_MODEM_MODE_3G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_3G,
+    };
+    const gchar *str = "+WS46: (12,22,25)";
+
+    test_ws46_response (str, expected, G_N_ELEMENTS (expected));
+}
+
+static void
+test_ws46_response_generic_2g3g_v2 (void)
+{
+    static const MMModemMode expected[] = {
+        MM_MODEM_MODE_2G,
+        MM_MODEM_MODE_3G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_3G,
+    };
+    const gchar *str = "+WS46: (12,22,29)";
+
+    test_ws46_response (str, expected, G_N_ELEMENTS (expected));
+}
+
+static void
+test_ws46_response_cinterion (void)
+{
+    static const MMModemMode expected[] = {
+        MM_MODEM_MODE_2G,
+        MM_MODEM_MODE_3G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G,
+        MM_MODEM_MODE_4G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_3G,
+    };
+    const gchar *str = "(12,22,25,28,29)";
+
+    test_ws46_response (str, expected, G_N_ELEMENTS (expected));
+}
+
+static void
+test_ws46_response_telit_le866 (void)
+{
+    static const MMModemMode expected[] = {
+        MM_MODEM_MODE_4G,
+    };
+    const gchar *str = "(28)";
+
+    test_ws46_response (str, expected, G_N_ELEMENTS (expected));
+}
+
+/*****************************************************************************/
 /* Test CMGL responses */
 
 static void
@@ -767,6 +950,54 @@ test_cops_query (void)
 
     for (i = 0; i < G_N_ELEMENTS (cops_query_data); i++)
         test_cops_query_data (&cops_query_data[i]);
+}
+
+/*****************************************************************************/
+
+typedef struct {
+    const gchar    *input;
+    MMModemCharset  charset;
+    const gchar    *normalized;
+} NormalizeOperatorTest;
+
+static const NormalizeOperatorTest normalize_operator_tests[] = {
+    /* charset unknown */
+    { "Verizon", MM_MODEM_CHARSET_UNKNOWN, "Verizon" },
+    { "311480",  MM_MODEM_CHARSET_UNKNOWN, "311480"  },
+    /* charset configured as IRA (ASCII) */
+    { "Verizon", MM_MODEM_CHARSET_IRA, "Verizon" },
+    { "311480",  MM_MODEM_CHARSET_IRA, "311480"  },
+    /* charset configured as GSM7 */
+    { "Verizon", MM_MODEM_CHARSET_GSM, "Verizon" },
+    { "311480",  MM_MODEM_CHARSET_GSM, "311480"  },
+    /* charset configured as UCS2 */
+    { "0056006500720069007A006F006E", MM_MODEM_CHARSET_UCS2, "Verizon" },
+    { "003300310031003400380030",     MM_MODEM_CHARSET_UCS2, "311480"  },
+    { "Verizon",                      MM_MODEM_CHARSET_UCS2, "Verizon" },
+    { "311480",                       MM_MODEM_CHARSET_UCS2, "311480"  },
+};
+
+static void
+common_test_normalize_operator (const NormalizeOperatorTest *t)
+{
+    gchar *str;
+
+    str = g_strdup (t->input);
+    mm_3gpp_normalize_operator (&str, t->charset);
+    if (!t->normalized)
+        g_assert (!str);
+    else
+        g_assert_cmpstr (str, ==, t->normalized);
+    g_free (str);
+}
+
+static void
+test_normalize_operator (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (normalize_operator_tests); i++)
+        common_test_normalize_operator (&normalize_operator_tests[i]);
 }
 
 /*****************************************************************************/
@@ -1633,6 +1864,80 @@ test_devid_item (void *f, gpointer d)
         g_message ("%s", devid);
     g_assert (!strcmp (devid, item->devid));
     g_free (devid);
+}
+
+/*****************************************************************************/
+/* Test CMER test responses */
+
+static void
+test_cmer_response (const gchar    *str,
+                    MM3gppCmerMode  expected_modes,
+                    MM3gppCmerInd   expected_inds)
+{
+    gboolean        ret;
+    MM3gppCmerMode  modes = MM_3GPP_CMER_MODE_NONE;
+    MM3gppCmerInd   inds = MM_3GPP_CMER_IND_NONE;
+    GError         *error = NULL;
+
+    ret = mm_3gpp_parse_cmer_test_response (str, &modes, &inds, &error);
+    g_assert_no_error (error);
+    g_assert (ret);
+
+    g_assert_cmpuint (modes, ==, expected_modes);
+    g_assert_cmpuint (inds,  ==, expected_inds);
+}
+
+static void
+test_cmer_response_cinterion_pls8 (void)
+{
+    static const gchar *str = "+CMER: (0-3),(0),(0),(0-1),(0-1)";
+    static const MM3gppCmerMode expected_modes = (        \
+        MM_3GPP_CMER_MODE_DISCARD_URCS |                  \
+        MM_3GPP_CMER_MODE_DISCARD_URCS_IF_LINK_RESERVED | \
+        MM_3GPP_CMER_MODE_BUFFER_URCS_IF_LINK_RESERVED |  \
+        MM_3GPP_CMER_MODE_FORWARD_URCS);
+    static const MM3gppCmerInd expected_inds = (        \
+        MM_3GPP_CMER_IND_DISABLE |                      \
+        MM_3GPP_CMER_IND_ENABLE_NOT_CAUSED_BY_CIND);
+
+    test_cmer_response (str, expected_modes, expected_inds);
+}
+
+static void
+test_cmer_response_sierra_em7345 (void)
+{
+    static const gchar *str = "+CMER: 1,0,0,(0-1),0";
+    static const MM3gppCmerMode expected_modes = (          \
+        MM_3GPP_CMER_MODE_DISCARD_URCS_IF_LINK_RESERVED);
+    static const MM3gppCmerInd expected_inds = (        \
+        MM_3GPP_CMER_IND_DISABLE |                      \
+        MM_3GPP_CMER_IND_ENABLE_NOT_CAUSED_BY_CIND);
+
+    test_cmer_response (str, expected_modes, expected_inds);
+}
+
+static void
+test_cmer_response_cinterion_ehs5 (void)
+{
+    static const gchar *str = "+CMER: (1,2),0,0,(0-1),0";
+    static const MM3gppCmerMode expected_modes = (        \
+        MM_3GPP_CMER_MODE_DISCARD_URCS_IF_LINK_RESERVED | \
+        MM_3GPP_CMER_MODE_BUFFER_URCS_IF_LINK_RESERVED);
+    static const MM3gppCmerInd expected_inds = (        \
+        MM_3GPP_CMER_IND_DISABLE |                      \
+        MM_3GPP_CMER_IND_ENABLE_NOT_CAUSED_BY_CIND);
+
+    test_cmer_response (str, expected_modes, expected_inds);
+}
+
+static void
+test_cmer_request_cinterion_ehs5 (void)
+{
+    gchar *str;
+
+    str = mm_3gpp_build_cmer_set_request (MM_3GPP_CMER_MODE_BUFFER_URCS_IF_LINK_RESERVED, MM_3GPP_CMER_IND_ENABLE_NOT_CAUSED_BY_CIND);
+    g_assert_cmpstr (str, ==, "+CMER=2,0,0,1");
+    g_free (str);
 }
 
 /*****************************************************************************/
@@ -3392,6 +3697,25 @@ int main (int argc, char **argv)
     suite = g_test_get_root ();
     reg_data = reg_test_data_new ();
 
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_all_simple, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_all_groups, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_none_only, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_xon_xoff_only, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_rts_cts_only, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_no_xon_xoff, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_no_xon_xoff_in_ta, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_no_xon_xoff_in_te, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_no_rts_cts_simple, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_no_rts_cts_groups, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_all_simple_and_unknown, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ifc_response_all_groups_and_unknown, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_ws46_response_generic_2g3g4g, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ws46_response_generic_2g3g, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ws46_response_generic_2g3g_v2, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ws46_response_cinterion, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ws46_response_telit_le866, NULL));
+
     g_test_suite_add (suite, TESTCASE (test_cops_response_tm506, NULL));
     g_test_suite_add (suite, TESTCASE (test_cops_response_gt3gplus, NULL));
     g_test_suite_add (suite, TESTCASE (test_cops_response_ac881, NULL));
@@ -3424,6 +3748,8 @@ int main (int argc, char **argv)
     g_test_suite_add (suite, TESTCASE (test_cops_response_umts_invalid, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_cops_query, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_normalize_operator, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_creg1_solicited, reg_data));
     g_test_suite_add (suite, TESTCASE (test_creg1_unsolicited, reg_data));
@@ -3473,6 +3799,12 @@ int main (int argc, char **argv)
     g_test_suite_add (suite, TESTCASE (test_cscs_sierra_mercury_support_response, NULL));
     g_test_suite_add (suite, TESTCASE (test_cscs_buslink_support_response, NULL));
     g_test_suite_add (suite, TESTCASE (test_cscs_blackberry_support_response, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_cmer_response_cinterion_pls8, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cmer_response_sierra_em7345, NULL));
+    g_test_suite_add (suite, TESTCASE (test_cmer_response_cinterion_ehs5, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_cmer_request_cinterion_ehs5, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_cind_response_linktop_lw273, NULL));
     g_test_suite_add (suite, TESTCASE (test_cind_response_moto_v3m, NULL));

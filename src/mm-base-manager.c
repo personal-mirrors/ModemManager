@@ -160,12 +160,18 @@ device_support_check_ready (MMPluginManager          *plugin_manager,
     GError   *error = NULL;
     MMPlugin *plugin;
 
+    /* If the device support check fails, either with an error, or afterwards
+     * when trying to create a modem object, we must remove the MMDevice from
+     * the tracking table of devices, so that a manual scan request afterwards
+     * re-scans all ports. */
+
     /* Receive plugin result from the plugin manager */
     plugin = mm_plugin_manager_device_support_check_finish (plugin_manager, res, &error);
     if (!plugin) {
         mm_info ("Couldn't check support for device '%s': %s",
                  mm_device_get_uid (ctx->device), error->message);
         g_error_free (error);
+        g_hash_table_remove (ctx->self->priv->devices, mm_device_get_uid (ctx->device));
         find_device_support_context_free (ctx);
         return;
     }
@@ -178,6 +184,7 @@ device_support_check_ready (MMPluginManager          *plugin_manager,
         mm_warn ("Couldn't create modem for device '%s': %s",
                  mm_device_get_uid (ctx->device), error->message);
         g_error_free (error);
+        g_hash_table_remove (ctx->self->priv->devices, mm_device_get_uid (ctx->device));
         find_device_support_context_free (ctx);
         return;
     }
@@ -211,11 +218,22 @@ device_removed (MMBaseManager  *self,
 
             /* If port probe list gets empty, remove the device object iself */
             if (!mm_device_peek_port_probe_list (device)) {
+                /* The callback triggered when the device support is cancelled may end up
+                 * removing the device from the HT, and that was the last full reference
+                 * we kept. So, in order to make sure the reference is still valid after
+                 * support_check_cancel(), we hold a full reference ourselves. */
                 mm_dbg ("Removing empty device '%s'", mm_device_get_uid (device));
-                if (mm_plugin_manager_device_support_check_cancel (self->priv->plugin_manager, device))
-                    mm_dbg ("Device support check has been cancelled");
-                mm_device_remove_modem (device);
-                g_hash_table_remove (self->priv->devices, mm_device_get_uid (device));
+                g_object_ref (device);
+                {
+                    if (mm_plugin_manager_device_support_check_cancel (self->priv->plugin_manager, device))
+                        mm_dbg ("Device support check has been cancelled");
+
+                    /* The device may have already been removed from the tracking HT, we
+                     * just try to remove it and if it fails, we ignore it */
+                    mm_device_remove_modem (device);
+                    g_hash_table_remove (self->priv->devices, mm_device_get_uid (device));
+                }
+                g_object_unref (device);
             }
         }
 

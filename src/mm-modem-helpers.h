@@ -57,6 +57,7 @@ GArray *mm_parse_uint_list (const gchar  *str,
                             GError      **error);
 
 guint mm_count_bits_set (gulong number);
+guint mm_find_bit_set   (gulong number);
 
 gchar *mm_create_device_identifier (guint vid,
                                     guint pid,
@@ -95,6 +96,23 @@ GRegex *mm_voice_cring_regex_get(void);
 GRegex *mm_voice_clip_regex_get (void);
 
 /*****************************************************************************/
+/* SERIAL specific helpers and utilities */
+
+/* AT+IFC=? response parser.
+ * For simplicity, we'll only consider flow control methods available in both
+ * TE and TA. */
+
+typedef enum { /*< underscore_name=mm_flow_control >*/
+    MM_FLOW_CONTROL_UNKNOWN   = 0,
+    MM_FLOW_CONTROL_NONE      = 1 << 0,  /* IFC=0,0 */
+    MM_FLOW_CONTROL_XON_XOFF  = 1 << 1,  /* IFC=1,1 */
+    MM_FLOW_CONTROL_RTS_CTS   = 1 << 2,  /* IFC=2,2 */
+} MMFlowControl;
+
+MMFlowControl mm_parse_ifc_test_response (const gchar  *response,
+                                          GError      **error);
+
+/*****************************************************************************/
 /* 3GPP specific helpers and utilities */
 /*****************************************************************************/
 
@@ -106,6 +124,9 @@ GRegex    *mm_3gpp_cusd_regex_get (void);
 GRegex    *mm_3gpp_cmti_regex_get (void);
 GRegex    *mm_3gpp_cds_regex_get (void);
 
+/* AT+WS46=? response parser: returns array of MMModemMode values */
+GArray *mm_3gpp_parse_ws46_test_response (const gchar  *response,
+                                          GError      **error);
 
 /* AT+COPS=? (network scan) response parser */
 typedef struct {
@@ -208,6 +229,30 @@ gboolean mm_3gpp_parse_clck_write_response (const gchar *reply,
 GStrv mm_3gpp_parse_cnum_exec_response (const gchar *reply,
                                         GError **error);
 
+/* AT+CMER=? (Mobile Equipment Event Reporting) response parser */
+typedef enum {  /*< underscore_name=mm_3gpp_cmer_mode >*/
+    MM_3GPP_CMER_MODE_NONE                          = 0,
+    MM_3GPP_CMER_MODE_DISCARD_URCS                  = 1 << 0,
+    MM_3GPP_CMER_MODE_DISCARD_URCS_IF_LINK_RESERVED = 1 << 1,
+    MM_3GPP_CMER_MODE_BUFFER_URCS_IF_LINK_RESERVED  = 1 << 2,
+    MM_3GPP_CMER_MODE_FORWARD_URCS                  = 1 << 3,
+} MM3gppCmerMode;
+typedef enum { /*< underscore_name=mm_3gpp_cmer_ind >*/
+    MM_3GPP_CMER_IND_NONE = 0,
+    /* no indicator event reporting */
+    MM_3GPP_CMER_IND_DISABLE = 1 << 0,
+    /* Only indicator events that are not caused by +CIND */
+    MM_3GPP_CMER_IND_ENABLE_NOT_CAUSED_BY_CIND = 1 << 1,
+    /* All indicator events */
+    MM_3GPP_CMER_IND_ENABLE_ALL = 1 << 2,
+} MM3gppCmerInd;
+gchar    *mm_3gpp_build_cmer_set_request   (MM3gppCmerMode   mode,
+                                            MM3gppCmerInd    ind);
+gboolean  mm_3gpp_parse_cmer_test_response (const gchar     *reply,
+                                            MM3gppCmerMode  *supported_modes,
+                                            MM3gppCmerInd   *supported_inds,
+                                            GError         **error);
+
 /* AT+CIND=? (Supported indicators) response parser */
 typedef struct MM3gppCindResponse MM3gppCindResponse;
 GHashTable  *mm_3gpp_parse_cind_test_response    (const gchar *reply,
@@ -291,8 +336,8 @@ gchar *mm_3gpp_facility_to_acronym (MMModem3gppFacility facility);
 
 MMModemAccessTechnology mm_string_to_access_tech (const gchar *string);
 
-void mm_3gpp_normalize_operator_name (gchar          **operator,
-                                      MMModemCharset   cur_charset);
+void mm_3gpp_normalize_operator (gchar          **operator,
+                                 MMModemCharset   cur_charset);
 
 gboolean mm_3gpp_parse_operator_id (const gchar *operator_id,
                                     guint16 *mcc,

@@ -38,10 +38,16 @@ telit_grab_port (MMPlugin *self,
     MMDevice *device;
     MMPortType ptype;
     MMPortSerialAtFlag pflags = MM_PORT_SERIAL_AT_FLAG_NONE;
+    const gchar *subsys;
 
     port = mm_port_probe_peek_port (probe);
     ptype = mm_port_probe_get_port_type (probe);
     device = mm_port_probe_peek_device (probe);
+    subsys = mm_port_probe_get_port_subsys (probe);
+
+    /* Just skip custom port identification for subsys different than tty */
+    if (!g_str_equal (subsys, "tty"))
+        goto out;
 
     /* Look for port type hints; just probing can't distinguish which port should
      * be the data/primary port on these devices.  We have to tag them based on
@@ -84,13 +90,25 @@ telit_grab_port (MMPlugin *self,
         } else
             ptype = MM_PORT_TYPE_IGNORED;
     } else {
-        /* If the port was tagged by the udev rules but isn't a primary or secondary,
-         * then ignore it to guard against race conditions if a device just happens
-         * to show up with more than two AT-capable ports.
+        /* If the port isn't explicitly tagged as primary, secondary, or gps
+         * port, we will fallback to flagging it as secondary, but only if it
+         * probed AT successfully.
+         *
+         * This is so that we support the case where a single TTY is exposed
+         * by the modem and no explicit port type hint is specified.
+         *
+         * From the modem point of view, only the AT_FLAG_PRIMARY would be
+         * important, as that is the port that would end up getting used for PPP
+         * in this case, so having multiple secondary ports, if that ever
+         * happened, wouldn't be an issue.
          */
-        ptype = MM_PORT_TYPE_IGNORED;
+        if (mm_port_probe_is_at (probe))
+            pflags = MM_PORT_SERIAL_AT_FLAG_SECONDARY;
+        else
+            ptype = MM_PORT_TYPE_IGNORED;
     }
 
+out:
     return mm_base_modem_grab_port (modem,
                                     port,
                                     ptype,
@@ -318,12 +336,5 @@ telit_custom_init (MMPortProbe *probe,
     ctx->getportcfg_done = FALSE;
     ctx->getportcfg_retries = 3;
 
-    /* If the device is tagged for supporting #PORTCFG do the custom init */
-    if (mm_kernel_device_get_property_as_boolean (port_device, "ID_MM_TELIT_PORTS_TAGGED")) {
-        telit_custom_init_step (ctx);
-        return;
-    }
-
-    g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-    telit_custom_init_context_complete_and_free (ctx);
+    telit_custom_init_step (ctx);
 }

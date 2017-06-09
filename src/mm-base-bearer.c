@@ -46,7 +46,9 @@
 
 #define BEARER_STATS_UPDATE_TIMEOUT 30
 
-#define BEARER_CONNECTION_MONITOR_TIMEOUT 5
+/* Initial connectivity check after 30s, then each 5s */
+#define BEARER_CONNECTION_MONITOR_INITIAL_TIMEOUT 30
+#define BEARER_CONNECTION_MONITOR_TIMEOUT          5
 
 G_DEFINE_TYPE (MMBaseBearer, mm_base_bearer, MM_GDBUS_TYPE_BEARER_SKELETON)
 
@@ -92,6 +94,8 @@ struct _MMBaseBearerPrivate {
 
     /* Connection status monitoring */
     guint connection_monitor_id;
+    /* Flag to specify whether connection monitoring is supported or not */
+    gboolean load_connection_status_unsupported;
 
     /*-- 3GPP specific --*/
     guint deferred_3gpp_unregistration_id;
@@ -162,7 +166,18 @@ load_connection_status_ready (MMBaseBearer *self,
 
     status = MM_BASE_BEARER_GET_CLASS (self)->load_connection_status_finish (self, res, &error);
     if (status == MM_BEARER_CONNECTION_STATUS_UNKNOWN) {
-        mm_warn ("checking if connected failed: %s", error->message);
+        /* Only warn if not reporting an "unsupported" error */
+        if (!g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED)) {
+            mm_warn ("checking if connected failed: %s", error->message);
+            g_error_free (error);
+            return;
+        }
+
+        /* If we're being told that connection monitoring is unsupported, just
+         * ignore the error and remove the timeout. */
+        mm_dbg ("Connection monitoring is unsupported by the device");
+        self->priv->load_connection_status_unsupported = TRUE;
+        connection_monitor_stop (self);
         g_error_free (error);
         return;
     }
@@ -176,12 +191,29 @@ load_connection_status_ready (MMBaseBearer *self,
 static gboolean
 connection_monitor_cb (MMBaseBearer *self)
 {
-    /* If the implementation knows how to update stat values, run it */
+    /* If the implementation knows how to load connection status, run it */
     MM_BASE_BEARER_GET_CLASS (self)->load_connection_status (
-            self,
-            (GAsyncReadyCallback)load_connection_status_ready,
-            NULL);
+        self,
+        (GAsyncReadyCallback)load_connection_status_ready,
+        NULL);
     return G_SOURCE_CONTINUE;
+}
+
+static gboolean
+initial_connection_monitor_cb (MMBaseBearer *self)
+{
+    MM_BASE_BEARER_GET_CLASS (self)->load_connection_status (
+        self,
+        (GAsyncReadyCallback)load_connection_status_ready,
+        NULL);
+
+    /* Add new monitor timeout at a higher rate */
+    self->priv->connection_monitor_id = g_timeout_add_seconds (BEARER_CONNECTION_MONITOR_TIMEOUT,
+                                                               (GSourceFunc) connection_monitor_cb,
+                                                               self);
+
+    /* Remove the initial connection monitor timeout as we added a new one */
+    return G_SOURCE_REMOVE;
 }
 
 static void
@@ -192,10 +224,13 @@ connection_monitor_start (MMBaseBearer *self)
         !MM_BASE_BEARER_GET_CLASS (self)->load_connection_status_finish)
         return;
 
-    /* Schedule */
+    if (self->priv->load_connection_status_unsupported)
+        return;
+
+    /* Schedule initial check */
     g_assert (!self->priv->connection_monitor_id);
-    self->priv->connection_monitor_id = g_timeout_add_seconds (BEARER_CONNECTION_MONITOR_TIMEOUT,
-                                                               (GSourceFunc) connection_monitor_cb,
+    self->priv->connection_monitor_id = g_timeout_add_seconds (BEARER_CONNECTION_MONITOR_INITIAL_TIMEOUT,
+                                                               (GSourceFunc) initial_connection_monitor_cb,
                                                                self);
 }
 

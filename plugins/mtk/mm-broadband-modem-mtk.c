@@ -125,7 +125,7 @@ load_unlock_retries_ready (MMBaseModem *self,
 
         g_simple_async_result_set_op_res_gpointer (operation_result,
                                         retries,
-                                        (GDestroyNotify)g_object_unref);
+                                        g_object_unref);
     }
 
     if (match_info)
@@ -652,7 +652,7 @@ set_unsolicited_events_handlers (MMBroadbandModemMtk *self,
     ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
 
     /* Enable/disable unsolicited events in given port */
-    for (i = 0; i < 2; i++){
+    for (i = 0; i < G_N_ELEMENTS (ports); i++){
         if(!ports[i])
             continue;
 

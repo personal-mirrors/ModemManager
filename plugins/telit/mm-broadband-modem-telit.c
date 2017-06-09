@@ -32,16 +32,28 @@
 #include "mm-iface-modem-3gpp.h"
 #include "mm-broadband-modem-telit.h"
 #include "mm-modem-helpers-telit.h"
+#include "mm-telit-enums-types.h"
 
 static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
 
 static MMIfaceModem *iface_modem_parent;
+static MMIfaceModem3gpp *iface_modem_3gpp_parent;
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemTelit, mm_broadband_modem_telit, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init));
 
+typedef enum {
+    FEATURE_SUPPORT_UNKNOWN,
+    FEATURE_NOT_SUPPORTED,
+    FEATURE_SUPPORTED
+} FeatureSupport;
+
+struct _MMBroadbandModemTelitPrivate {
+    FeatureSupport csim_lock_support;
+    MMTelitQssStatus qss_status;
+};
 
 /*****************************************************************************/
 /* After Sim Unlock (Modem interface) */
@@ -81,49 +93,58 @@ modem_after_sim_unlock (MMIfaceModem *self,
 /*****************************************************************************/
 /* Setup SIM hot swap (Modem interface) */
 
+typedef enum {
+    QSS_SETUP_STEP_FIRST,
+    QSS_SETUP_STEP_QUERY,
+    QSS_SETUP_STEP_ENABLE_PRIMARY_PORT,
+    QSS_SETUP_STEP_ENABLE_SECONDARY_PORT,
+    QSS_SETUP_STEP_LAST
+} QssSetupStep;
+
+typedef struct {
+    QssSetupStep step;
+    MMPortSerialAt *primary;
+    MMPortSerialAt *secondary;
+    GError *primary_error;
+    GError *secondary_error;
+} QssSetupContext;
+
+static void qss_setup_step (GTask *task);
+
 static void
 telit_qss_unsolicited_handler (MMPortSerialAt *port,
                                GMatchInfo *match_info,
                                MMBroadbandModemTelit *self)
 {
-    guint qss;
+    MMTelitQssStatus cur_qss_status;
+    MMTelitQssStatus prev_qss_status;
 
-    if (!mm_get_uint_from_match_info (match_info, 1, &qss))
+    if (!mm_get_int_from_match_info (match_info, 1, (gint*)&cur_qss_status))
         return;
 
-    switch (qss) {
-        case 0:
-            mm_info ("QSS: SIM removed");
-            break;
-        case 1:
-            mm_info ("QSS: SIM inserted");
-            break;
-        case 2:
-            mm_info ("QSS: SIM inserted and PIN unlocked");
-            break;
-        case 3:
-            mm_info ("QSS: SIM inserted and PIN locked");
-            break;
-        default:
-            mm_warn ("QSS: unknown QSS value %d", qss);
-            break;
-    }
+    prev_qss_status = self->priv->qss_status;
+    self->priv->qss_status = cur_qss_status;
 
-    mm_broadband_modem_update_sim_hot_swap_detected (MM_BROADBAND_MODEM (self));
+    if (cur_qss_status != prev_qss_status)
+        mm_dbg ("QSS: status changed '%s -> %s",
+                mm_telit_qss_status_get_string (prev_qss_status),
+                mm_telit_qss_status_get_string (cur_qss_status));
+
+    if ((prev_qss_status == QSS_STATUS_SIM_REMOVED && cur_qss_status != QSS_STATUS_SIM_REMOVED) ||
+        (prev_qss_status > QSS_STATUS_SIM_REMOVED && cur_qss_status == QSS_STATUS_SIM_REMOVED)) {
+        mm_info ("QSS: SIM swap detected");
+        mm_broadband_modem_update_sim_hot_swap_detected (MM_BROADBAND_MODEM (self));
+    }
 }
 
-typedef struct {
-    MMBroadbandModemTelit *self;
-    GSimpleAsyncResult *result;
-} ToggleQssUnsolicitedContext;
-
 static void
-toggle_qss_unsolicited_context_complete_and_free (ToggleQssUnsolicitedContext *ctx)
+qss_setup_context_free (QssSetupContext *ctx)
 {
-    g_simple_async_result_complete (ctx->result);
-    g_object_unref (ctx->result);
-    g_object_unref (ctx->self);
-    g_slice_free (ToggleQssUnsolicitedContext, ctx);
+    g_clear_object (&(ctx->primary));
+    g_clear_object (&(ctx->secondary));
+    g_clear_error (&(ctx->primary_error));
+    g_clear_error (&(ctx->secondary_error));
+    g_slice_free (QssSetupContext, ctx);
 }
 
 static gboolean
@@ -131,87 +152,168 @@ modem_setup_sim_hot_swap_finish (MMIfaceModem *self,
                                  GAsyncResult *res,
                                  GError **error)
 {
-    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
-telit_qss_toggle_ready (MMBaseModem *self,
+telit_qss_enable_ready (MMBaseModem *modem,
                         GAsyncResult *res,
-                        ToggleQssUnsolicitedContext *ctx)
+                        GTask *task)
 {
-    GError *error = NULL;
+    MMBroadbandModemTelit *self;
+    QssSetupContext *ctx;
+    MMPortSerialAt *port;
+    GError **error;
+    GRegex *pattern;
 
-    mm_base_modem_at_command_finish (self, res, &error);
-    if (error) {
-        mm_warn ("Enable QSS failed: %s", error->message);
-        g_simple_async_result_set_error (ctx->result,
-                                         MM_CORE_ERROR,
-                                         MM_CORE_ERROR_FAILED,
-                                         "Could not enable QSS");
-    } else {
-        MMPortSerialAt *primary;
-        MMPortSerialAt *secondary;
-        GRegex *pattern;
+    self = MM_BROADBAND_MODEM_TELIT (g_task_get_source_object (task));
+    ctx = g_task_get_task_data (task);
 
-        pattern = g_regex_new ("#QSS:\\s*([0-3])\\r\\n", G_REGEX_RAW, 0, NULL);
-        g_assert (pattern);
+    if (ctx->step == QSS_SETUP_STEP_ENABLE_PRIMARY_PORT) {
+        port = ctx->primary;
+        error = &ctx->primary_error;
+    } else if (ctx->step == QSS_SETUP_STEP_ENABLE_SECONDARY_PORT) {
+        port = ctx->secondary;
+        error = &ctx->secondary_error;
+    } else
+        g_assert_not_reached ();
 
-        primary = mm_base_modem_peek_port_primary (MM_BASE_MODEM (ctx->self));
-        mm_port_serial_at_add_unsolicited_msg_handler (
-            primary,
-            pattern,
-            (MMPortSerialAtUnsolicitedMsgFn)telit_qss_unsolicited_handler,
-            ctx->self,
-            NULL);
-
-        secondary = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (ctx->self));
-        if (secondary)
-            mm_port_serial_at_add_unsolicited_msg_handler (
-                secondary,
-                pattern,
-                (MMPortSerialAtUnsolicitedMsgFn)telit_qss_unsolicited_handler,
-                ctx->self,
-                NULL);
-
-        g_regex_unref (pattern);
-        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-
+    if (!mm_base_modem_at_command_full_finish (modem, res, error)) {
+        mm_warn ("QSS: error enabling unsolicited on port %s: %s", mm_port_get_device (MM_PORT (port)), (*error)->message);
+        goto next_step;
     }
 
-    toggle_qss_unsolicited_context_complete_and_free (ctx);
+    pattern = g_regex_new ("#QSS:\\s*([0-3])\\r\\n", G_REGEX_RAW, 0, NULL);
+    g_assert (pattern);
+    mm_port_serial_at_add_unsolicited_msg_handler (
+        port,
+        pattern,
+        (MMPortSerialAtUnsolicitedMsgFn)telit_qss_unsolicited_handler,
+        self,
+        NULL);
+    g_regex_unref (pattern);
+
+next_step:
+    ctx->step++;
+    qss_setup_step (task);
 }
 
+static void
+telit_qss_query_ready (MMBaseModem *modem,
+                       GAsyncResult *res,
+                       GTask *task)
+{
+    MMBroadbandModemTelit *self;
+    GError *error = NULL;
+    const gchar *response;
+    MMTelitQssStatus qss_status;
+    QssSetupContext *ctx;
+
+    self = MM_BROADBAND_MODEM_TELIT (g_task_get_source_object (task));
+    ctx = g_task_get_task_data (task);
+
+    response = mm_base_modem_at_command_finish (modem, res, &error);
+    if (error) {
+        mm_warn ("Could not get \"#QSS?\" reply: %s", error->message);
+        g_error_free (error);
+        goto next_step;
+    }
+
+    qss_status = mm_telit_parse_qss_query (response, &error);
+    if (error) {
+        mm_warn ("QSS query parse error: %s", error->message);
+        g_error_free (error);
+        goto next_step;
+    }
+
+    mm_info ("QSS: current status is '%s'", mm_telit_qss_status_get_string (qss_status));
+    self->priv->qss_status = qss_status;
+
+next_step:
+    ctx->step++;
+    qss_setup_step (task);
+}
+
+static void
+qss_setup_step (GTask *task)
+{
+    QssSetupContext *ctx;
+    MMBroadbandModemTelit *self;
+
+    self = MM_BROADBAND_MODEM_TELIT (g_task_get_source_object (task));
+    ctx = g_task_get_task_data (task);
+
+    switch (ctx->step) {
+        case QSS_SETUP_STEP_FIRST:
+            /* Fall back on next step */
+            ctx->step++;
+        case QSS_SETUP_STEP_QUERY:
+            mm_base_modem_at_command (MM_BASE_MODEM (self),
+                                      "#QSS?",
+                                      3,
+                                      FALSE,
+                                      (GAsyncReadyCallback) telit_qss_query_ready,
+                                      task);
+            return;
+        case QSS_SETUP_STEP_ENABLE_PRIMARY_PORT:
+            mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                           ctx->primary,
+                                           "#QSS=1",
+                                           3,
+                                           FALSE,
+                                           FALSE, /* raw */
+                                           NULL, /* cancellable */
+                                           (GAsyncReadyCallback) telit_qss_enable_ready,
+                                           task);
+            return;
+        case QSS_SETUP_STEP_ENABLE_SECONDARY_PORT:
+            if (ctx->secondary) {
+                mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                               ctx->secondary,
+                                               "#QSS=1",
+                                               3,
+                                               FALSE,
+                                               FALSE, /* raw */
+                                               NULL, /* cancellable */
+                                               (GAsyncReadyCallback) telit_qss_enable_ready,
+                                               task);
+                return;
+            }
+            /* Fall back to next step */
+            ctx->step++;
+        case QSS_SETUP_STEP_LAST:
+            /* If all enabling actions failed (either both, or only primary if
+             * there is no secondary), then we return an error */
+            if (ctx->primary_error &&
+                (ctx->secondary_error || !ctx->secondary))
+                g_task_return_new_error (task,
+                                         MM_CORE_ERROR,
+                                         MM_CORE_ERROR_FAILED,
+                                         "QSS: couldn't enable unsolicited");
+            else
+                g_task_return_boolean (task, TRUE);
+            g_object_unref (task);
+            break;
+    }
+}
 
 static void
 modem_setup_sim_hot_swap (MMIfaceModem *self,
                           GAsyncReadyCallback callback,
                           gpointer user_data)
 {
-    ToggleQssUnsolicitedContext *ctx;
-    MMPortSerialAt *port;
+    QssSetupContext *ctx;
+    GTask *task;
 
-    mm_dbg ("Telit SIM hot swap: Enable QSS");
+    task = g_task_new (self, NULL, callback, user_data);
 
-    ctx = g_slice_new0 (ToggleQssUnsolicitedContext);
-    ctx->self = g_object_ref (MM_BROADBAND_MODEM_TELIT (self));
-    ctx->result = g_simple_async_result_new (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             modem_setup_sim_hot_swap);
+    ctx = g_slice_new0 (QssSetupContext);
+    ctx->step = QSS_SETUP_STEP_FIRST;
+    ctx->primary = mm_base_modem_get_port_primary (MM_BASE_MODEM (self));
+    ctx->secondary = mm_base_modem_get_port_secondary (MM_BASE_MODEM (self));
 
-    port = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
-    if (!port)
-        port = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
-
-    mm_base_modem_at_command_full (MM_BASE_MODEM (self),
-                                   port,
-                                   "#QSS=1",
-                                   3,
-                                   FALSE,
-                                   FALSE, /* raw */
-                                   NULL, /* cancellable */
-                                   (GAsyncReadyCallback) telit_qss_toggle_ready,
-                                   ctx);
+    g_task_set_task_data (task, ctx, (GDestroyNotify) qss_setup_context_free);
+    qss_setup_step (task);
 }
 
 /*****************************************************************************/
@@ -417,7 +519,6 @@ modem_load_current_bands (MMIfaceModem *self,
                               ctx);
 }
 
-
 /*****************************************************************************/
 /* Load supported bands (Modem interface) */
 
@@ -450,8 +551,17 @@ modem_load_supported_bands (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Load unlock retries (Modem interface) */
+/* Load unlock retries (Modem interface)
+ *
+ * NOTE: the logic must make sure that LOAD_UNLOCK_RETRIES_STEP_UNLOCK is always
+ * run if LOAD_UNLOCK_RETRIES_STEP_LOCK has been run. Currently, the logic just
+ * runs all intermediate steps ignoring errors (i.e. not completing the
+ * operation if something fails), so the LOAD_UNLOCK_RETRIES_STEP_UNLOCK is
+ * always run.
+ */
 
+#define CSIM_LOCK_STR               "+CSIM=1"
+#define CSIM_UNLOCK_STR             "+CSIM=0"
 #define CSIM_QUERY_PIN_RETRIES_STR  "+CSIM=10,0020000100"
 #define CSIM_QUERY_PUK_RETRIES_STR  "+CSIM=10,002C000100"
 #define CSIM_QUERY_PIN2_RETRIES_STR "+CSIM=10,0020008100"
@@ -460,12 +570,21 @@ modem_load_supported_bands (MMIfaceModem *self,
 
 typedef enum {
     LOAD_UNLOCK_RETRIES_STEP_FIRST,
+    LOAD_UNLOCK_RETRIES_STEP_LOCK,
     LOAD_UNLOCK_RETRIES_STEP_PIN,
     LOAD_UNLOCK_RETRIES_STEP_PUK,
     LOAD_UNLOCK_RETRIES_STEP_PIN2,
     LOAD_UNLOCK_RETRIES_STEP_PUK2,
+    LOAD_UNLOCK_RETRIES_STEP_UNLOCK,
     LOAD_UNLOCK_RETRIES_STEP_LAST
 } LoadUnlockRetriesStep;
+
+static const gchar *step_lock_names[LOAD_UNLOCK_RETRIES_STEP_LAST] = {
+    [LOAD_UNLOCK_RETRIES_STEP_PIN] = "PIN",
+    [LOAD_UNLOCK_RETRIES_STEP_PUK] = "PUK",
+    [LOAD_UNLOCK_RETRIES_STEP_PIN2] = "PIN2",
+    [LOAD_UNLOCK_RETRIES_STEP_PUK2] = "PUK2",
+};
 
 typedef struct {
     MMBroadbandModemTelit *self;
@@ -500,6 +619,34 @@ modem_load_unlock_retries_finish (MMIfaceModem *self,
 }
 
 static void
+csim_unlock_ready (MMBaseModem              *self,
+                   GAsyncResult             *res,
+                   LoadUnlockRetriesContext *ctx)
+{
+    const gchar *response;
+    GError      *error = NULL;
+
+    /* Ignore errors */
+    response = mm_base_modem_at_command_finish (self, res, &error);
+    if (!response) {
+        if (g_error_matches (error,
+                             MM_MOBILE_EQUIPMENT_ERROR,
+                             MM_MOBILE_EQUIPMENT_ERROR_NOT_SUPPORTED)) {
+            ctx->self->priv->csim_lock_support = FEATURE_NOT_SUPPORTED;
+        }
+        mm_warn ("Couldn't unlock SIM card: %s", error->message);
+        g_error_free (error);
+    }
+
+    if (ctx->self->priv->csim_lock_support != FEATURE_NOT_SUPPORTED) {
+        ctx->self->priv->csim_lock_support = FEATURE_SUPPORTED;
+    }
+
+    ctx->step++;
+    load_unlock_retries_step (ctx);
+}
+
+static void
 csim_query_ready (MMBaseModem *self,
                   GAsyncResult *res,
                   LoadUnlockRetriesContext *ctx)
@@ -511,37 +658,36 @@ csim_query_ready (MMBaseModem *self,
     response = mm_base_modem_at_command_finish (self, res, &error);
 
     if (!response) {
-        mm_warn ("No respose for step %d: %s", ctx->step, error->message);
+        mm_warn ("load %s unlock retries got no response: %s", step_lock_names[ctx->step], error->message);
         g_error_free (error);
         goto next_step;
     }
 
-    if ( (unlock_retries = mm_telit_parse_csim_response (ctx->step, response, &error)) < 0) {
-        mm_warn ("Parse error in step %d: %s.", ctx->step, error->message);
+    if ( (unlock_retries = mm_telit_parse_csim_response (response, &error)) < 0) {
+        mm_warn ("load %s unlock retries parse error: %s.", step_lock_names[ctx->step], error->message);
         g_error_free (error);
         goto next_step;
     }
 
     ctx->succeded_requests++;
 
+    mm_dbg ("%s unlock retries left: %d", step_lock_names[ctx->step], unlock_retries);
+
     switch (ctx->step) {
         case LOAD_UNLOCK_RETRIES_STEP_PIN:
-            mm_dbg ("PIN unlock retries left: %d", unlock_retries);
             mm_unlock_retries_set (ctx->retries, MM_MODEM_LOCK_SIM_PIN, unlock_retries);
             break;
         case LOAD_UNLOCK_RETRIES_STEP_PUK:
-            mm_dbg ("PUK unlock retries left: %d", unlock_retries);
             mm_unlock_retries_set (ctx->retries, MM_MODEM_LOCK_SIM_PUK, unlock_retries);
             break;
         case LOAD_UNLOCK_RETRIES_STEP_PIN2:
-            mm_dbg ("PIN2 unlock retries left: %d", unlock_retries);
             mm_unlock_retries_set (ctx->retries, MM_MODEM_LOCK_SIM_PIN2, unlock_retries);
             break;
         case LOAD_UNLOCK_RETRIES_STEP_PUK2:
-            mm_dbg ("PUK2 unlock retries left: %d", unlock_retries);
             mm_unlock_retries_set (ctx->retries, MM_MODEM_LOCK_SIM_PUK2, unlock_retries);
             break;
         default:
+            g_assert_not_reached ();
             break;
     }
 
@@ -551,12 +697,81 @@ next_step:
 }
 
 static void
+csim_lock_ready (MMBaseModem              *self,
+                 GAsyncResult             *res,
+                 LoadUnlockRetriesContext *ctx)
+{
+    const gchar *response;
+    GError      *error = NULL;
+
+    response = mm_base_modem_at_command_finish (self, res, &error);
+    if (!response) {
+        if (g_error_matches (error,
+                             MM_MOBILE_EQUIPMENT_ERROR,
+                             MM_MOBILE_EQUIPMENT_ERROR_NOT_SUPPORTED)) {
+            ctx->self->priv->csim_lock_support = FEATURE_NOT_SUPPORTED;
+            mm_warn ("Couldn't lock SIM card: %s. Continuing without CSIM lock.", error->message);
+            g_error_free (error);
+        } else {
+            g_prefix_error (&error, "Couldn't lock SIM card: ");
+            g_simple_async_result_take_error (ctx->result, error);
+            load_unlock_retries_context_complete_and_free (ctx);
+            return;
+        }
+    }
+
+    if (ctx->self->priv->csim_lock_support != FEATURE_NOT_SUPPORTED) {
+        ctx->self->priv->csim_lock_support = FEATURE_SUPPORTED;
+    }
+
+    ctx->step++;
+    load_unlock_retries_step (ctx);
+}
+
+static void
+handle_csim_locking (LoadUnlockRetriesContext *ctx, gboolean is_lock)
+{
+    switch (ctx->self->priv->csim_lock_support) {
+        case FEATURE_SUPPORT_UNKNOWN:
+        case FEATURE_SUPPORTED:
+            if (is_lock) {
+                mm_base_modem_at_command (MM_BASE_MODEM (ctx->self),
+                                          CSIM_LOCK_STR,
+                                          CSIM_QUERY_TIMEOUT,
+                                          FALSE,
+                                          (GAsyncReadyCallback) csim_lock_ready,
+                                          ctx);
+            } else {
+                mm_base_modem_at_command (MM_BASE_MODEM (ctx->self),
+                                          CSIM_UNLOCK_STR,
+                                          CSIM_QUERY_TIMEOUT,
+                                          FALSE,
+                                          (GAsyncReadyCallback) csim_unlock_ready,
+                                          ctx);
+            }
+            break;
+        case FEATURE_NOT_SUPPORTED:
+            mm_dbg ("CSIM lock not supported by this modem. Skipping %s command",
+                    is_lock ? "lock" : "unlock");
+            ctx->step++;
+            load_unlock_retries_step (ctx);
+            break;
+        default:
+            g_assert_not_reached ();
+            break;
+    }
+}
+
+static void
 load_unlock_retries_step (LoadUnlockRetriesContext *ctx)
 {
     switch (ctx->step) {
         case LOAD_UNLOCK_RETRIES_STEP_FIRST:
             /* Fall back on next step */
             ctx->step++;
+        case LOAD_UNLOCK_RETRIES_STEP_LOCK:
+            handle_csim_locking (ctx, TRUE);
+            break;
         case LOAD_UNLOCK_RETRIES_STEP_PIN:
             mm_base_modem_at_command (MM_BASE_MODEM (ctx->self),
                                       CSIM_QUERY_PIN_RETRIES_STR,
@@ -589,6 +804,9 @@ load_unlock_retries_step (LoadUnlockRetriesContext *ctx)
                                       (GAsyncReadyCallback) csim_query_ready,
                                       ctx);
             break;
+        case LOAD_UNLOCK_RETRIES_STEP_UNLOCK:
+            handle_csim_locking (ctx, FALSE);
+            break;
         case LOAD_UNLOCK_RETRIES_STEP_LAST:
             if (ctx->succeded_requests == 0) {
                 g_simple_async_result_set_error (ctx->result,
@@ -598,7 +816,7 @@ load_unlock_retries_step (LoadUnlockRetriesContext *ctx)
             } else {
                 g_simple_async_result_set_op_res_gpointer (ctx->result,
                                                            g_object_ref (ctx->retries),
-                                                           (GDestroyNotify)g_object_unref);
+                                                           g_object_unref);
             }
 
             load_unlock_retries_context_complete_and_free (ctx);
@@ -761,7 +979,7 @@ response_processor_service_ignore_at_errors (MMBaseModem *self,
                                              GVariant **result,
                                              GError **result_error)
 {
-    const gchar *service, *mode;
+    const gchar *service;
 
     if (error) {
         /* Ignore AT errors (ie, ERROR or CMx ERROR) */
@@ -771,9 +989,8 @@ response_processor_service_ignore_at_errors (MMBaseModem *self,
     }
 
     service = mm_strip_tag (response, "+SERVICE:");
-    mode = strchr (service, ',');
-    if (mode) {
-        switch (atoi (++mode)) {
+    if (service) {
+        switch (atoi (service)) {
         case 1:
             *result = g_variant_new_uint32 (MM_MODEM_ACCESS_TECHNOLOGY_1XRTT);
             return TRUE;
@@ -815,52 +1032,6 @@ load_access_technologies (MMIfaceModem *self,
         NULL, /* response_processor_context_free */
         callback,
         user_data);
-}
-
-/*****************************************************************************/
-/* Flow control (Modem interface) */
-
-static gboolean
-setup_flow_control_finish (MMIfaceModem *self,
-                           GAsyncResult *res,
-                           GError **error)
-{
-    /* Completely ignore errors */
-    return TRUE;
-}
-
-static void
-setup_flow_control (MMIfaceModem *self,
-                    GAsyncReadyCallback callback,
-                    gpointer user_data)
-{
-    GSimpleAsyncResult *result;
-    gchar *cmd;
-    guint flow_control = 1; /* Default flow control: XON/XOFF */
-
-    switch (mm_base_modem_get_product_id (MM_BASE_MODEM (self)) & 0xFFFF) {
-    case 0x0021:
-        flow_control = 2; /* Telit IMC modems support only RTS/CTS mode */
-        break;
-    default:
-        break;
-    }
-
-    cmd = g_strdup_printf ("+IFC=%u,%u", flow_control, flow_control);
-    mm_base_modem_at_command (MM_BASE_MODEM (self),
-                              cmd,
-                              3,
-                              FALSE,
-                              NULL,
-                              NULL);
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        setup_flow_control);
-    g_simple_async_result_set_op_res_gboolean (result, TRUE);
-    g_simple_async_result_complete_in_idle (result);
-    g_object_unref (result);
-    g_free (cmd);
 }
 
 /*****************************************************************************/
@@ -1141,40 +1312,69 @@ load_supported_modes (MMIfaceModem *self,
 /* Enabling unsolicited events (3GPP interface) */
 
 static gboolean
-modem_3gpp_enable_unsolicited_events_finish (MMIfaceModem3gpp *self,
-                                             GAsyncResult *res,
-                                             GError **error)
+modem_3gpp_enable_unsolicited_events_finish (MMIfaceModem3gpp  *self,
+                                             GAsyncResult      *res,
+                                             GError           **error)
 {
-   /* Ignore errors */
-    mm_base_modem_at_sequence_full_finish (MM_BASE_MODEM (self),
-                                           res,
-                                           NULL,
-                                           NULL);
-    return TRUE;
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
-static const MMBaseModemAtCommand unsolicited_enable_sequence[] = {
-    /* Enable +CIEV only for: signal, service, roam */
-    { "AT+CIND=0,1,1,0,0,0,1,0,0", 5, FALSE, NULL },
-    /* Telit modems +CMER command supports only <ind>=2 */
-    { "+CMER=3,0,0,2", 5, FALSE, NULL },
-    { NULL }
-};
+static void
+cind_set_ready (MMBaseModem  *self,
+                GAsyncResult *res,
+                GTask        *task)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_at_command_finish (self, res, &error)) {
+        mm_warn ("Couldn't enable custom +CIND settings: %s", error->message);
+        g_error_free (error);
+    }
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
 
 static void
-modem_3gpp_enable_unsolicited_events (MMIfaceModem3gpp *self,
-                                      GAsyncReadyCallback callback,
-                                      gpointer user_data)
+parent_enable_unsolicited_events_ready (MMIfaceModem3gpp *self,
+                                        GAsyncResult     *res,
+                                        GTask            *task)
 {
-    mm_base_modem_at_sequence_full (
+    GError *error = NULL;
+
+    if (!iface_modem_3gpp_parent->enable_unsolicited_events_finish (self, res, &error)) {
+        mm_warn ("Couldn't enable parent 3GPP unsolicited events: %s", error->message);
+        g_error_free (error);
+    }
+
+    /* Our own enable now */
+    mm_base_modem_at_command_full (
         MM_BASE_MODEM (self),
         mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self)),
-        unsolicited_enable_sequence,
-        NULL,  /* response_processor_context */
-        NULL,  /* response_processor_context_free */
-        NULL,  /* cancellable */
-        callback,
-        user_data);
+        /* Enable +CIEV only for: signal, service, roam */
+        "AT+CIND=0,1,1,0,0,0,1,0,0",
+        5,
+        FALSE,
+        FALSE,
+        NULL, /* cancellable */
+        (GAsyncReadyCallback)cind_set_ready,
+        task);
+}
+
+static void
+modem_3gpp_enable_unsolicited_events (MMIfaceModem3gpp    *self,
+                                      GAsyncReadyCallback  callback,
+                                      gpointer             user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* Chain up parent's enable */
+    iface_modem_3gpp_parent->enable_unsolicited_events (
+        self,
+        (GAsyncReadyCallback)parent_enable_unsolicited_events_ready,
+        task);
 }
 
 /*****************************************************************************/
@@ -1199,6 +1399,12 @@ mm_broadband_modem_telit_new (const gchar *device,
 static void
 mm_broadband_modem_telit_init (MMBroadbandModemTelit *self)
 {
+    self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self,
+                                              MM_TYPE_BROADBAND_MODEM_TELIT,
+                                              MMBroadbandModemTelitPrivate);
+
+    self->priv->csim_lock_support = FEATURE_SUPPORT_UNKNOWN;
+    self->priv->qss_status = QSS_STATUS_UNKNOWN;
 }
 
 static void
@@ -1220,8 +1426,6 @@ iface_modem_init (MMIfaceModem *iface)
     iface->modem_power_down_finish = modem_power_down_finish;
     iface->load_access_technologies = load_access_technologies;
     iface->load_access_technologies_finish = load_access_technologies_finish;
-    iface->setup_flow_control = setup_flow_control;
-    iface->setup_flow_control_finish = setup_flow_control_finish;
     iface->load_supported_modes = load_supported_modes;
     iface->load_supported_modes_finish = load_supported_modes_finish;
     iface->load_current_modes = load_current_modes;
@@ -1237,6 +1441,8 @@ iface_modem_init (MMIfaceModem *iface)
 static void
 iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
 {
+    iface_modem_3gpp_parent = g_type_interface_peek_parent (iface);
+
     iface->enable_unsolicited_events = modem_3gpp_enable_unsolicited_events;
     iface->enable_unsolicited_events_finish = modem_3gpp_enable_unsolicited_events_finish;
 }
@@ -1244,4 +1450,7 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
 static void
 mm_broadband_modem_telit_class_init (MMBroadbandModemTelitClass *klass)
 {
+    GObjectClass *object_class = G_OBJECT_CLASS (klass);
+
+    g_type_class_add_private (object_class, sizeof (MMBroadbandModemTelitPrivate));
 }

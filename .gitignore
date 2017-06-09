@@ -48,6 +48,8 @@ Makefile.in
 /src/mm-daemon-enums-types.h
 /src/mm-port-enums-types.c
 /src/mm-port-enums-types.h
+/src/mm-helper-enums-types.c
+/src/mm-helper-enums-types.h
 /src/mm-marshal.[ch]
 /src/tests/test-modem-helpers
 /src/tests/test-modem-helpers-qmi
@@ -172,6 +174,8 @@ Makefile.in
 /plugins/test-service-*
 
 /plugins/ublox/mm-ublox-enums-types.[ch]
+
+/plugins/telit/mm-telit-enums-types.[ch]
 
 /test/lsudev
 /test/mmtty
