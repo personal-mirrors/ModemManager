@@ -51,7 +51,7 @@ mbim_device_open_ready (MbimDevice *mbim_device,
 
     /* Reset the progress flag */
     self->priv->in_progress = FALSE;
-    if (!mbim_device_open_finish (mbim_device, res, &error)) {
+    if (!mbim_device_open_full_finish (mbim_device, res, &error)) {
         g_clear_object (&self->priv->mbim_device);
         g_task_return_error (task, error);
     } else
@@ -77,11 +77,12 @@ mbim_device_new_ready (GObject *unused,
     }
 
     /* Now open the MBIM device */
-    mbim_device_open (self->priv->mbim_device,
-                      30,
-                      g_task_get_cancellable (task),
-                      (GAsyncReadyCallback)mbim_device_open_ready,
-                      task);
+    mbim_device_open_full (self->priv->mbim_device,
+                           MBIM_DEVICE_OPEN_FLAGS_PROXY,
+                           30,
+                           g_task_get_cancellable (task),
+                           (GAsyncReadyCallback)mbim_device_open_ready,
+                           task);
 }
 
 void
