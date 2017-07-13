@@ -44,7 +44,7 @@ mm_telit_get_band_flag (GArray *bands_array,
     guint i;
 
     for (i = 0; i < bands_array->len; i++) {
-        MMModemBand band = g_array_index(bands_array, MMModemBand, i);
+        MMModemBand band = g_array_index (bands_array, MMModemBand, i);
 
         if (flag2g != NULL &&
             band > MM_MODEM_BAND_UNKNOWN && band <= MM_MODEM_BAND_G850) {
@@ -57,8 +57,8 @@ mm_telit_get_band_flag (GArray *bands_array,
         }
 
          if (flag4g != NULL &&
-             band >= MM_MODEM_BAND_EUTRAN_I && band <= MM_MODEM_BAND_EUTRAN_XLIV) {
-             mask4g += 1 << (band - MM_MODEM_BAND_EUTRAN_I);
+             band >= MM_MODEM_BAND_EUTRAN_1 && band <= MM_MODEM_BAND_EUTRAN_44) {
+             mask4g += 1 << (band - MM_MODEM_BAND_EUTRAN_1);
              found4g = TRUE;
         }
     }
@@ -284,7 +284,7 @@ mm_telit_parse_bnd_response (const gchar *response,
         goto end;
     }
 
-    if (!g_match_info_matches(match_info)) {
+    if (!g_match_info_matches (match_info)) {
         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                      "Could not find matches in response '%s'", response);
         goto end;
@@ -298,7 +298,7 @@ mm_telit_parse_bnd_response (const gchar *response,
     if (modem_is_3g && !mm_telit_get_3g_mm_bands (match_info, &bands, error))
         goto end;
 
-    if(modem_is_4g && !mm_telit_get_4g_mm_bands (match_info, &bands, error))
+    if (modem_is_4g && !mm_telit_get_4g_mm_bands (match_info, &bands, error))
         goto end;
 
     *supported_bands = bands;
@@ -308,9 +308,7 @@ end:
     if (!ret && bands != NULL)
         g_array_free (bands, TRUE);
 
-    if(match_info)
-        g_match_info_free (match_info);
-
+    g_match_info_free (match_info);
     g_regex_unref (r);
 
     return ret;
@@ -361,8 +359,7 @@ mm_telit_get_2g_mm_bands (GMatchInfo *match_info,
     }
 
 end:
-    if (match_str != NULL)
-        g_free (match_str);
+    g_free (match_str);
 
     if (flags != NULL)
         g_array_free (flags, TRUE);
@@ -432,8 +429,7 @@ mm_telit_get_3g_mm_bands (GMatchInfo *match_info,
     }
 
 end:
-    if (match_str != NULL)
-        g_free (match_str);
+    g_free (match_str);
 
     if (flags != NULL)
         g_array_free (flags, TRUE);
@@ -442,11 +438,10 @@ end:
 }
 
 gboolean
-mm_telit_get_4g_mm_bands(GMatchInfo *match_info,
-                         GArray **bands,
-                         GError **error)
+mm_telit_get_4g_mm_bands (GMatchInfo *match_info,
+                          GArray **bands,
+                          GError **error)
 {
-    GArray *flags = NULL;
     MMModemBand band;
     gboolean ret = TRUE;
     gchar *match_str = NULL;
@@ -463,7 +458,7 @@ mm_telit_get_4g_mm_bands(GMatchInfo *match_info,
         goto end;
     }
 
-    if (strstr(match_str, "-")) {
+    if (strstr (match_str, "-")) {
         tokens = g_strsplit (match_str, "-", -1);
         if (tokens == NULL) {
             g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
@@ -473,24 +468,21 @@ mm_telit_get_4g_mm_bands(GMatchInfo *match_info,
             goto end;
         }
         sscanf (tokens[1], "%d", &value);
+        g_strfreev (tokens);
     } else {
         sscanf (match_str, "%d", &value);
     }
 
-
     for (i = 0; value > 0; i++) {
         if (value % 2 != 0) {
-            band = MM_MODEM_BAND_EUTRAN_I + i;
+            band = MM_MODEM_BAND_EUTRAN_1 + i;
             g_array_append_val (*bands, band);
         }
         value = value >> 1;
     }
-end:
-    if (match_str != NULL)
-        g_free (match_str);
 
-    if (flags != NULL)
-        g_array_free (flags, TRUE);
+end:
+    g_free (match_str);
 
     return ret;
 }
@@ -563,19 +555,19 @@ mm_telit_get_band_flags_from_string (const gchar *flag_str,
     for (i = 0; tokens[i]; i++) {
         /* check whether tokens[i] defines a
          * single band value or a range of bands */
-        if (!strstr(tokens[i], "-")) {
-            sscanf(tokens[i], "%d", &flag);
+        if (!strstr (tokens[i], "-")) {
+            sscanf (tokens[i], "%d", &flag);
             g_array_append_val (*band_flags, flag);
         } else {
             gint range_start;
             gint range_end;
 
-            range = g_strsplit(tokens[i], "-", 2);
+            range = g_strsplit (tokens[i], "-", 2);
 
-            sscanf(range[0], "%d", &range_start);
-            sscanf(range[1], "%d", &range_end);
+            sscanf (range[0], "%d", &range_start);
+            sscanf (range[1], "%d", &range_end);
 
-            for (flag=range_start; flag <= range_end; flag++) {
+            for (flag = range_start; flag <= range_end; flag++) {
                 g_array_append_val (*band_flags, flag);
             }
 

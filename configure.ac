@@ -212,35 +212,63 @@ dnl
 
 PKG_CHECK_MODULES(LIBSYSTEMD, [libsystemd >= 209],[have_libsystemd=yes],[have_libsystemd=no])
 PKG_CHECK_MODULES(LIBSYSTEMD_LOGIN, [libsystemd-login >= 183],[have_libsystemd_login=yes],[have_libsystemd_login=no])
-AC_ARG_WITH(suspend-resume,
-            AS_HELP_STRING([--with-suspend-resume=no|systemd],
-                           [Enable suspend/resume support [[default=auto]]]),,
-            [with_suspend_resume=auto])
+AC_ARG_WITH(systemd-suspend-resume,
+            AS_HELP_STRING([--with-systemd-suspend-resume=no|yes],
+                           [Enable systemd suspend/resume support [[default=auto]]]),,
+            [with_systemd_suspend_resume=auto])
 
-if test "x$with_suspend_resume" = "xauto"; then
+if test "x$with_systemd_suspend_resume" = "xauto"; then
     if test "x$have_libsystemd" = "xyes" || test "x$have_libsystemd_login" = "xyes"; then
-        with_suspend_resume=systemd
+        with_systemd_suspend_resume=yes
     else
-        with_suspend_resume=no
+        with_systemd_suspend_resume=no
     fi
 fi
 
-case $with_suspend_resume in
-    no)
-        AC_DEFINE(WITH_SUSPEND_RESUME, 0, [Define if you have suspend-resume support])
-        ;;
-    systemd)
+case $with_systemd_suspend_resume in
+    yes)
         if test "x$have_libsystemd" = "xno" && test "x$have_libsystemd_login" = "xno"; then
 		    AC_MSG_ERROR(libsystemd or libsystemd-login development headers are required)
 	    fi
-        AC_DEFINE(WITH_SUSPEND_RESUME, 1, [Define if you have suspend-resume support])
+        AC_DEFINE(WITH_SYSTEMD_SUSPEND_RESUME, 1, [Define if you have systemd suspend-resume support])
         ;;
     *)
-        AC_MSG_ERROR([Wrong value for --with-suspend-resume: $with_suspend_resume])
+        with_systemd_suspend_resume=no
         ;;
 esac
 
-AM_CONDITIONAL(SUSPEND_RESUME_SYSTEMD, test "x$with_suspend_resume" = "xsystemd")
+AM_CONDITIONAL(WITH_SYSTEMD_SUSPEND_RESUME, test "x$with_systemd_suspend_resume" = "xyes")
+
+dnl-----------------------------------------------------------------------------
+dnl systemd journal support
+dnl
+
+AC_ARG_WITH(systemd-journal,
+            AS_HELP_STRING([--with-systemd-journal=no|yes|auto],
+                           [Enable systemd journal support [[default=auto]]]),,
+            [with_systemd_journal=auto])
+
+if test "x$with_systemd_journal" = "xauto"; then
+    if test "x$have_libsystemd" = "xyes"; then
+        with_systemd_journal=yes
+    else
+        with_systemd_journal=no
+    fi
+fi
+
+case $with_systemd_journal in
+    yes)
+        if test "x$have_libsystemd" = "xno"; then
+            AC_MSG_ERROR(libsystemd development headers are required)
+        fi
+        AC_DEFINE(WITH_SYSTEMD_JOURNAL, 1, [Define if you want systemd journal support])
+        ;;
+    *)
+        with_systemd_journal=no
+        ;;
+esac
+
+AM_CONDITIONAL(WITH_SYSTEMD_JOURNAL, test "x$with_systemd_journal" = "xyes")
 
 dnl-----------------------------------------------------------------------------
 dnl PolicyKit
@@ -262,9 +290,7 @@ elif test "x$with_polkit" = "xyes"; then
     with_polkit=strict
 fi
 
-if test "x$with_polkit" = "xno"; then
-    AC_DEFINE(WITH_POLKIT, 0, [Define if you have PolicyKit support])
-else
+if test "x$with_polkit" != "xno"; then
 	if test "x$have_polkit" = "xno"; then
 		AC_MSG_ERROR(PolicyKit development headers are required)
 	fi
@@ -420,11 +446,12 @@ echo "
       systemd unit directory:  ${with_systemdsystemunitdir}
 
     Features:
-      udev support:            ${with_udev}
-      policykit support:       ${with_polkit}
-      mbim support:            ${with_mbim}
-      qmi support:             ${with_qmi}
-      suspend/resume support:  ${with_suspend_resume}
+      udev:                    ${with_udev}
+      policykit:               ${with_polkit}
+      mbim:                    ${with_mbim}
+      qmi:                     ${with_qmi}
+      systemd suspend/resume:  ${with_systemd_suspend_resume}
+      systemd journal:         ${with_systemd_journal}
 
     Miscellaneous:
       gobject introspection:   ${found_introspection}

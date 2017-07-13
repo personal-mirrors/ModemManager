@@ -21,7 +21,7 @@
 /*****************************************************************************/
 /* Application context */
 
-#if WITH_UDEV
+#if defined WITH_UDEV
 # define NO_AUTO_SCAN_OPTION_FLAG 0
 # define NO_AUTO_SCAN_DEFAULT     FALSE
 #else
@@ -89,6 +89,7 @@ mm_context_get_no_auto_scan (void)
 
 static const gchar *log_level;
 static const gchar *log_file;
+static gboolean     log_journal;
 static gboolean     log_show_ts;
 static gboolean     log_rel_ts;
 
@@ -103,6 +104,13 @@ static const GOptionEntry log_entries[] = {
         "Path to log file",
         "[PATH]"
     },
+#if defined WITH_SYSTEMD_JOURNAL
+    {
+        "log-journal", 0, 0, G_OPTION_ARG_NONE, &log_journal,
+        "Log to systemd journal",
+        NULL
+    },
+#endif
     {
         "log-timestamps", 0, 0, G_OPTION_ARG_NONE, &log_show_ts,
         "Show timestamps in log output",
@@ -140,6 +148,12 @@ const gchar *
 mm_context_get_log_file (void)
 {
     return log_file;
+}
+
+gboolean
+mm_context_get_log_journal (void)
+{
+    return log_journal;
 }
 
 gboolean
@@ -279,7 +293,7 @@ mm_context_init (gint argc,
     }
 
     /* Initial kernel events processing may only be used if autoscan is disabled */
-#if WITH_UDEV
+#if defined WITH_UDEV
     if (!no_auto_scan && initial_kernel_events) {
         g_warning ("error: --initial-kernel-events must be used only if --no-auto-scan is also used");
         exit (1);

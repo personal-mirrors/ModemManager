@@ -667,7 +667,7 @@ mm_base_bearer_connect_finish (MMBaseBearer *self,
                                GAsyncResult *res,
                                GError **error)
 {
-    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
@@ -697,7 +697,7 @@ disconnect_after_cancel_ready (MMBaseBearer *self,
 static void
 connect_ready (MMBaseBearer *self,
                GAsyncResult *res,
-               GSimpleAsyncResult *simple)
+               GTask *task)
 {
     GError *error = NULL;
     gboolean launch_disconnect = FALSE;
@@ -716,19 +716,16 @@ connect_ready (MMBaseBearer *self,
             launch_disconnect = TRUE;
         } else
             bearer_update_status (self, MM_BEARER_STATUS_DISCONNECTED);
-
-        g_simple_async_result_take_error (simple, error);
     }
     /* Handle cancellations detected after successful connection */
     else if (g_cancellable_is_cancelled (self->priv->connect_cancellable)) {
         mm_dbg ("Connected bearer '%s', but need to disconnect", self->priv->path);
         mm_bearer_connect_result_unref (result);
-        g_simple_async_result_set_error (
-            simple,
+        error = g_error_new (
             MM_CORE_ERROR,
             MM_CORE_ERROR_CANCELLED,
             "Bearer got connected, but had to disconnect after cancellation request");
-            launch_disconnect = TRUE;
+        launch_disconnect = TRUE;
     }
     else {
         mm_dbg ("Connected bearer '%s'", self->priv->path);
@@ -740,7 +737,6 @@ connect_ready (MMBaseBearer *self,
             mm_bearer_connect_result_peek_ipv4_config (result),
             mm_bearer_connect_result_peek_ipv6_config (result));
         mm_bearer_connect_result_unref (result);
-        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
     }
 
     if (launch_disconnect) {
@@ -752,8 +748,13 @@ connect_ready (MMBaseBearer *self,
     }
 
     g_clear_object (&self->priv->connect_cancellable);
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+
+    if (error)
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+
+    g_object_unref (task);
 }
 
 void
@@ -761,17 +762,18 @@ mm_base_bearer_connect (MMBaseBearer *self,
                         GAsyncReadyCallback callback,
                         gpointer user_data)
 {
-    GSimpleAsyncResult *result;
+    GTask *task;
 
     g_assert (MM_BASE_BEARER_GET_CLASS (self)->connect != NULL);
     g_assert (MM_BASE_BEARER_GET_CLASS (self)->connect_finish != NULL);
 
     /* If already connecting, return error, don't allow a second request. */
     if (self->priv->status == MM_BEARER_STATUS_CONNECTING) {
-        g_simple_async_report_error_in_idle (
-            G_OBJECT (self),
+        g_task_report_new_error (
+            self,
             callback,
             user_data,
+            mm_base_bearer_connect,
             MM_CORE_ERROR,
             MM_CORE_ERROR_IN_PROGRESS,
             "Bearer already being connected");
@@ -781,10 +783,11 @@ mm_base_bearer_connect (MMBaseBearer *self,
     /* If currently disconnecting, return error, previous operation should
      * finish before allowing to connect again. */
     if (self->priv->status == MM_BEARER_STATUS_DISCONNECTING) {
-        g_simple_async_report_error_in_idle (
-            G_OBJECT (self),
+        g_task_report_new_error (
+            self,
             callback,
             user_data,
+            mm_base_bearer_connect,
             MM_CORE_ERROR,
             MM_CORE_ERROR_FAILED,
             "Bearer currently being disconnected");
@@ -794,10 +797,11 @@ mm_base_bearer_connect (MMBaseBearer *self,
     /* Check 3GPP roaming allowance, *only* roaming related here */
     if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (self->priv->modem)) &&
         self->priv->reason_3gpp == CONNECTION_FORBIDDEN_REASON_ROAMING) {
-        g_simple_async_report_error_in_idle (
-            G_OBJECT (self),
+        g_task_report_new_error (
+            self,
             callback,
             user_data,
+            mm_base_bearer_connect,
             MM_CORE_ERROR,
             MM_CORE_ERROR_UNAUTHORIZED,
             "Not allowed to connect bearer in 3GPP network: '%s'",
@@ -808,10 +812,11 @@ mm_base_bearer_connect (MMBaseBearer *self,
     /* Check CDMA roaming allowance, *only* roaming related here */
     if (mm_iface_modem_is_cdma (MM_IFACE_MODEM (self->priv->modem)) &&
         self->priv->reason_cdma == CONNECTION_FORBIDDEN_REASON_ROAMING) {
-        g_simple_async_report_error_in_idle (
-            G_OBJECT (self),
+        g_task_report_new_error (
+            self,
             callback,
             user_data,
+            mm_base_bearer_connect,
             MM_CORE_ERROR,
             MM_CORE_ERROR_UNAUTHORIZED,
             "Not allowed to connect bearer in CDMA network: '%s'",
@@ -819,16 +824,12 @@ mm_base_bearer_connect (MMBaseBearer *self,
         return;
     }
 
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        mm_base_bearer_connect);
+    task = g_task_new (self, NULL, callback, user_data);
 
     /* If already connected, done */
     if (self->priv->status == MM_BEARER_STATUS_CONNECTED) {
-        g_simple_async_result_set_op_res_gboolean (result, TRUE);
-        g_simple_async_result_complete_in_idle (result);
-        g_object_unref (result);
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
         return;
     }
 
@@ -841,7 +842,7 @@ mm_base_bearer_connect (MMBaseBearer *self,
         self,
         self->priv->connect_cancellable,
         (GAsyncReadyCallback)connect_ready,
-        result);
+        task);
 }
 
 typedef struct {
@@ -921,35 +922,34 @@ mm_base_bearer_disconnect_finish (MMBaseBearer *self,
                                   GAsyncResult *res,
                                   GError **error)
 {
-    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
 disconnect_ready (MMBaseBearer *self,
                   GAsyncResult *res,
-                  GSimpleAsyncResult *simple)
+                  GTask *task)
 {
     GError *error = NULL;
 
     if (!MM_BASE_BEARER_GET_CLASS (self)->disconnect_finish (self, res, &error)) {
         mm_dbg ("Couldn't disconnect bearer '%s'", self->priv->path);
         bearer_update_status (self, MM_BEARER_STATUS_CONNECTED);
-        g_simple_async_result_take_error (simple, error);
+        g_task_return_error (task, error);
     }
     else {
         mm_dbg ("Disconnected bearer '%s'", self->priv->path);
         bearer_update_status (self, MM_BEARER_STATUS_DISCONNECTED);
-        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
+        g_task_return_boolean (task, TRUE);
     }
 
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+    g_object_unref (task);
 }
 
 static void
 status_changed_complete_disconnect (MMBaseBearer *self,
                                     GParamSpec *pspec,
-                                    GSimpleAsyncResult *simple)
+                                    GTask *task)
 {
     /* We may get other states here before DISCONNECTED, like DISCONNECTING or
      * even CONNECTED. */
@@ -964,9 +964,8 @@ status_changed_complete_disconnect (MMBaseBearer *self,
 
     /* Note: interface state is updated when the DISCONNECTED state is set */
 
-    g_simple_async_result_set_op_res_gboolean (simple, TRUE);
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
 }
 
 void
@@ -974,33 +973,28 @@ mm_base_bearer_disconnect (MMBaseBearer *self,
                            GAsyncReadyCallback callback,
                            gpointer user_data)
 {
-    GSimpleAsyncResult *simple;
+    GTask *task;
 
     g_assert (MM_BASE_BEARER_GET_CLASS (self)->disconnect != NULL);
     g_assert (MM_BASE_BEARER_GET_CLASS (self)->disconnect_finish != NULL);
 
-    simple = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        mm_base_bearer_disconnect);
+    task = g_task_new (self, NULL, callback, user_data);
 
     /* If already disconnected, done */
     if (self->priv->status == MM_BEARER_STATUS_DISCONNECTED) {
-        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
-        g_simple_async_result_complete_in_idle (simple);
-        g_object_unref (simple);
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
         return;
     }
 
     /* If already disconnecting, return error, don't allow a second request. */
     if (self->priv->status == MM_BEARER_STATUS_DISCONNECTING) {
-        g_simple_async_result_set_error (
-            simple,
+        g_task_return_new_error (
+            task,
             MM_CORE_ERROR,
             MM_CORE_ERROR_IN_PROGRESS,
             "Bearer already being disconnected");
-        g_simple_async_result_complete_in_idle (simple);
-        g_object_unref (simple);
+        g_object_unref (task);
         return;
     }
 
@@ -1021,7 +1015,7 @@ mm_base_bearer_disconnect (MMBaseBearer *self,
             g_signal_connect (self,
                               "notify::" MM_BASE_BEARER_STATUS,
                               (GCallback)status_changed_complete_disconnect,
-                              simple); /* takes ownership */
+                              task); /* takes ownership */
 
         return;
     }
@@ -1031,7 +1025,7 @@ mm_base_bearer_disconnect (MMBaseBearer *self,
     MM_BASE_BEARER_GET_CLASS (self)->disconnect (
         self,
         (GAsyncReadyCallback)disconnect_ready,
-        simple); /* takes ownership */
+        task); /* takes ownership */
 }
 
 typedef struct {
