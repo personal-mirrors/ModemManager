@@ -414,6 +414,8 @@ MMModemLock mm_iface_modem_update_lock_info_finish (MMIfaceModem *self,
                                                     GAsyncResult *res,
                                                     GError **error);
 
+MMUnlockRetries *mm_iface_modem_get_unlock_retries (MMIfaceModem *self);
+
 /* Request signal quality check update.
  * It will not only return the signal quality status, but also set the property
  * values in the DBus interface. */
