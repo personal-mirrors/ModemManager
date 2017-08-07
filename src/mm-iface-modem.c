@@ -2947,9 +2947,9 @@ mm_iface_modem_get_unlock_retries (MMIfaceModem *self)
     return unlock_retries;
 }
 
-static void
-update_unlock_retries (MMIfaceModem *self,
-                       MMUnlockRetries *unlock_retries)
+void
+mm_iface_modem_update_unlock_retries (MMIfaceModem *self,
+                                      MMUnlockRetries *unlock_retries)
 {
     MmGdbusModem *skeleton = NULL;
     GVariant *previous_dictionary;
@@ -3037,7 +3037,7 @@ load_unlock_retries_ready (MMIfaceModem *self,
         g_error_free (error);
     } else {
         /* Update the dictionary in the DBus interface */
-        update_unlock_retries (self, unlock_retries);
+        mm_iface_modem_update_unlock_retries (self, unlock_retries);
         g_object_unref (unlock_retries);
     }
 
