@@ -710,50 +710,16 @@ pin_query_unlock_retries_ready (MbimDevice *device,
             NULL,
             &remaining_attempts,
             &error)) {
-        MMModemLock lock;
         MMUnlockRetries *retries;
 
-        lock = mm_modem_lock_from_mbim_pin_type (pin_type);
         retries = mm_unlock_retries_new ();
-
-        /* If PIN1 is disabled and we have tried to enable it with a wrong PIN,
-         * the modem would have indicated the number of remaining attempts for
-         * PIN1 (unless PUK1 is engaged) in the response to the failed
-         * MBIM_CID_PIN set operation. Thus, MMSimMbim would have updated
-         * MMIfaceModem's MMUnlockRetries with information about PIN1.
-         *
-         * However, a MBIM_CID_PIN query may be issued (e.g. MMBaseSim calls
-         * mm_iface_modem_update_lock_info()) after the MBIM_CID_PIN set
-         * operation to query the number of remaining attempts for a PIN type.
-         * Unfortunately, we can't specify a particular PIN type in a
-         * MBIM_CID_PIN query. The modem may not reply with information about
-         * PIN1 if PIN1 is disabled. When that happens, we would like to
-         * preserve our knowledge about the number of remaining attempts for
-         * PIN1. Here we thus carry over any existing information on PIN1 from
-         * MMIfaceModem's MMUnlockRetries if the MBIM_CID_PIN query reports
-         * something other than PIN1. */
-        if (lock != MM_MODEM_LOCK_SIM_PIN) {
-            MMIfaceModem *self;
-            MMUnlockRetries *previous_retries;
-            guint previous_sim_pin_retries;
-
-            self = g_task_get_source_object (task);
-            previous_retries = mm_iface_modem_get_unlock_retries (self);
-            previous_sim_pin_retries = mm_unlock_retries_get (previous_retries,
-                                                              MM_MODEM_LOCK_SIM_PIN);
-            if (previous_sim_pin_retries != MM_UNLOCK_RETRIES_UNKNOWN) {
-                mm_unlock_retries_set (retries,
-                                       MM_MODEM_LOCK_SIM_PIN,
-                                       previous_sim_pin_retries);
-            }
-        }
-
         /* According to the MBIM specification, RemainingAttempts is set to
          * 0xffffffff if the device does not support this information. */
         if (remaining_attempts != G_MAXUINT32) {
-            mm_unlock_retries_set (retries, lock, remaining_attempts);
+            mm_unlock_retries_set (retries,
+                                   mm_modem_lock_from_mbim_pin_type (pin_type),
+                                   remaining_attempts);
         }
-
         g_task_return_pointer (task, retries, g_object_unref);
     } else
         g_task_return_error (task, error);
