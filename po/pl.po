@@ -1,109 +1,109 @@
-# German translation of Modem Manager
-# Copyright (C) 2013 Free Software Foundation, Inc.
-# This file is distributed under the same license as the Modem Manager package.
-#
-# Mario Blättermann <mario.blaettermann@gmail.com>, 2013.
+# Polish translation for ModemManager.
+# Copyright © 2017 the ModemManager authors.
+# This file is distributed under the same license as the ModemManager package.
+# Piotr Drąg <piotrdrag@gmail.com>, 2017.
+# Aviary.pl <community-poland@mozilla.org>, 2017.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: ModemManager\n"
 "Report-Msgid-Bugs-To: modemmanager-devel@lists.freedesktop.org\n"
-"POT-Creation-Date: 2017-08-29 09:24+0200\n"
-"PO-Revision-Date: 2014-01-06 21:23+0100\n"
-"Last-Translator: Mario Blättermann <mario.blaettermann@gmail.com>\n"
-"Language-Team: German <debian-l10n-german@lists.debian.org>\n"
-"Language: de\n"
+"POT-Creation-Date: 2017-09-07 13:12+0200\n"
+"PO-Revision-Date: 2017-09-06 19:15+0200\n"
+"Last-Translator: Piotr Drąg <piotrdrag@gmail.com>\n"
+"Language-Team: Polish <community-poland@mozilla.org>\n"
+"Language: pl\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Generator: Poedit 1.5.4\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 "
+"|| n%100>=20) ? 1 : 2);\n"
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:13
 msgid "Control the Modem Manager daemon"
-msgstr "Den Modem-Manager-Daemon steuern"
+msgstr "Sterowanie usługą ModemManager"
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:14
 msgid "System policy prevents controlling the Modem Manager."
-msgstr "Die Systemrichtlinien verhindern die Steuerung von ModemManager."
+msgstr "Ustawienia systemu uniemożliwiają sterowanie usługą ModemManager."
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:22
 msgid "Unlock and control a mobile broadband device"
-msgstr "Ein mobiles Breitbandgerät entsperren und steuern"
+msgstr "Odblokowanie i sterowanie urządzeniem komórkowym"
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:23
 msgid ""
 "System policy prevents unlocking or controlling the mobile broadband device."
 msgstr ""
-"Die Systemrichtlinien verhindern das Entsperren oder Steuern des mobilen "
-"Breitbandgerätes."
+"Ustawienia systemu uniemożliwiają odblokowanie lub sterowanie urządzeniem "
+"komórkowym."
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:31
 msgid "Add, modify, and delete mobile broadband contacts"
-msgstr "Kontakte für mobiles Breitband hinzufügen, ändern und löschen"
+msgstr "Dodawanie, modyfikowanie i usuwanie kontaktów urządzenia komórkowego"
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:32
 msgid ""
 "System policy prevents adding, modifying, or deleting this device's contacts."
 msgstr ""
-"Die Systemrichtlinien verhindern das Hinzufügen, Ändern oder Löschen der "
-"Kontakte dieses Gerätes."
+"Ustawienia systemu uniemożliwiają dodawanie, modyfikowanie lub usuwanie "
+"kontaktów tego urządzenia."
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:40
 msgid "Send, save, modify, and delete text messages"
-msgstr "Textnachrichten senden, speichern, bearbeiten und löschen"
+msgstr "Wysyłanie, zapisywanie, modyfikowanie i usuwanie wiadomości SMS"
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:41
-#, fuzzy
 msgid ""
 "System policy prevents sending or manipulating this device's text messages."
 msgstr ""
-"Die Systemrichtlinien verhindern das Senden oder Bearbeiten der "
-"Textnachrichten dieses Gerätes."
+"Ustawienia systemu uniemożliwiają wysyłanie lub manipulowanie wiadomościami "
+"SMS tego urządzenia."
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:49
 msgid "Accept incoming voice calls or start outgoing voice calls."
-msgstr ""
+msgstr "Przyjmowanie połączeń przychodzących lub dzwonienie"
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:50
-#, fuzzy
 msgid "System policy prevents voice calls."
-msgstr "Die Systemrichtlinien verhindern die Steuerung von ModemManager."
+msgstr "Ustawienia systemu uniemożliwiają dzwonienie."
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:58
 msgid "Enable and view geographic location and positioning information"
 msgstr ""
-"Informationen zum geografischen Standort und Positionierung aktivieren und "
-"anzeigen"
+"Włączanie i wyświetlanie informacji o położeniu geograficznym "
+"i pozycjonowaniu"
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:59
 msgid ""
 "System policy prevents enabling or viewing geographic location information."
 msgstr ""
-"Die Systemrichtlinien verhindern das Aktivieren oder Ändern der "
-"Informationen zum geografischen Standort."
+"Ustawienia systemu uniemożliwiają włączanie lub wyświetlanie informacji "
+"o położeniu geograficznym."
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:67
 msgid "Query and utilize network information and services"
-msgstr "Netzwerkinformationen und -dienste abfragen und nutzen"
+msgstr "Odpytywanie i używanie informacji i usług sieciowych"
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:68
 msgid ""
 "System policy prevents querying or utilizing network information and "
 "services."
 msgstr ""
-"Die Systemrichtlinien verhindern die Abfrage der Netzwerkinformationen und -"
-"dienste."
+"Ustawienia systemu uniemożliwiają odpytywanie lub używanie informacji "
+"i usług sieciowych."
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:76
 msgid "Query and manage firmware on a mobile broadband device"
-msgstr "Firmware auf mobilen Breitbandgeräten abfragen und verwalten"
+msgstr ""
+"Odpytywanie i zarządzanie oprogramowaniem sprzętowym urządzenia komórkowego"
 
 #: data/org.freedesktop.ModemManager1.policy.in.in:77
 msgid "System policy prevents querying or managing this device's firmware."
 msgstr ""
-"Die Systemrichtlinien verhindern die Abfrage oder Verwaltung der Firmware "
-"dieses Gerätes."
+"Ustawienia systemu uniemożliwiają odpytywanie lub zarządzanie "
+"oprogramowaniem sprzętowym tego urządzenia."
 
 #: src/mm-sleep-monitor.c:114
 msgid "ModemManager needs to reset devices"
-msgstr ""
+msgstr "Usługa ModemManager musi ponownie uruchomić urządzenia"
