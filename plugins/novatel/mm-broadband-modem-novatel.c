@@ -149,22 +149,23 @@ load_current_modes_finish (MMIfaceModem *self,
 {
     LoadCurrentModesResult *result;
 
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+    result = g_task_propagate_pointer (G_TASK (res), error);
+    if (!result)
         return FALSE;
 
-    /* When a valid result is given, we never complete in idle */
-    result = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
     *allowed = result->allowed;
     *preferred = result->preferred;
+    g_free (result);
+
     return TRUE;
 }
 
 static void
 nwrat_query_ready (MMBaseModem *self,
                    GAsyncResult *res,
-                   GSimpleAsyncResult *simple)
+                   GTask *task)
 {
-    LoadCurrentModesResult result;
+    LoadCurrentModesResult *result;
     GError *error = NULL;
     const gchar *response;
     GRegex *r;
@@ -174,9 +175,8 @@ nwrat_query_ready (MMBaseModem *self,
 
     response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
     if (!response) {
-        g_simple_async_result_take_error (simple, error);
-        g_simple_async_result_complete (simple);
-        g_object_unref (simple);
+        g_task_return_error (task, error);
+        g_object_unref (task);
         return;
     }
 
@@ -186,15 +186,14 @@ nwrat_query_ready (MMBaseModem *self,
 
     if (!g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &error)) {
         if (error)
-            g_simple_async_result_take_error (simple, error);
+            g_task_return_error (task, error);
         else
-            g_simple_async_result_set_error (simple,
-                                             MM_CORE_ERROR,
-                                             MM_CORE_ERROR_FAILED,
-                                             "Couldn't match NWRAT reply: %s",
-                                             response);
-        g_simple_async_result_complete (simple);
-        g_object_unref (simple);
+            g_task_return_new_error (task,
+                                     MM_CORE_ERROR,
+                                     MM_CORE_ERROR_FAILED,
+                                     "Couldn't match NWRAT reply: %s",
+                                     response);
+        g_object_unref (task);
         g_match_info_free (match_info);
         g_regex_unref (r);
         return;
@@ -204,40 +203,41 @@ nwrat_query_ready (MMBaseModem *self,
         !mm_get_int_from_match_info (match_info, 2, &b) ||
         a < 0 || a > 2 ||
         b < 1 || b > 2) {
-        g_simple_async_result_set_error (
-            simple,
+        g_task_return_new_error (
+            task,
             MM_CORE_ERROR,
             MM_CORE_ERROR_FAILED,
             "Failed to parse mode/tech response '%s': invalid modes reported",
             response);
+        g_object_unref (task);
         g_match_info_free (match_info);
         g_regex_unref (r);
-        g_simple_async_result_complete (simple);
-        g_object_unref (simple);
         return;
     }
 
+    result = g_new0 (LoadCurrentModesResult, 1);
+
     switch (a) {
     case 0:
-        result.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-        result.preferred = MM_MODEM_MODE_NONE;
+        result->allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+        result->preferred = MM_MODEM_MODE_NONE;
         break;
     case 1:
         if (b == 1) {
-            result.allowed = MM_MODEM_MODE_2G;
-            result.preferred = MM_MODEM_MODE_NONE;
+            result->allowed = MM_MODEM_MODE_2G;
+            result->preferred = MM_MODEM_MODE_NONE;
         } else /* b == 2 */ {
-            result.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-            result.preferred = MM_MODEM_MODE_2G;
+            result->allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+            result->preferred = MM_MODEM_MODE_2G;
         }
         break;
     case 2:
         if (b == 1) {
-            result.allowed = MM_MODEM_MODE_3G;
-            result.preferred = MM_MODEM_MODE_NONE;
+            result->allowed = MM_MODEM_MODE_3G;
+            result->preferred = MM_MODEM_MODE_NONE;
         } else /* b == 2 */ {
-            result.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-            result.preferred = MM_MODEM_MODE_3G;
+            result->allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+            result->preferred = MM_MODEM_MODE_3G;
         }
         break;
     default:
@@ -249,10 +249,8 @@ nwrat_query_ready (MMBaseModem *self,
     g_match_info_free (match_info);
     g_regex_unref (r);
 
-    /* When a valid result is given, we never complete in idle */
-    g_simple_async_result_set_op_res_gpointer (simple, &result, NULL);
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+    g_task_return_pointer (task, result, g_free);
+    g_object_unref (task);
 }
 
 static void
@@ -260,22 +258,18 @@ load_current_modes (MMIfaceModem *self,
                     GAsyncReadyCallback callback,
                     gpointer user_data)
 {
-    GSimpleAsyncResult *result;
+    GTask *task;
 
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        load_current_modes);
+    task = g_task_new (self, NULL, callback, user_data);
 
     /* Load allowed modes only in 3GPP modems */
     if (!mm_iface_modem_is_3gpp (self)) {
-        g_simple_async_result_set_error (
-            result,
+        g_task_return_new_error (
+            task,
             MM_CORE_ERROR,
             MM_CORE_ERROR_UNSUPPORTED,
             "Loading allowed modes not supported in CDMA-only modems");
-        g_simple_async_result_complete_in_idle (result);
-        g_object_unref (result);
+        g_object_unref (task);
         return;
     }
 
@@ -284,7 +278,7 @@ load_current_modes (MMIfaceModem *self,
                               3,
                               FALSE,
                               (GAsyncReadyCallback)nwrat_query_ready,
-                              result);
+                              task);
 }
 
 /*****************************************************************************/
@@ -295,24 +289,23 @@ set_current_modes_finish (MMIfaceModem *self,
                           GAsyncResult *res,
                           GError **error)
 {
-    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
 allowed_mode_update_ready (MMBroadbandModemNovatel *self,
                            GAsyncResult *res,
-                           GSimpleAsyncResult *operation_result)
+                           GTask *task)
 {
     GError *error = NULL;
 
     mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
     if (error)
         /* Let the error be critical. */
-        g_simple_async_result_take_error (operation_result, error);
+        g_task_return_error (task, error);
     else
-        g_simple_async_result_set_op_res_gboolean (operation_result, TRUE);
-    g_simple_async_result_complete (operation_result);
-    g_object_unref (operation_result);
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
 }
 
 static void
@@ -322,25 +315,21 @@ set_current_modes (MMIfaceModem *self,
                    GAsyncReadyCallback callback,
                    gpointer user_data)
 {
-    GSimpleAsyncResult *result;
+    GTask *task;
     gchar *command;
     gint a = -1;
     gint b = -1;
 
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        set_current_modes);
+    task = g_task_new (self, NULL, callback, user_data);
 
     /* Setting allowed modes only in 3GPP modems */
     if (!mm_iface_modem_is_3gpp (self)) {
-        g_simple_async_result_set_error (
-            result,
+        g_task_return_new_error (
+            task,
             MM_CORE_ERROR,
             MM_CORE_ERROR_UNSUPPORTED,
             "Setting allowed modes not supported in CDMA-only modems");
-        g_simple_async_result_complete_in_idle (result);
-        g_object_unref (result);
+        g_object_unref (task);
         return;
     }
 
@@ -370,18 +359,16 @@ set_current_modes (MMIfaceModem *self,
 
         allowed_str = mm_modem_mode_build_string_from_mask (allowed);
         preferred_str = mm_modem_mode_build_string_from_mask (preferred);
-        g_simple_async_result_set_error (result,
-                                         MM_CORE_ERROR,
-                                         MM_CORE_ERROR_FAILED,
-                                         "Requested mode (allowed: '%s', preferred: '%s') not "
-                                         "supported by the modem.",
-                                         allowed_str,
-                                         preferred_str);
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Requested mode (allowed: '%s', preferred: '%s') not "
+                                 "supported by the modem.",
+                                 allowed_str,
+                                 preferred_str);
+        g_object_unref (task);
         g_free (allowed_str);
         g_free (preferred_str);
-
-        g_simple_async_result_complete_in_idle (result);
-        g_object_unref (result);
         return;
     }
 
@@ -392,7 +379,7 @@ set_current_modes (MMIfaceModem *self,
         3,
         FALSE,
         (GAsyncReadyCallback)allowed_mode_update_ready,
-        result);
+        task);
     g_free (command);
 }
 
@@ -716,30 +703,31 @@ modem_load_signal_quality_finish (MMIfaceModem *self,
                                   GAsyncResult *res,
                                   GError **error)
 {
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
-        return 0;
+    GError *inner_error = NULL;
+    gssize value;
 
-    return GPOINTER_TO_UINT (g_simple_async_result_get_op_res_gpointer (
-                                 G_SIMPLE_ASYNC_RESULT (res)));
+    value = g_task_propagate_int (G_TASK (res), &inner_error);
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return 0;
+    }
+    return (guint)value;
 }
 
 static void
 parent_load_signal_quality_ready (MMIfaceModem *self,
                                   GAsyncResult *res,
-                                  GSimpleAsyncResult *simple)
+                                  GTask *task)
 {
     GError *error = NULL;
     guint signal_quality;
 
     signal_quality = iface_modem_parent->load_signal_quality_finish (self, res, &error);
     if (error)
-        g_simple_async_result_take_error (simple, error);
+        g_task_return_error (task, error);
     else
-        g_simple_async_result_set_op_res_gpointer (simple,
-                                                   GUINT_TO_POINTER (signal_quality),
-                                                   NULL);
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+        g_task_return_int (task, signal_quality);
+    g_object_unref (task);
 }
 
 static gint
@@ -798,7 +786,7 @@ get_one_quality (const gchar *reply,
 static void
 nwrssi_ready (MMBaseModem *self,
               GAsyncResult *res,
-              GSimpleAsyncResult *simple)
+              GTask *task)
 {
     const gchar *response;
     gint quality;
@@ -809,7 +797,7 @@ nwrssi_ready (MMBaseModem *self,
         iface_modem_parent->load_signal_quality (
             MM_IFACE_MODEM (self),
             (GAsyncReadyCallback)parent_load_signal_quality_ready,
-            simple);
+            task);
         return;
     }
 
@@ -823,17 +811,14 @@ nwrssi_ready (MMBaseModem *self,
         quality = get_one_quality (response, "HDR RSSI=");
 
     if (quality >= 0)
-        g_simple_async_result_set_op_res_gpointer (simple,
-                                                   GUINT_TO_POINTER ((guint)quality),
-                                                   NULL);
+        g_task_return_int (task, quality);
     else
-        g_simple_async_result_set_error (simple,
-                                         MM_CORE_ERROR,
-                                         MM_CORE_ERROR_FAILED,
-                                         "Couldn't parse $NWRSSI response: '%s'",
-                                         response);
-    g_simple_async_result_complete (simple);
-    g_object_unref (simple);
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Couldn't parse $NWRSSI response: '%s'",
+                                 response);
+    g_object_unref (task);
 }
 
 static void
@@ -841,20 +826,17 @@ modem_load_signal_quality (MMIfaceModem *self,
                            GAsyncReadyCallback callback,
                            gpointer user_data)
 {
-    GSimpleAsyncResult *result;
+    GTask *task;
 
     mm_dbg ("loading signal quality...");
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        modem_load_signal_quality);
+    task = g_task_new (self, NULL, callback, user_data);
 
     /* 3GPP modems can just run parent's signal quality loading */
     if (mm_iface_modem_is_3gpp (self)) {
         iface_modem_parent->load_signal_quality (
             self,
             (GAsyncReadyCallback)parent_load_signal_quality_ready,
-            result);
+            task);
         return;
     }
 
@@ -865,7 +847,7 @@ modem_load_signal_quality (MMIfaceModem *self,
         3,
         FALSE,
         (GAsyncReadyCallback)nwrssi_ready,
-        result);
+        task);
 }
 
 /*****************************************************************************/

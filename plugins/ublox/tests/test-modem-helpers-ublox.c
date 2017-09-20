@@ -488,18 +488,19 @@ test_urat_write_command (void)
 /* Supported bands */
 
 static void
-common_validate_supported_bands (const gchar       *model,
-                                 const MMModemBand *expected_bands,
-                                 guint              n_expected_bands)
+common_compare_bands (GArray            *bands,
+                      const MMModemBand *expected_bands,
+                      guint              n_expected_bands)
 {
-    GError *error = NULL;
-    GArray *bands;
     gchar  *bands_str;
     GArray *expected_bands_array;
     gchar  *expected_bands_str;
 
-    bands = mm_ublox_get_supported_bands (model, &error);
-    g_assert_no_error (error);
+    if (!expected_bands || !n_expected_bands) {
+        g_assert (!bands);
+        return;
+    }
+
     g_assert (bands);
     mm_common_bands_garray_sort (bands);
     bands_str = mm_common_build_bands_string ((MMModemBand *)(bands->data), bands->len);
@@ -514,6 +515,21 @@ common_validate_supported_bands (const gchar       *model,
     g_assert_cmpstr (bands_str, ==, expected_bands_str);
     g_free (bands_str);
     g_free (expected_bands_str);
+}
+
+static void
+common_validate_supported_bands (const gchar       *model,
+                                 const MMModemBand *expected_bands,
+                                 guint              n_expected_bands)
+{
+    GError *error = NULL;
+    GArray *bands;
+
+    bands = mm_ublox_get_supported_bands (model, &error);
+    g_assert_no_error (error);
+    g_assert (bands);
+
+    common_compare_bands (bands, expected_bands, n_expected_bands);
 }
 
 static void
@@ -604,26 +620,12 @@ common_validate_ubandsel_response (const gchar       *str,
 {
     GError *error = NULL;
     GArray *bands;
-    gchar  *bands_str;
-    GArray *expected_bands_array;
-    gchar  *expected_bands_str;
 
     bands = mm_ublox_parse_ubandsel_response (str, &error);
     g_assert_no_error (error);
     g_assert (bands);
-    mm_common_bands_garray_sort (bands);
-    bands_str = mm_common_build_bands_string ((MMModemBand *)(bands->data), bands->len);
-    g_array_unref (bands);
 
-    expected_bands_array = g_array_sized_new (FALSE, FALSE, sizeof (MMModemBand), n_expected_bands);
-    g_array_append_vals (expected_bands_array, expected_bands, n_expected_bands);
-    mm_common_bands_garray_sort (expected_bands_array);
-    expected_bands_str = mm_common_build_bands_string ((MMModemBand *)(expected_bands_array->data), expected_bands_array->len);
-    g_array_unref (expected_bands_array);
-
-    g_assert_cmpstr (bands_str, ==, expected_bands_str);
-    g_free (bands_str);
-    g_free (expected_bands_str);
+    common_compare_bands (bands, expected_bands, n_expected_bands);
 }
 
 static void
@@ -725,6 +727,270 @@ test_ubandsel_request_1800 (void)
     };
 
     common_validate_ubandsel_request (bands, G_N_ELEMENTS (bands), "+UBANDSEL=1800");
+}
+
+/*****************************************************************************/
+/* Test +UACT? response parser */
+
+static void
+common_validate_uact_response (const gchar       *str,
+                               const MMModemBand *expected_bands,
+                               guint              n_expected_bands)
+{
+    GError *error = NULL;
+    GArray *bands;
+
+    bands = mm_ublox_parse_uact_response (str, &error);
+    g_assert_no_error (error);
+
+    common_compare_bands (bands, expected_bands, n_expected_bands);
+}
+
+static void
+test_uact_response_empty_list (void)
+{
+    common_validate_uact_response ("+UACT: ,,,\r\n", NULL, 0);
+}
+
+static void
+test_uact_response_2g (void)
+{
+    const MMModemBand expected_bands[] = {
+        MM_MODEM_BAND_G850, MM_MODEM_BAND_EGSM, MM_MODEM_BAND_DCS, MM_MODEM_BAND_PCS,
+    };
+
+    common_validate_uact_response ("+UACT: ,,,900,1800,1900,850\r\n",
+                                   expected_bands, G_N_ELEMENTS (expected_bands));
+}
+
+static void
+test_uact_response_2g3g (void)
+{
+    const MMModemBand expected_bands[] = {
+        MM_MODEM_BAND_G850, MM_MODEM_BAND_EGSM, MM_MODEM_BAND_DCS, MM_MODEM_BAND_PCS,
+        MM_MODEM_BAND_UTRAN_1, MM_MODEM_BAND_UTRAN_2, MM_MODEM_BAND_UTRAN_3, MM_MODEM_BAND_UTRAN_4, MM_MODEM_BAND_UTRAN_5,
+        MM_MODEM_BAND_UTRAN_6, MM_MODEM_BAND_UTRAN_7, MM_MODEM_BAND_UTRAN_8, MM_MODEM_BAND_UTRAN_9,
+    };
+
+    common_validate_uact_response ("+UACT: ,,,900,1800,1900,850,1,2,3,4,5,6,7,8,9\r\n",
+                                   expected_bands, G_N_ELEMENTS (expected_bands));
+}
+
+static void
+test_uact_response_2g3g4g (void)
+{
+    const MMModemBand expected_bands[] = {
+        MM_MODEM_BAND_G850, MM_MODEM_BAND_EGSM, MM_MODEM_BAND_DCS, MM_MODEM_BAND_PCS,
+        MM_MODEM_BAND_UTRAN_1, MM_MODEM_BAND_UTRAN_2, MM_MODEM_BAND_UTRAN_3, MM_MODEM_BAND_UTRAN_4, MM_MODEM_BAND_UTRAN_5,
+        MM_MODEM_BAND_UTRAN_6, MM_MODEM_BAND_UTRAN_7, MM_MODEM_BAND_UTRAN_8, MM_MODEM_BAND_UTRAN_9,
+        MM_MODEM_BAND_EUTRAN_1, MM_MODEM_BAND_EUTRAN_2, MM_MODEM_BAND_EUTRAN_3, MM_MODEM_BAND_EUTRAN_4, MM_MODEM_BAND_EUTRAN_5,
+        MM_MODEM_BAND_EUTRAN_6, MM_MODEM_BAND_EUTRAN_7, MM_MODEM_BAND_EUTRAN_8, MM_MODEM_BAND_EUTRAN_9,
+    };
+
+    common_validate_uact_response ("+UACT: ,,,900,1800,1900,850,1,2,3,4,5,6,7,8,9,101,102,103,104,105,106,107,108,109\r\n",
+                                   expected_bands, G_N_ELEMENTS (expected_bands));
+}
+
+/*****************************************************************************/
+/* Test +UACT=? test parser */
+
+static void
+common_validate_uact_test (const gchar       *str,
+                           const MMModemBand *expected_bands_2g,
+                           guint              n_expected_bands_2g,
+                           const MMModemBand *expected_bands_3g,
+                           guint              n_expected_bands_3g,
+                           const MMModemBand *expected_bands_4g,
+                           guint              n_expected_bands_4g)
+{
+    GError   *error = NULL;
+    gboolean  result;
+    GArray   *bands_2g = NULL;
+    GArray   *bands_3g = NULL;
+    GArray   *bands_4g = NULL;
+
+    result = mm_ublox_parse_uact_test (str, &bands_2g, &bands_3g, &bands_4g, &error);
+    g_assert_no_error (error);
+    g_assert (result);
+
+    common_compare_bands (bands_2g, expected_bands_2g, n_expected_bands_2g);
+    common_compare_bands (bands_3g, expected_bands_3g, n_expected_bands_3g);
+    common_compare_bands (bands_4g, expected_bands_4g, n_expected_bands_4g);
+}
+
+static void
+test_uact_test_2g (void)
+{
+    const MMModemBand expected_bands_2g[] = {
+        MM_MODEM_BAND_EGSM, MM_MODEM_BAND_DCS
+    };
+
+    common_validate_uact_test ("+UACT: ,,,(900,1800)\r\n",
+                               expected_bands_2g, G_N_ELEMENTS (expected_bands_2g),
+                               NULL, 0,
+                               NULL, 0);
+}
+
+static void
+test_uact_test_2g3g (void)
+{
+    const MMModemBand expected_bands_2g[] = {
+        MM_MODEM_BAND_EGSM, MM_MODEM_BAND_DCS
+    };
+    const MMModemBand expected_bands_3g[] = {
+        MM_MODEM_BAND_UTRAN_1, MM_MODEM_BAND_UTRAN_8
+    };
+
+    common_validate_uact_test ("+UACT: ,,,(900,1800),(1,8)\r\n",
+                               expected_bands_2g, G_N_ELEMENTS (expected_bands_2g),
+                               expected_bands_3g, G_N_ELEMENTS (expected_bands_3g),
+                               NULL, 0);
+}
+
+static void
+test_uact_test_2g3g4g (void)
+{
+    const MMModemBand expected_bands_2g[] = {
+        MM_MODEM_BAND_EGSM, MM_MODEM_BAND_DCS
+    };
+    const MMModemBand expected_bands_3g[] = {
+        MM_MODEM_BAND_UTRAN_1, MM_MODEM_BAND_UTRAN_8
+    };
+    const MMModemBand expected_bands_4g[] = {
+        MM_MODEM_BAND_EUTRAN_1, MM_MODEM_BAND_EUTRAN_3, MM_MODEM_BAND_EUTRAN_7, MM_MODEM_BAND_EUTRAN_8, MM_MODEM_BAND_EUTRAN_20
+    };
+
+    common_validate_uact_test ("+UACT: ,,,(900,1800),(1,8),(101,103,107,108,120)\r\n",
+                               expected_bands_2g, G_N_ELEMENTS (expected_bands_2g),
+                               expected_bands_3g, G_N_ELEMENTS (expected_bands_3g),
+                               expected_bands_4g, G_N_ELEMENTS (expected_bands_4g));
+}
+
+static void
+test_uact_test_2g3g4g_2 (void)
+{
+    const MMModemBand expected_bands_2g[] = {
+        MM_MODEM_BAND_EGSM, MM_MODEM_BAND_DCS
+    };
+    const MMModemBand expected_bands_3g[] = {
+        MM_MODEM_BAND_UTRAN_1, MM_MODEM_BAND_UTRAN_8
+    };
+    const MMModemBand expected_bands_4g[] = {
+        MM_MODEM_BAND_EUTRAN_1, MM_MODEM_BAND_EUTRAN_3, MM_MODEM_BAND_EUTRAN_7, MM_MODEM_BAND_EUTRAN_8, MM_MODEM_BAND_EUTRAN_20
+    };
+
+    common_validate_uact_test ("+UACT: ,,,(900,1800),(1,8),(101,103,107,108,120),(138)\r\n",
+                               expected_bands_2g, G_N_ELEMENTS (expected_bands_2g),
+                               expected_bands_3g, G_N_ELEMENTS (expected_bands_3g),
+                               expected_bands_4g, G_N_ELEMENTS (expected_bands_4g));
+}
+
+/*****************************************************************************/
+/* +UACT=x command builder */
+
+static void
+common_validate_uact_request (const MMModemBand *bands,
+                              guint              n_bands,
+                              const gchar       *expected_request)
+{
+    GError *error = NULL;
+    GArray *bands_array;
+    gchar  *request;
+
+    bands_array = g_array_sized_new (FALSE, FALSE, sizeof (MMModemBand), n_bands);
+    g_array_append_vals (bands_array, bands, n_bands);
+
+    request = mm_ublox_build_uact_set_command (bands_array, &error);
+    g_assert_no_error (error);
+    g_assert (request);
+
+    g_assert_cmpstr (request, ==, expected_request);
+
+    g_array_unref (bands_array);
+    g_free (request);
+}
+
+static void
+test_uact_request_any (void)
+{
+    const MMModemBand bands[] = {
+        MM_MODEM_BAND_ANY
+    };
+
+    common_validate_uact_request (bands, G_N_ELEMENTS (bands), "+UACT=,,,0");
+}
+
+static void
+test_uact_request_2g (void)
+{
+    const MMModemBand bands[] = {
+        MM_MODEM_BAND_EGSM, MM_MODEM_BAND_DCS,
+    };
+
+    common_validate_uact_request (bands, G_N_ELEMENTS (bands), "+UACT=,,,900,1800");
+}
+
+static void
+test_uact_request_3g (void)
+{
+    const MMModemBand bands[] = {
+        MM_MODEM_BAND_UTRAN_1, MM_MODEM_BAND_UTRAN_8,
+    };
+
+    common_validate_uact_request (bands, G_N_ELEMENTS (bands), "+UACT=,,,1,8");
+}
+
+static void
+test_uact_request_4g (void)
+{
+    const MMModemBand bands[] = {
+        MM_MODEM_BAND_EUTRAN_1, MM_MODEM_BAND_EUTRAN_3, MM_MODEM_BAND_EUTRAN_7, MM_MODEM_BAND_EUTRAN_8, MM_MODEM_BAND_EUTRAN_20
+    };
+
+    common_validate_uact_request (bands, G_N_ELEMENTS (bands), "+UACT=,,,101,103,107,108,120");
+}
+
+/*****************************************************************************/
+/* Test +UAUTHREQ=? responses */
+
+static void
+common_validate_uauthreq_test (const gchar              *str,
+                               MMUbloxBearerAllowedAuth  expected_allowed_auths)
+{
+    GError                   *error = NULL;
+    MMUbloxBearerAllowedAuth  allowed_auths;
+
+    allowed_auths = mm_ublox_parse_uauthreq_test (str, &error);
+    g_assert_no_error (error);
+    g_assert_cmpuint (allowed_auths, ==, expected_allowed_auths);
+}
+
+static void
+test_uauthreq_tobyl4 (void)
+{
+    common_validate_uauthreq_test ("+UAUTHREQ: (1-4),(0-2),,",
+                                   (MM_UBLOX_BEARER_ALLOWED_AUTH_NONE |
+                                    MM_UBLOX_BEARER_ALLOWED_AUTH_PAP |
+                                    MM_UBLOX_BEARER_ALLOWED_AUTH_CHAP));
+}
+
+static void
+test_uauthreq_with_auto (void)
+{
+    common_validate_uauthreq_test ("+UAUTHREQ: (1-4),(0-3),,",
+                                   (MM_UBLOX_BEARER_ALLOWED_AUTH_NONE |
+                                    MM_UBLOX_BEARER_ALLOWED_AUTH_PAP |
+                                    MM_UBLOX_BEARER_ALLOWED_AUTH_CHAP |
+                                    MM_UBLOX_BEARER_ALLOWED_AUTH_AUTO));
+}
+
+static void
+test_uauthreq_less_fields (void)
+{
+    common_validate_uauthreq_test ("+UAUTHREQ: (1-4),(0-2)",
+                                   (MM_UBLOX_BEARER_ALLOWED_AUTH_NONE |
+                                    MM_UBLOX_BEARER_ALLOWED_AUTH_PAP |
+                                    MM_UBLOX_BEARER_ALLOWED_AUTH_CHAP));
 }
 
 /*****************************************************************************/
@@ -850,16 +1116,28 @@ int main (int argc, char **argv)
     g_test_add_func ("/MM/ublox/supported-bands/toby-l201", test_supported_bands_toby_l201);
     g_test_add_func ("/MM/ublox/supported-bands/lisa-u200", test_supported_bands_lisa_u200);
     g_test_add_func ("/MM/ublox/supported-bands/sara-u280", test_supported_bands_sara_u280);
-
     g_test_add_func ("/MM/ublox/ubandsel/response/one",   test_ubandsel_response_one);
     g_test_add_func ("/MM/ublox/ubandsel/response/two",   test_ubandsel_response_two);
     g_test_add_func ("/MM/ublox/ubandsel/response/three", test_ubandsel_response_three);
     g_test_add_func ("/MM/ublox/ubandsel/response/four",  test_ubandsel_response_four);
-
     g_test_add_func ("/MM/ublox/ubandsel/request/any",  test_ubandsel_request_any);
     g_test_add_func ("/MM/ublox/ubandsel/request/2g",   test_ubandsel_request_2g);
     g_test_add_func ("/MM/ublox/ubandsel/request/1800", test_ubandsel_request_1800);
-
+    g_test_add_func ("/MM/ublox/uact/response/empty-list", test_uact_response_empty_list);
+    g_test_add_func ("/MM/ublox/uact/response/2g",         test_uact_response_2g);
+    g_test_add_func ("/MM/ublox/uact/response/2g3g",       test_uact_response_2g3g);
+    g_test_add_func ("/MM/ublox/uact/response/2g3g4g",     test_uact_response_2g3g4g);
+    g_test_add_func ("/MM/ublox/uact/test/2g",       test_uact_test_2g);
+    g_test_add_func ("/MM/ublox/uact/test/2g3g",     test_uact_test_2g3g);
+    g_test_add_func ("/MM/ublox/uact/test/2g3g4g",   test_uact_test_2g3g4g);
+    g_test_add_func ("/MM/ublox/uact/test/2g3g4g/2", test_uact_test_2g3g4g_2);
+    g_test_add_func ("/MM/ublox/uact/request/any", test_uact_request_any);
+    g_test_add_func ("/MM/ublox/uact/request/2g",  test_uact_request_2g);
+    g_test_add_func ("/MM/ublox/uact/request/3g",  test_uact_request_3g);
+    g_test_add_func ("/MM/ublox/uact/request/4g",  test_uact_request_4g);
+    g_test_add_func ("/MM/ublox/uauthreq/test/tobyl4", test_uauthreq_tobyl4);
+    g_test_add_func ("/MM/ublox/uauthreq/test/with-auto", test_uauthreq_with_auto);
+    g_test_add_func ("/MM/ublox/uauthreq/test/less-fields", test_uauthreq_less_fields);
     g_test_add_func ("/MM/ublox/ugcntrd/response", test_ugcntrd_response);
 
     return g_test_run ();

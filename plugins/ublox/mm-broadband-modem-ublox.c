@@ -37,6 +37,12 @@ static void iface_modem_init (MMIfaceModem *iface);
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemUblox, mm_broadband_modem_ublox, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init))
 
+typedef enum {
+    FEATURE_SUPPORT_UNKNOWN,
+    FEATURE_SUPPORTED,
+    FEATURE_UNSUPPORTED,
+} FeatureSupport;
+
 struct _MMBroadbandModemUbloxPrivate {
     /* USB profile in use */
     MMUbloxUsbProfile profile;
@@ -50,6 +56,9 @@ struct _MMBroadbandModemUbloxPrivate {
 
     /* Mode combination to apply if "any" requested */
     MMModemMode any_allowed;
+
+    /* Band management */
+    FeatureSupport uact;
 };
 
 /*****************************************************************************/
@@ -86,54 +95,127 @@ load_supported_bands_finish (MMIfaceModem  *self,
 }
 
 static void
+uact_test_ready (MMBaseModem  *_self,
+                 GAsyncResult *res,
+                 GTask        *task)
+{
+    MMBroadbandModemUblox  *self = MM_BROADBAND_MODEM_UBLOX (_self);
+    const gchar            *response;
+    GError                 *error = NULL;
+    GArray                 *bands = NULL;
+    GArray                 *bands_2g = NULL;
+    GArray                 *bands_3g = NULL;
+    GArray                 *bands_4g = NULL;
+
+    response = mm_base_modem_at_command_finish (_self, res, NULL);
+    if (!response) {
+        /* Flag as unsupported */
+        self->priv->uact = FEATURE_UNSUPPORTED;
+
+        /* The list of supported tasks we give here must include not only the bands
+         * allowed in the current AcT, but the whole list of bands allowed in all
+         * AcTs. This is because the list of supported bands is loaded only once
+         * during modem initialization. Not ideal, but the current API is like that.
+         *
+         * So, we give a predefined list of supported bands and we filter them in the
+         * same way we filter the allowed AcTs.
+         */
+        bands = mm_ublox_get_supported_bands (mm_iface_modem_get_model (MM_IFACE_MODEM (self)), &error);
+        goto out;
+    }
+
+    /* Flag as supported */
+    self->priv->uact = FEATURE_SUPPORTED;
+
+    /* Parse UACT=? test response */
+    if (!mm_ublox_parse_uact_test (response, &bands_2g, &bands_3g, &bands_4g, &error))
+        goto out;
+
+    /* Build a combined array */
+    bands = g_array_new (FALSE, FALSE, sizeof (MMModemBand));
+    if (bands_2g) {
+        bands = g_array_append_vals (bands, bands_2g->data, bands_2g->len);
+        g_array_unref (bands_2g);
+    }
+    if (bands_3g) {
+        bands = g_array_append_vals (bands, bands_3g->data, bands_3g->len);
+        g_array_unref (bands_3g);
+    }
+    if (bands_4g) {
+        bands = g_array_append_vals (bands, bands_4g->data, bands_4g->len);
+        g_array_unref (bands_4g);
+    }
+    g_assert (bands->len > 0);
+
+out:
+    if (!bands) {
+        g_assert (error);
+        g_task_return_error (task, error);
+    } else
+        g_task_return_pointer (task, bands, (GDestroyNotify) g_array_unref);
+    g_object_unref (task);
+}
+
+static void
 load_supported_bands (MMIfaceModem        *self,
                       GAsyncReadyCallback  callback,
                       gpointer             user_data)
 {
-    GTask  *task;
-    GError *error = NULL;
-    GArray *bands;
+    GTask *task;
 
     task = g_task_new (self, NULL, callback, user_data);
 
-    /* The list of supported tasks we give here must include not only the bands
-     * allowed in the current AcT, but the whole list of bands allowed in all
-     * AcTs. This is because the list of supported bands is loaded only once
-     * during modem initialization. Not ideal, but the current API is like that.
-     *
-     * So, we give a predefined list of supported bands and we filter them in the
-     * same way we filter the allowed AcTs.
-     */
-    bands = mm_ublox_get_supported_bands (mm_iface_modem_get_model (self), &error);
-    if (!bands)
-        g_task_return_error (task, error);
-    else
-        g_task_return_pointer (task, bands, (GDestroyNotify) g_array_unref);
-    g_object_unref (task);
+    /* See if AT+UACT is supported to query bands */
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        "+UACT=?",
+        3,
+        TRUE, /* allow cached */
+        (GAsyncReadyCallback) uact_test_ready,
+        task);
 }
 
 /*****************************************************************************/
 /* Load current bands (Modem interface) */
 
 static GArray *
-load_current_bands_finish (MMIfaceModem  *self,
+load_current_bands_finish (MMIfaceModem  *_self,
                            GAsyncResult  *res,
                            GError       **error)
 {
-    const gchar *response;
+    MMBroadbandModemUblox *self = MM_BROADBAND_MODEM_UBLOX (_self);
+    const gchar           *response;
 
     response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
     if (!response)
         return NULL;
 
+    if (self->priv->uact == FEATURE_SUPPORTED)
+        return mm_ublox_parse_uact_response (response, error);
+
     return mm_ublox_parse_ubandsel_response (response, error);
 }
 
 static void
-load_current_bands (MMIfaceModem        *self,
+load_current_bands (MMIfaceModem        *_self,
                     GAsyncReadyCallback  callback,
                     gpointer             user_data)
 {
+    MMBroadbandModemUblox *self = MM_BROADBAND_MODEM_UBLOX (_self);
+
+    g_assert (self->priv->uact != FEATURE_SUPPORT_UNKNOWN);
+
+    if (self->priv->uact == FEATURE_SUPPORTED) {
+        mm_base_modem_at_command (
+            MM_BASE_MODEM (self),
+            "+UACT?",
+            3,
+            FALSE,
+            (GAsyncReadyCallback)callback,
+            user_data);
+        return;
+    }
+
     mm_base_modem_at_command (
         MM_BASE_MODEM (self),
         "+UBANDSEL?",
@@ -393,26 +475,31 @@ set_current_modes (MMIfaceModem        *self,
 }
 
 static void
-set_current_bands (MMIfaceModem         *self,
+set_current_bands (MMIfaceModem        *_self,
                    GArray              *bands_array,
                    GAsyncReadyCallback  callback,
                    gpointer             user_data)
 {
-    GTask  *task;
-    gchar  *command;
-    GError *error = NULL;
+    MMBroadbandModemUblox *self = MM_BROADBAND_MODEM_UBLOX (_self);
+    GTask                 *task;
+    gchar                 *command;
+    GError                *error = NULL;
 
     task = g_task_new (self, NULL, callback, user_data);
 
     /* Build command */
-    command = mm_ublox_build_ubandsel_set_command (bands_array, &error);
+    if (self->priv->uact == FEATURE_SUPPORTED)
+        command = mm_ublox_build_uact_set_command (bands_array, &error);
+    else
+        command = mm_ublox_build_ubandsel_set_command (bands_array, &error);
+
     if (!command) {
         g_task_return_error (task, error);
         g_object_unref (task);
         return;
     }
 
-    set_current_modes_bands_context_new (task, self, command);
+    set_current_modes_bands_context_new (task, _self, command);
     set_current_modes_bands_step (task);
 }
 
@@ -669,6 +756,7 @@ typedef struct {
     CreateBearerStep       step;
     MMBearerProperties    *properties;
     MMBaseBearer          *bearer;
+    gboolean               has_net;
 } CreateBearerContext;
 
 static void
@@ -760,7 +848,15 @@ mode_check_ready (MMBaseModem  *self,
         mm_dbg ("u-blox: networking mode loaded: %s", mm_ublox_networking_mode_get_string (ctx->self->priv->mode));
     }
 
-    /* Assume the operation has been performed, even if it may have failed */
+    /* If checking networking mode isn't supported, we'll fallback to
+     * assume the device is in router mode, which is the mode asking for
+     * less connection setup rules from our side (just request DHCP).
+     */
+    if (ctx->self->priv->mode == MM_UBLOX_NETWORKING_MODE_UNKNOWN && ctx->has_net) {
+        mm_dbg ("u-blox: fallback to default networking mode: router");
+        ctx->self->priv->mode = MM_UBLOX_NETWORKING_MODE_ROUTER;
+    }
+
     ctx->self->priv->mode_checked = TRUE;
 
     ctx->step++;
@@ -840,11 +936,10 @@ create_bearer_step (GTask *task)
 
     case CREATE_BEARER_STEP_CREATE_BEARER:
         /* If we have a net interface, we'll create a u-blox bearer, unless for
-         * any reason we have the back-compatible profile selected, or if we don't
-         * know the mode to use. */
-        if ((ctx->self->priv->profile == MM_UBLOX_USB_PROFILE_ECM || ctx->self->priv->profile == MM_UBLOX_USB_PROFILE_RNDIS) &&
-            (ctx->self->priv->mode == MM_UBLOX_NETWORKING_MODE_BRIDGE || ctx->self->priv->mode == MM_UBLOX_NETWORKING_MODE_ROUTER) &&
-            mm_base_modem_peek_best_data_port (MM_BASE_MODEM (ctx->self), MM_PORT_TYPE_NET)) {
+         * any reason we have the back-compatible profile selected. */
+        if ((ctx->self->priv->profile != MM_UBLOX_USB_PROFILE_BACK_COMPATIBLE) && ctx->has_net) {
+            /* whenever there is a net port, we should have loaded a valid networking mode */
+            g_assert (ctx->self->priv->mode != MM_UBLOX_NETWORKING_MODE_UNKNOWN);
             mm_dbg ("u-blox: creating u-blox broadband bearer (%s profile, %s mode)...",
                     mm_ublox_usb_profile_get_string (ctx->self->priv->profile),
                     mm_ublox_networking_mode_get_string (ctx->self->priv->mode));
@@ -892,6 +987,9 @@ modem_create_bearer (MMIfaceModem        *self,
     ctx->step = CREATE_BEARER_STEP_FIRST;
     ctx->self = g_object_ref (self);
     ctx->properties = g_object_ref (properties);
+
+    /* Flag whether this modem has exposed a network interface */
+    ctx->has_net = !!mm_base_modem_peek_best_data_port (MM_BASE_MODEM (self), MM_PORT_TYPE_NET);
 
     task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, (GDestroyNotify) create_bearer_context_free);
@@ -952,6 +1050,7 @@ mm_broadband_modem_ublox_init (MMBroadbandModemUblox *self)
     self->priv->profile = MM_UBLOX_USB_PROFILE_UNKNOWN;
     self->priv->mode = MM_UBLOX_NETWORKING_MODE_UNKNOWN;
     self->priv->any_allowed = MM_MODEM_MODE_NONE;
+    self->priv->uact = FEATURE_SUPPORT_UNKNOWN;
 }
 
 static void

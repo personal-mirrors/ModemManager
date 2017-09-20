@@ -819,6 +819,343 @@ mm_ublox_get_modem_mode_any (const GArray *combinations)
 }
 
 /*****************************************************************************/
+/* UACT common config */
+
+typedef struct {
+    guint       num;
+    MMModemBand band;
+} UactBandConfig;
+
+static const UactBandConfig uact_band_config[] = {
+    /* GSM bands */
+    { .num =  900, .band = MM_MODEM_BAND_EGSM },
+    { .num = 1800, .band = MM_MODEM_BAND_DCS  },
+    { .num = 1900, .band = MM_MODEM_BAND_PCS  },
+    { .num =  850, .band = MM_MODEM_BAND_G850 },
+    { .num =  450, .band = MM_MODEM_BAND_G450 },
+    { .num =  480, .band = MM_MODEM_BAND_G480 },
+    { .num =  750, .band = MM_MODEM_BAND_G750 },
+    { .num =  380, .band = MM_MODEM_BAND_G380 },
+    { .num =  410, .band = MM_MODEM_BAND_G410 },
+    { .num =  710, .band = MM_MODEM_BAND_G710 },
+    { .num =  810, .band = MM_MODEM_BAND_G810 },
+    /* UMTS bands */
+    { .num =    1, .band = MM_MODEM_BAND_UTRAN_1  },
+    { .num =    2, .band = MM_MODEM_BAND_UTRAN_2  },
+    { .num =    3, .band = MM_MODEM_BAND_UTRAN_3  },
+    { .num =    4, .band = MM_MODEM_BAND_UTRAN_4  },
+    { .num =    5, .band = MM_MODEM_BAND_UTRAN_5  },
+    { .num =    6, .band = MM_MODEM_BAND_UTRAN_6  },
+    { .num =    7, .band = MM_MODEM_BAND_UTRAN_7  },
+    { .num =    8, .band = MM_MODEM_BAND_UTRAN_8  },
+    { .num =    9, .band = MM_MODEM_BAND_UTRAN_9  },
+    { .num =   10, .band = MM_MODEM_BAND_UTRAN_10 },
+    { .num =   11, .band = MM_MODEM_BAND_UTRAN_11 },
+    { .num =   12, .band = MM_MODEM_BAND_UTRAN_12 },
+    { .num =   13, .band = MM_MODEM_BAND_UTRAN_13 },
+    { .num =   14, .band = MM_MODEM_BAND_UTRAN_14 },
+    { .num =   19, .band = MM_MODEM_BAND_UTRAN_19 },
+    { .num =   20, .band = MM_MODEM_BAND_UTRAN_20 },
+    { .num =   21, .band = MM_MODEM_BAND_UTRAN_21 },
+    { .num =   22, .band = MM_MODEM_BAND_UTRAN_22 },
+    { .num =   25, .band = MM_MODEM_BAND_UTRAN_25 },
+    /* LTE bands */
+    { .num =  101, .band = MM_MODEM_BAND_EUTRAN_1  },
+    { .num =  102, .band = MM_MODEM_BAND_EUTRAN_2  },
+    { .num =  103, .band = MM_MODEM_BAND_EUTRAN_3  },
+    { .num =  104, .band = MM_MODEM_BAND_EUTRAN_4  },
+    { .num =  105, .band = MM_MODEM_BAND_EUTRAN_5  },
+    { .num =  106, .band = MM_MODEM_BAND_EUTRAN_6  },
+    { .num =  107, .band = MM_MODEM_BAND_EUTRAN_7  },
+    { .num =  108, .band = MM_MODEM_BAND_EUTRAN_8  },
+    { .num =  109, .band = MM_MODEM_BAND_EUTRAN_9  },
+    { .num =  110, .band = MM_MODEM_BAND_EUTRAN_10 },
+    { .num =  111, .band = MM_MODEM_BAND_EUTRAN_11 },
+    { .num =  112, .band = MM_MODEM_BAND_EUTRAN_12 },
+    { .num =  113, .band = MM_MODEM_BAND_EUTRAN_13 },
+    { .num =  114, .band = MM_MODEM_BAND_EUTRAN_14 },
+    { .num =  117, .band = MM_MODEM_BAND_EUTRAN_17 },
+    { .num =  118, .band = MM_MODEM_BAND_EUTRAN_18 },
+    { .num =  119, .band = MM_MODEM_BAND_EUTRAN_19 },
+    { .num =  120, .band = MM_MODEM_BAND_EUTRAN_20 },
+    { .num =  121, .band = MM_MODEM_BAND_EUTRAN_21 },
+    { .num =  122, .band = MM_MODEM_BAND_EUTRAN_22 },
+    { .num =  123, .band = MM_MODEM_BAND_EUTRAN_23 },
+    { .num =  124, .band = MM_MODEM_BAND_EUTRAN_24 },
+    { .num =  125, .band = MM_MODEM_BAND_EUTRAN_25 },
+    { .num =  126, .band = MM_MODEM_BAND_EUTRAN_26 },
+    { .num =  127, .band = MM_MODEM_BAND_EUTRAN_27 },
+    { .num =  128, .band = MM_MODEM_BAND_EUTRAN_28 },
+    { .num =  129, .band = MM_MODEM_BAND_EUTRAN_29 },
+    { .num =  130, .band = MM_MODEM_BAND_EUTRAN_30 },
+    { .num =  131, .band = MM_MODEM_BAND_EUTRAN_31 },
+    { .num =  132, .band = MM_MODEM_BAND_EUTRAN_32 },
+    { .num =  133, .band = MM_MODEM_BAND_EUTRAN_33 },
+    { .num =  134, .band = MM_MODEM_BAND_EUTRAN_34 },
+    { .num =  135, .band = MM_MODEM_BAND_EUTRAN_35 },
+    { .num =  136, .band = MM_MODEM_BAND_EUTRAN_36 },
+    { .num =  137, .band = MM_MODEM_BAND_EUTRAN_37 },
+    { .num =  138, .band = MM_MODEM_BAND_EUTRAN_38 },
+    { .num =  139, .band = MM_MODEM_BAND_EUTRAN_39 },
+    { .num =  140, .band = MM_MODEM_BAND_EUTRAN_40 },
+    { .num =  141, .band = MM_MODEM_BAND_EUTRAN_41 },
+    { .num =  142, .band = MM_MODEM_BAND_EUTRAN_42 },
+    { .num =  143, .band = MM_MODEM_BAND_EUTRAN_43 },
+    { .num =  144, .band = MM_MODEM_BAND_EUTRAN_44 },
+    { .num =  145, .band = MM_MODEM_BAND_EUTRAN_45 },
+    { .num =  146, .band = MM_MODEM_BAND_EUTRAN_46 },
+    { .num =  147, .band = MM_MODEM_BAND_EUTRAN_47 },
+    { .num =  148, .band = MM_MODEM_BAND_EUTRAN_48 },
+};
+
+static MMModemBand
+uact_num_to_band (guint num)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (uact_band_config); i++) {
+        if (num == uact_band_config[i].num)
+            return uact_band_config[i].band;
+    }
+    return MM_MODEM_BAND_UNKNOWN;
+}
+
+static guint
+uact_band_to_num (MMModemBand band)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (uact_band_config); i++) {
+        if (band == uact_band_config[i].band)
+            return uact_band_config[i].num;
+    }
+    return 0;
+}
+
+/*****************************************************************************/
+/* UACT? response parser */
+
+static GArray *
+uact_num_array_to_band_array (GArray *nums)
+{
+    GArray *bands = NULL;
+    guint   i;
+
+    if (!nums)
+        return NULL;
+
+    bands = g_array_sized_new (FALSE, FALSE, sizeof (MMModemBand), nums->len);
+    for (i = 0; i < nums->len; i++) {
+        MMModemBand band;
+
+        band = uact_num_to_band (g_array_index (nums, guint, i));
+        g_array_append_val (bands, band);
+    }
+
+    return bands;
+}
+
+GArray *
+mm_ublox_parse_uact_response (const gchar  *response,
+                              GError      **error)
+{
+    GRegex     *r;
+    GMatchInfo *match_info;
+    GError     *inner_error = NULL;
+    GArray     *nums = NULL;
+    GArray     *bands = NULL;
+
+    /*
+     * AT+UACT?
+     * +UACT: ,,,900,1800,1,8,101,103,107,108,120,138
+     */
+    r = g_regex_new ("\\+UACT: ([^,]*),([^,]*),([^,]*),(.*)(?:\\r\\n)?",
+                     G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (!inner_error && g_match_info_matches (match_info)) {
+        gchar *bandstr;
+
+        bandstr = mm_get_string_unquoted_from_match_info (match_info, 4);
+        nums = mm_parse_uint_list (bandstr, &inner_error);
+        g_free (bandstr);
+    }
+
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return NULL;
+    }
+
+    /* Convert to MMModemBand values */
+    if (nums) {
+        bands = uact_num_array_to_band_array (nums);
+        g_array_unref (nums);
+    }
+
+    return bands;
+}
+
+/*****************************************************************************/
+/* UACT=? response parser */
+
+static GArray *
+parse_bands_from_string (const gchar *str,
+                         const gchar *group)
+{
+    GArray *bands = NULL;
+    GError *inner_error = NULL;
+    GArray *nums;
+
+    nums = mm_parse_uint_list (str, &inner_error);
+    if (nums) {
+        gchar *tmpstr;
+
+        bands = uact_num_array_to_band_array (nums);
+        tmpstr = mm_common_build_bands_string ((MMModemBand *)(bands->data), bands->len);
+        mm_dbg ("modem reports support for %s bands: %s", group, tmpstr);
+        g_free (tmpstr);
+
+        g_array_unref (nums);
+    } else if (inner_error) {
+        mm_warn ("couldn't parse list of supported %s bands: %s", group, inner_error->message);
+        g_clear_error (&inner_error);
+    }
+
+    return bands;
+}
+
+gboolean
+mm_ublox_parse_uact_test (const gchar  *response,
+                          GArray      **bands2g_out,
+                          GArray      **bands3g_out,
+                          GArray      **bands4g_out,
+                          GError      **error)
+{
+    GRegex       *r;
+    GMatchInfo   *match_info;
+    GError       *inner_error = NULL;
+    const gchar  *bands2g_str = NULL;
+    const gchar  *bands3g_str = NULL;
+    const gchar  *bands4g_str = NULL;
+    GArray       *bands2g = NULL;
+    GArray       *bands3g = NULL;
+    GArray       *bands4g = NULL;
+    gchar       **split = NULL;
+
+    g_assert (bands2g_out && bands3g_out && bands4g_out);
+
+    /*
+     * AT+UACT=?
+     * +UACT: ,,,(900,1800),(1,8),(101,103,107,108,120),(138)
+     */
+    r = g_regex_new ("\\+UACT: ([^,]*),([^,]*),([^,]*),(.*)(?:\\r\\n)?",
+                     G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (inner_error)
+        goto out;
+
+    if (g_match_info_matches (match_info)) {
+        gchar *aux;
+        guint n_groups;
+
+        aux  = mm_get_string_unquoted_from_match_info (match_info, 4);
+        split = mm_split_string_groups (aux);
+        n_groups = g_strv_length (split);
+        if (n_groups >= 1)
+            bands2g_str = split[0];
+        if (n_groups >= 2)
+            bands3g_str = split[1];
+        if (n_groups >= 3)
+            bands4g_str = split[2];
+        g_free (aux);
+    }
+
+    if (!bands2g_str && !bands3g_str && !bands4g_str) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                   "frequency groups not found: %s", response);
+        goto out;
+    }
+
+    bands2g = parse_bands_from_string (bands2g_str, "2G");
+    bands3g = parse_bands_from_string (bands3g_str, "3G");
+    bands4g = parse_bands_from_string (bands4g_str, "4G");
+
+    if (!bands2g->len && !bands3g->len && !bands4g->len) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                   "no supported frequencies reported: %s", response);
+        goto out;
+    }
+
+    /* success */
+
+out:
+    g_strfreev (split);
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        if (bands2g)
+            g_array_unref (bands2g);
+        if (bands3g)
+            g_array_unref (bands3g);
+        if (bands4g)
+            g_array_unref (bands4g);
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    *bands2g_out = bands2g;
+    *bands3g_out = bands3g;
+    *bands4g_out = bands4g;
+    return TRUE;
+}
+
+/*****************************************************************************/
+/* UACT=X command builder */
+
+gchar *
+mm_ublox_build_uact_set_command (GArray  *bands,
+                                 GError **error)
+{
+    GString *command;
+
+    /* Build command */
+    command = g_string_new ("+UACT=,,,");
+
+    if (bands->len == 1 && g_array_index (bands, MMModemBand, 0) == MM_MODEM_BAND_ANY)
+        g_string_append (command, "0");
+    else {
+        guint i;
+
+        for (i = 0; i < bands->len; i++) {
+            MMModemBand band;
+            guint       num;
+
+            band = g_array_index (bands, MMModemBand, i);
+            num = uact_band_to_num (band);
+            if (!num) {
+                g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                             "Band unsupported by this plugin: %s", mm_modem_band_get_string (band));
+                g_string_free (command, TRUE);
+                return NULL;
+            }
+
+            g_string_append_printf (command, "%s%u", i == 0 ? "" : ",", num);
+        }
+    }
+
+    return g_string_free (command, FALSE);
+}
+
+/*****************************************************************************/
 /* URAT? response parser */
 
 gboolean
@@ -956,6 +1293,83 @@ mm_ublox_build_urat_set_command (MMModemMode   allowed,
     }
 
     return g_string_free (command, FALSE);
+}
+
+/*****************************************************************************/
+/* +UAUTHREQ=? test parser */
+
+MMUbloxBearerAllowedAuth
+mm_ublox_parse_uauthreq_test (const char  *response,
+                              GError     **error)
+{
+    MMUbloxBearerAllowedAuth   mask = MM_UBLOX_BEARER_ALLOWED_AUTH_UNKNOWN;
+    GError                    *inner_error = NULL;
+    GArray                    *allowed_auths = NULL;
+    gchar                    **split;
+    guint                      split_len;
+
+    /*
+     * Response may be like:
+     *   AT+UAUTHREQ=?
+     *   +UAUTHREQ: (1-4),(0-2),,
+     */
+    response = mm_strip_tag (response, "+UAUTHREQ:");
+    split = mm_split_string_groups (response);
+    split_len = g_strv_length (split);
+    if (split_len < 2) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                   "Unexpected number of groups in +UAUTHREQ=? response: %u", g_strv_length (split));
+        goto out;
+    }
+
+    allowed_auths = mm_parse_uint_list (split[1], &inner_error);
+    if (inner_error)
+        goto out;
+
+    if (allowed_auths) {
+        guint i;
+
+        for (i = 0; i < allowed_auths->len; i++) {
+            guint val;
+
+            val = g_array_index (allowed_auths, guint, i);
+            switch (val) {
+                case 0:
+                    mask |= MM_UBLOX_BEARER_ALLOWED_AUTH_NONE;
+                    break;
+                case 1:
+                    mask |= MM_UBLOX_BEARER_ALLOWED_AUTH_PAP;
+                    break;
+                case 2:
+                    mask |= MM_UBLOX_BEARER_ALLOWED_AUTH_CHAP;
+                    break;
+                case 3:
+                    mask |= MM_UBLOX_BEARER_ALLOWED_AUTH_AUTO;
+                    break;
+                default:
+                    mm_warn ("Unexpected +UAUTHREQ value: %u", val);
+                    break;
+            }
+        }
+    }
+
+    if (!mask) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                   "No supported authentication methods in +UAUTHREQ=? response");
+        goto out;
+    }
+
+out:
+    g_strfreev (split);
+
+    if (inner_error) {
+        if (allowed_auths)
+            g_array_unref (allowed_auths);
+        g_propagate_error (error, inner_error);
+        return MM_UBLOX_BEARER_ALLOWED_AUTH_UNKNOWN;
+    }
+
+    return mask;
 }
 
 /*****************************************************************************/

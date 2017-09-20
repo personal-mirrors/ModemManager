@@ -107,6 +107,27 @@ gchar *mm_ublox_build_ubandsel_set_command (GArray  *bands,
                                             GError **error);
 
 /*****************************************************************************/
+/* UACT? response parser */
+
+GArray *mm_ublox_parse_uact_response (const gchar  *response,
+                                      GError      **error);
+
+/*****************************************************************************/
+/* UACT=? test parser */
+
+gboolean mm_ublox_parse_uact_test (const gchar  *response,
+                                   GArray      **bands_2g,
+                                   GArray      **bands_3g,
+                                   GArray      **bands_4g,
+                                   GError      **error);
+
+/*****************************************************************************/
+/* UACT=X command builder */
+
+gchar *mm_ublox_build_uact_set_command (GArray  *bands,
+                                        GError **error);
+
+/*****************************************************************************/
 /* Get mode to apply when ANY */
 
 MMModemMode mm_ublox_get_modem_mode_any (const GArray *combinations);
@@ -125,6 +146,20 @@ gboolean mm_ublox_parse_urat_read_response (const gchar  *response,
 gchar *mm_ublox_build_urat_set_command (MMModemMode   allowed,
                                         MMModemMode   preferred,
                                         GError      **error);
+
+/*****************************************************************************/
+/* +UAUTHREQ=? test parser */
+
+typedef enum { /*< underscore_name=mm_ublox_bearer_allowed_auth >*/
+    MM_UBLOX_BEARER_ALLOWED_AUTH_UNKNOWN = 0,
+    MM_UBLOX_BEARER_ALLOWED_AUTH_NONE    = 1 << 0,
+    MM_UBLOX_BEARER_ALLOWED_AUTH_PAP     = 1 << 1,
+    MM_UBLOX_BEARER_ALLOWED_AUTH_CHAP    = 1 << 2,
+    MM_UBLOX_BEARER_ALLOWED_AUTH_AUTO    = 1 << 3,
+} MMUbloxBearerAllowedAuth;
+
+MMUbloxBearerAllowedAuth mm_ublox_parse_uauthreq_test (const char  *response,
+                                                       GError     **error);
 
 /*****************************************************************************/
 /* +UGCNTRD response parser */
