@@ -350,6 +350,8 @@ libmm_plugin_option_hso_la_LIBADD   = $(OPTION_COMMON_LIBADD_FLAGS)
 # plugin: sierra (new QMI or MBIM modems)
 ################################################################################
 
+dist_udevrules_DATA += sierra/77-mm-sierra.rules
+
 pkglib_LTLIBRARIES += libmm-plugin-sierra.la
 libmm_plugin_sierra_la_SOURCES = \
 	sierra/mm-plugin-sierra.c \
@@ -882,20 +884,6 @@ dist_udevrules_DATA += haier/77-mm-haier-port-types.rules
 AM_CFLAGS += -DTESTUDEVRULESDIR_HAIER=\"${srcdir}/haier\"
 
 ################################################################################
-# udev rules tester
-################################################################################
-
-noinst_PROGRAMS += test-udev-rules
-test_udev_rules_SOURCES = \
-	tests/test-udev-rules.c \
-	$(NULL)
-test_udev_rules_LDADD = \
-	$(top_builddir)/src/libkerneldevice.la \
-	$(top_builddir)/libmm-glib/libmm-glib.la \
-	$(NULL)
-
-
-################################################################################
 # plugin: u-blox
 ################################################################################
 
@@ -986,6 +974,19 @@ libmm_plugin_dell_la_LIBADD   = $(NOVATEL_COMMON_LIBADD_FLAGS) $(SIERRA_COMMON_L
 dist_udevrules_DATA += dell/77-mm-dell-port-types.rules
 
 AM_CFLAGS += -DTESTUDEVRULESDIR_DELL=\"${srcdir}/dell\"
+
+################################################################################
+# udev rules tester
+################################################################################
+
+noinst_PROGRAMS += test-udev-rules
+test_udev_rules_SOURCES = \
+	tests/test-udev-rules.c \
+	$(NULL)
+test_udev_rules_LDADD = \
+	$(top_builddir)/src/libkerneldevice.la \
+	$(top_builddir)/libmm-glib/libmm-glib.la \
+	$(NULL)
 
 ################################################################################
 
