@@ -13,6 +13,10 @@
  * Copyright (C) 2016 Velocloud, Inc.
  */
 
+#include <config.h>
+#include <string.h>
+
+#include "mm-log.h"
 #include "mm-kernel-device.h"
 
 G_DEFINE_ABSTRACT_TYPE (MMKernelDevice, mm_kernel_device, G_TYPE_OBJECT)
@@ -90,6 +94,26 @@ mm_kernel_device_get_physdev_pid (MMKernelDevice *self)
 }
 
 const gchar *
+mm_kernel_device_get_physdev_subsystem (MMKernelDevice *self)
+{
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE (self), NULL);
+
+    return (MM_KERNEL_DEVICE_GET_CLASS (self)->get_physdev_subsystem ?
+            MM_KERNEL_DEVICE_GET_CLASS (self)->get_physdev_subsystem (self) :
+            NULL);
+}
+
+const gchar *
+mm_kernel_device_get_physdev_sysfs_path (MMKernelDevice *self)
+{
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE (self), NULL);
+
+    return (MM_KERNEL_DEVICE_GET_CLASS (self)->get_physdev_sysfs_path ?
+            MM_KERNEL_DEVICE_GET_CLASS (self)->get_physdev_sysfs_path (self) :
+            NULL);
+}
+
+const gchar *
 mm_kernel_device_get_physdev_manufacturer (MMKernelDevice *self)
 {
     g_return_val_if_fail (MM_IS_KERNEL_DEVICE (self), NULL);
@@ -99,24 +123,43 @@ mm_kernel_device_get_physdev_manufacturer (MMKernelDevice *self)
             NULL);
 }
 
-gboolean
-mm_kernel_device_is_candidate (MMKernelDevice *self,
-                               gboolean        manual_scan)
+gint
+mm_kernel_device_get_interface_class (MMKernelDevice *self)
 {
-    g_return_val_if_fail (MM_IS_KERNEL_DEVICE (self), FALSE);
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE (self), -1);
 
-    return (MM_KERNEL_DEVICE_GET_CLASS (self)->is_candidate ?
-            MM_KERNEL_DEVICE_GET_CLASS (self)->is_candidate (self, manual_scan) :
-            FALSE);
+    return (MM_KERNEL_DEVICE_GET_CLASS (self)->get_interface_class ?
+            MM_KERNEL_DEVICE_GET_CLASS (self)->get_interface_class (self) :
+            -1);
+}
+
+gint
+mm_kernel_device_get_interface_subclass (MMKernelDevice *self)
+{
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE (self), -1);
+
+    return (MM_KERNEL_DEVICE_GET_CLASS (self)->get_interface_subclass ?
+            MM_KERNEL_DEVICE_GET_CLASS (self)->get_interface_subclass (self) :
+            -1);
+}
+
+gint
+mm_kernel_device_get_interface_protocol (MMKernelDevice *self)
+{
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE (self), -1);
+
+    return (MM_KERNEL_DEVICE_GET_CLASS (self)->get_interface_protocol ?
+            MM_KERNEL_DEVICE_GET_CLASS (self)->get_interface_protocol (self) :
+            -1);
 }
 
 const gchar *
-mm_kernel_device_get_parent_sysfs_path (MMKernelDevice *self)
+mm_kernel_device_get_interface_sysfs_path (MMKernelDevice *self)
 {
     g_return_val_if_fail (MM_IS_KERNEL_DEVICE (self), NULL);
 
-    return (MM_KERNEL_DEVICE_GET_CLASS (self)->get_parent_sysfs_path ?
-            MM_KERNEL_DEVICE_GET_CLASS (self)->get_parent_sysfs_path (self) :
+    return (MM_KERNEL_DEVICE_GET_CLASS (self)->get_interface_sysfs_path ?
+            MM_KERNEL_DEVICE_GET_CLASS (self)->get_interface_sysfs_path (self) :
             NULL);
 }
 

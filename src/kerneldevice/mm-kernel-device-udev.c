@@ -242,6 +242,17 @@ ensure_physdev (MMKernelDeviceUdev *self)
 
 /*****************************************************************************/
 
+static void
+ensure_parent (MMKernelDeviceUdev *self)
+{
+    if (self->priv->parent)
+        return;
+    if (self->priv->device)
+        self->priv->parent = g_udev_device_get_parent (self->priv->device);
+}
+
+/*****************************************************************************/
+
 static const gchar *
 kernel_device_get_subsystem (MMKernelDevice *_self)
 {
@@ -384,6 +395,36 @@ kernel_device_get_physdev_pid (MMKernelDevice *_self)
 }
 
 static const gchar *
+kernel_device_get_physdev_sysfs_path (MMKernelDevice *_self)
+{
+    MMKernelDeviceUdev *self;
+
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), NULL);
+
+    self = MM_KERNEL_DEVICE_UDEV (_self);
+    ensure_physdev (self);
+    if (!self->priv->physdev)
+        return NULL;
+
+    return g_udev_device_get_sysfs_path (self->priv->physdev);
+}
+
+static const gchar *
+kernel_device_get_physdev_subsystem (MMKernelDevice *_self)
+{
+    MMKernelDeviceUdev *self;
+
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), NULL);
+
+    self = MM_KERNEL_DEVICE_UDEV (_self);
+    ensure_physdev (self);
+    if (!self->priv->physdev)
+        return NULL;
+
+    return g_udev_device_get_subsystem (self->priv->physdev);
+}
+
+static const gchar *
 kernel_device_get_physdev_manufacturer (MMKernelDevice *_self)
 {
     MMKernelDeviceUdev *self;
@@ -398,93 +439,52 @@ kernel_device_get_physdev_manufacturer (MMKernelDevice *_self)
     return g_udev_device_get_sysfs_attr (self->priv->physdev, "manufacturer");
 }
 
-static const gchar *
-kernel_device_get_parent_sysfs_path (MMKernelDevice *_self)
+static gint
+kernel_device_get_interface_class (MMKernelDevice *_self)
 {
     MMKernelDeviceUdev *self;
 
-    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), 0);
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), -1);
 
     self = MM_KERNEL_DEVICE_UDEV (_self);
-
-    if (!self->priv->parent && self->priv->device)
-        self->priv->parent = g_udev_device_get_parent (self->priv->device);
-    return (self->priv->parent ? g_udev_device_get_sysfs_path (self->priv->parent) : NULL);
+    ensure_parent (self);
+    return (self->priv->parent ? g_udev_device_get_sysfs_attr_as_int (self->priv->parent, "bInterfaceClass") : -1);
 }
 
-static gboolean
-kernel_device_is_candidate (MMKernelDevice *_self,
-                            gboolean        manual_scan)
+static gint
+kernel_device_get_interface_subclass (MMKernelDevice *_self)
 {
     MMKernelDeviceUdev *self;
-    const gchar *physdev_subsys;
-    const gchar *name;
-    const gchar *subsys;
 
-    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), FALSE);
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), -1);
 
     self = MM_KERNEL_DEVICE_UDEV (_self);
+    ensure_parent (self);
+    return (self->priv->parent ? g_udev_device_get_sysfs_attr_as_int (self->priv->parent, "bInterfaceSubClass") : -1);
+}
 
-    if (!self->priv->device)
-        return FALSE;
+static gint
+kernel_device_get_interface_protocol (MMKernelDevice *_self)
+{
+    MMKernelDeviceUdev *self;
 
-    name   = g_udev_device_get_name      (self->priv->device);
-    subsys = g_udev_device_get_subsystem (self->priv->device);
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), -1);
 
-    /* ignore VTs */
-    if (strncmp (name, "tty", 3) == 0 && g_ascii_isdigit (name[3]))
-        return FALSE;
+    self = MM_KERNEL_DEVICE_UDEV (_self);
+    ensure_parent (self);
+    return (self->priv->parent ? g_udev_device_get_sysfs_attr_as_int (self->priv->parent, "bInterfaceProtocol") : -1);
+}
 
-    /* Ignore devices that aren't completely configured by udev yet.  If
-     * ModemManager is started in parallel with udev, explicitly requesting
-     * devices may return devices for which not all udev rules have yet been
-     * applied (a bug in udev/gudev).  Since we often need those rules to match
-     * the device to a specific ModemManager driver, we need to ensure that all
-     * rules have been processed before handling a device.
-     *
-     * This udev tag applies to each port in a device. In other words, the flag
-     * may be set in some ports, but not in others */
-    if (!mm_kernel_device_get_property_as_boolean (MM_KERNEL_DEVICE (self), "ID_MM_CANDIDATE"))
-        return FALSE;
+static const gchar *
+kernel_device_get_interface_sysfs_path (MMKernelDevice *_self)
+{
+    MMKernelDeviceUdev *self;
 
-    /* Load physical device. If there is no physical device, we don't process
-     * the device. */
-    ensure_physdev (self);
-    if (!self->priv->physdev) {
-        /* Log about it, but filter out some common ports that we know don't have
-         * anything to do with mobile broadband.
-         */
-        if (   strcmp (name, "console")
-            && strcmp (name, "ptmx")
-            && strcmp (name, "lo")
-            && strcmp (name, "tty")
-            && !strstr (name, "virbr"))
-            mm_dbg ("(%s/%s): could not get port's parent device", subsys, name);
-        return FALSE;
-    }
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), NULL);
 
-    /* Ignore blacklisted devices. */
-    if (mm_kernel_device_get_global_property_as_boolean (MM_KERNEL_DEVICE (self), "ID_MM_DEVICE_IGNORE")) {
-        mm_dbg ("(%s/%s): device is blacklisted", subsys, name);
-        return FALSE;
-    }
-
-    /* Is the device in the manual-only greylist? If so, return if this is an
-     * automatic scan. */
-    if (!manual_scan && mm_kernel_device_get_global_property_as_boolean (MM_KERNEL_DEVICE (self), "ID_MM_DEVICE_MANUAL_SCAN_ONLY")) {
-        mm_dbg ("(%s/%s): device probed only in manual scan", subsys, name);
-        return FALSE;
-    }
-
-    /* If the physdev is a 'platform' or 'pnp' device that's not whitelisted, ignore it */
-    physdev_subsys = g_udev_device_get_subsystem (self->priv->physdev);
-    if ((!g_strcmp0 (physdev_subsys, "platform") || !g_strcmp0 (physdev_subsys, "pnp")) &&
-        (!mm_kernel_device_get_global_property_as_boolean (MM_KERNEL_DEVICE (self), "ID_MM_PLATFORM_DRIVER_PROBE"))) {
-        mm_dbg ("(%s/%s): port's parent platform driver is not whitelisted", subsys, name);
-        return FALSE;
-    }
-
-    return TRUE;
+    self = MM_KERNEL_DEVICE_UDEV (_self);
+    ensure_parent (self);
+    return (self->priv->parent ? g_udev_device_get_sysfs_path (self->priv->parent) : NULL);
 }
 
 static gboolean
@@ -879,9 +879,13 @@ mm_kernel_device_udev_class_init (MMKernelDeviceUdevClass *klass)
     kernel_device_class->get_physdev_uid                = kernel_device_get_physdev_uid;
     kernel_device_class->get_physdev_vid                = kernel_device_get_physdev_vid;
     kernel_device_class->get_physdev_pid                = kernel_device_get_physdev_pid;
+    kernel_device_class->get_physdev_sysfs_path         = kernel_device_get_physdev_sysfs_path;
+    kernel_device_class->get_physdev_subsystem          = kernel_device_get_physdev_subsystem;
     kernel_device_class->get_physdev_manufacturer       = kernel_device_get_physdev_manufacturer;
-    kernel_device_class->get_parent_sysfs_path          = kernel_device_get_parent_sysfs_path;
-    kernel_device_class->is_candidate                   = kernel_device_is_candidate;
+    kernel_device_class->get_interface_class            = kernel_device_get_interface_class;
+    kernel_device_class->get_interface_subclass         = kernel_device_get_interface_subclass;
+    kernel_device_class->get_interface_protocol         = kernel_device_get_interface_protocol;
+    kernel_device_class->get_interface_sysfs_path       = kernel_device_get_interface_sysfs_path;
     kernel_device_class->cmp                            = kernel_device_cmp;
     kernel_device_class->has_property                   = kernel_device_has_property;
     kernel_device_class->get_property                   = kernel_device_get_property;

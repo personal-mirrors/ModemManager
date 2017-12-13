@@ -60,6 +60,7 @@ struct _MMKernelDeviceGenericPrivate {
     gchar   *physdev_sysfs_path;
     guint16  physdev_vid;
     guint16  physdev_pid;
+    gchar   *physdev_subsystem;
     gchar   *physdev_manufacturer;
     gchar   *physdev_product;
 };
@@ -300,6 +301,26 @@ preload_physdev_pid (MMKernelDeviceGeneric *self)
 }
 
 static void
+preload_physdev_subsystem (MMKernelDeviceGeneric *self)
+{
+    if (!self->priv->physdev_subsystem && self->priv->physdev_sysfs_path) {
+        gchar *aux;
+        gchar *subsyspath;
+
+        aux = g_strdup_printf ("%s/subsystem", self->priv->physdev_sysfs_path);
+        subsyspath = canonicalize_file_name (aux);
+        self->priv->physdev_subsystem = g_path_get_dirname (subsyspath);
+        g_free (subsyspath);
+        g_free (aux);
+    }
+
+    mm_dbg ("(%s/%s) subsystem: %s",
+            mm_kernel_event_properties_get_subsystem (self->priv->properties),
+            mm_kernel_event_properties_get_name      (self->priv->properties),
+            self->priv->physdev_subsystem ? self->priv->physdev_subsystem : "unknown");
+}
+
+static void
 preload_manufacturer (MMKernelDeviceGeneric *self)
 {
     if (!self->priv->physdev_manufacturer)
@@ -392,6 +413,7 @@ preload_contents (MMKernelDeviceGeneric *self)
     preload_driver               (self);
     preload_physdev_vid          (self);
     preload_physdev_pid          (self);
+    preload_physdev_subsystem    (self);
 }
 
 /*****************************************************************************/
@@ -420,8 +442,32 @@ kernel_device_get_sysfs_path (MMKernelDevice *self)
     return MM_KERNEL_DEVICE_GENERIC (self)->priv->sysfs_path;
 }
 
+static gint
+kernel_device_get_interface_class (MMKernelDevice *self)
+{
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_GENERIC (self), -1);
+
+    return (gint) MM_KERNEL_DEVICE_GENERIC (self)->priv->interface_class;
+}
+
+static gint
+kernel_device_get_interface_subclass (MMKernelDevice *self)
+{
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_GENERIC (self), -1);
+
+    return (gint) MM_KERNEL_DEVICE_GENERIC (self)->priv->interface_subclass;
+}
+
+static gint
+kernel_device_get_interface_protocol (MMKernelDevice *self)
+{
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_GENERIC (self), -1);
+
+    return (gint) MM_KERNEL_DEVICE_GENERIC (self)->priv->interface_protocol;
+}
+
 static const gchar *
-kernel_device_get_parent_sysfs_path (MMKernelDevice *self)
+kernel_device_get_interface_sysfs_path (MMKernelDevice *self)
 {
     g_return_val_if_fail (MM_IS_KERNEL_DEVICE_GENERIC (self), NULL);
 
@@ -476,64 +522,27 @@ kernel_device_get_physdev_pid (MMKernelDevice *self)
 }
 
 static const gchar *
+kernel_device_get_physdev_sysfs_path (MMKernelDevice *self)
+{
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_GENERIC (self), 0);
+
+    return MM_KERNEL_DEVICE_GENERIC (self)->priv->physdev_sysfs_path;
+}
+
+static const gchar *
+kernel_device_get_physdev_subsystem (MMKernelDevice *self)
+{
+    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_GENERIC (self), NULL);
+
+    return MM_KERNEL_DEVICE_GENERIC (self)->priv->physdev_subsystem;
+}
+
+static const gchar *
 kernel_device_get_physdev_manufacturer (MMKernelDevice *self)
 {
     g_return_val_if_fail (MM_IS_KERNEL_DEVICE_GENERIC (self), 0);
 
     return MM_KERNEL_DEVICE_GENERIC (self)->priv->physdev_manufacturer;
-}
-
-static gboolean
-kernel_device_is_candidate (MMKernelDevice *_self,
-                            gboolean        manual_scan)
-{
-    MMKernelDeviceGeneric *self;
-    const gchar           *name;
-
-    g_return_val_if_fail (MM_IS_KERNEL_DEVICE_GENERIC (_self), FALSE);
-
-    self = MM_KERNEL_DEVICE_GENERIC (_self);
-
-    name = mm_kernel_event_properties_get_name (self->priv->properties);
-
-    /* ignore VTs */
-    if (strncmp (name, "tty", 3) == 0 && g_ascii_isdigit (name[3])) {
-        mm_dbg ("(%s/%s) VT ignored",
-                mm_kernel_event_properties_get_subsystem (self->priv->properties),
-                mm_kernel_event_properties_get_name      (self->priv->properties));
-        return FALSE;
-    }
-
-    /* only ports tagged as candidate */
-    if (!mm_kernel_device_get_property_as_boolean (_self, "ID_MM_CANDIDATE")) {
-        mm_dbg ("(%s/%s) device not flagged with ID_MM_CANDIDATE",
-                mm_kernel_event_properties_get_subsystem (self->priv->properties),
-                mm_kernel_event_properties_get_name      (self->priv->properties));
-        return FALSE;
-    }
-
-    /* no devices without physical device */
-    if (!self->priv->physdev_sysfs_path) {
-        mm_dbg ("(%s/%s) device without physdev sysfs path",
-                mm_kernel_event_properties_get_subsystem (self->priv->properties),
-                mm_kernel_event_properties_get_name      (self->priv->properties));
-        return FALSE;
-    }
-
-    /* ignore ports explicitly ignored; note that in this case the property
-     * is set in this kernel device itself, unlike in the udev backend, that
-     * goes in the parent udev device */
-    if (mm_kernel_device_get_property_as_boolean (_self, "ID_MM_DEVICE_IGNORE")) {
-        mm_dbg ("(%s/%s) device flagged with ID_MM_DEVICE_IGNORE",
-                mm_kernel_event_properties_get_subsystem (self->priv->properties),
-                mm_kernel_event_properties_get_name      (self->priv->properties));
-        return FALSE;
-    }
-
-    mm_dbg ("(%s/%s) device is candidate",
-            mm_kernel_event_properties_get_subsystem (self->priv->properties),
-            mm_kernel_event_properties_get_name      (self->priv->properties));
-    return TRUE;
 }
 
 static gboolean
@@ -1069,9 +1078,13 @@ mm_kernel_device_generic_class_init (MMKernelDeviceGenericClass *klass)
     kernel_device_class->get_physdev_uid          = kernel_device_get_physdev_uid;
     kernel_device_class->get_physdev_vid          = kernel_device_get_physdev_vid;
     kernel_device_class->get_physdev_pid          = kernel_device_get_physdev_pid;
+    kernel_device_class->get_physdev_sysfs_path   = kernel_device_get_physdev_sysfs_path;
+    kernel_device_class->get_physdev_subsystem    = kernel_device_get_physdev_subsystem;
     kernel_device_class->get_physdev_manufacturer = kernel_device_get_physdev_manufacturer;
-    kernel_device_class->get_parent_sysfs_path    = kernel_device_get_parent_sysfs_path;
-    kernel_device_class->is_candidate             = kernel_device_is_candidate;
+    kernel_device_class->get_interface_class      = kernel_device_get_interface_class;
+    kernel_device_class->get_interface_subclass   = kernel_device_get_interface_subclass;
+    kernel_device_class->get_interface_protocol   = kernel_device_get_interface_protocol;
+    kernel_device_class->get_interface_sysfs_path = kernel_device_get_interface_sysfs_path;
     kernel_device_class->cmp                      = kernel_device_cmp;
     kernel_device_class->has_property             = kernel_device_has_property;
     kernel_device_class->get_property             = kernel_device_get_property;

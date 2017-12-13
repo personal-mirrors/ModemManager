@@ -35,10 +35,12 @@
 #include <mm-gdbus-test.h>
 
 #include "mm-base-manager.h"
+#include "mm-daemon-enums-types.h"
 #include "mm-device.h"
 #include "mm-plugin-manager.h"
 #include "mm-auth.h"
 #include "mm-plugin.h"
+#include "mm-filter.h"
 #include "mm-log.h"
 
 static void initable_iface_init (GInitableIface *iface);
@@ -51,6 +53,7 @@ enum {
     PROP_0,
     PROP_CONNECTION,
     PROP_AUTO_SCAN,
+    PROP_FILTER_POLICY,
     PROP_ENABLE_TEST,
     PROP_PLUGIN_DIR,
     PROP_INITIAL_KERNEL_EVENTS,
@@ -62,6 +65,8 @@ struct _MMBaseManagerPrivate {
     GDBusConnection *connection;
     /* Whether auto-scanning is enabled */
     gboolean auto_scan;
+    /* Filter policy (mask of enabled rules) */
+    MMFilterRule filter_policy;
     /* Whether the test interface is enabled */
     gboolean enable_test;
     /* Path to look for plugins */
@@ -73,6 +78,8 @@ struct _MMBaseManagerPrivate {
     GCancellable *authp_cancellable;
     /* The Plugin Manager object */
     MMPluginManager *plugin_manager;
+    /* The port/device filter */
+    MMFilter *filter;
     /* The container of devices being prepared */
     GHashTable *devices;
     /* The Object Manager server */
@@ -286,7 +293,16 @@ device_added (MMBaseManager  *manager,
             mm_kernel_device_get_name (port),
             mm_kernel_device_get_sysfs_path (port));
 
-    if (!mm_kernel_device_is_candidate (port, manual_scan)) {
+    /* Ignore devices that aren't completely configured by udev yet.  If
+     * ModemManager is started in parallel with udev, explicitly requesting
+     * devices may return devices for which not all udev rules have yet been
+     * applied (a bug in udev/gudev).  Since we often need those rules to match
+     * the device to a specific ModemManager driver, we need to ensure that all
+     * rules have been processed before handling a device.
+     *
+     * This udev tag applies to each port in a device. In other words, the flag
+     * may be set in some ports, but not in others */
+    if (!mm_kernel_device_get_property_as_boolean (port, "ID_MM_CANDIDATE")) {
         /* This could mean that device changed, losing its ID_MM_CANDIDATE
          * flags (such as Bluetooth RFCOMM devices upon disconnect.
          * Try to forget it. */
@@ -296,6 +312,10 @@ device_added (MMBaseManager  *manager,
                 mm_kernel_device_get_name (port));
         return;
     }
+
+    /* Run port filter */
+    if (!mm_filter_port (manager->priv->filter, port, manual_scan))
+        return;
 
     /* If already added, ignore new event */
     if (find_device_by_port (manager, port)) {
@@ -946,23 +966,25 @@ out:
 /*****************************************************************************/
 
 MMBaseManager *
-mm_base_manager_new (GDBusConnection *connection,
-                     const gchar *plugin_dir,
-                     gboolean auto_scan,
-                     const gchar *initial_kernel_events,
-                     gboolean enable_test,
-                     GError **error)
+mm_base_manager_new (GDBusConnection  *connection,
+                     const gchar      *plugin_dir,
+                     gboolean          auto_scan,
+                     MMFilterRule      filter_policy,
+                     const gchar      *initial_kernel_events,
+                     gboolean          enable_test,
+                     GError          **error)
 {
     g_return_val_if_fail (G_IS_DBUS_CONNECTION (connection), NULL);
 
     return g_initable_new (MM_TYPE_BASE_MANAGER,
                            NULL, /* cancellable */
                            error,
-                           MM_BASE_MANAGER_CONNECTION, connection,
-                           MM_BASE_MANAGER_PLUGIN_DIR, plugin_dir,
-                           MM_BASE_MANAGER_AUTO_SCAN, auto_scan,
+                           MM_BASE_MANAGER_CONNECTION,            connection,
+                           MM_BASE_MANAGER_PLUGIN_DIR,            plugin_dir,
+                           MM_BASE_MANAGER_AUTO_SCAN,             auto_scan,
+                           MM_BASE_MANAGER_FILTER_POLICY,         filter_policy,
                            MM_BASE_MANAGER_INITIAL_KERNEL_EVENTS, initial_kernel_events,
-                           MM_BASE_MANAGER_ENABLE_TEST, enable_test,
+                           MM_BASE_MANAGER_ENABLE_TEST,           enable_test,
                            NULL);
 }
 
@@ -1000,6 +1022,9 @@ set_property (GObject *object,
     case PROP_AUTO_SCAN:
         priv->auto_scan = g_value_get_boolean (value);
         break;
+    case PROP_FILTER_POLICY:
+        priv->filter_policy = g_value_get_flags (value);
+        break;
     case PROP_ENABLE_TEST:
         priv->enable_test = g_value_get_boolean (value);
         break;
@@ -1031,6 +1056,9 @@ get_property (GObject *object,
         break;
     case PROP_AUTO_SCAN:
         g_value_set_boolean (value, priv->auto_scan);
+        break;
+    case PROP_FILTER_POLICY:
+        g_value_set_flags (value, priv->filter_policy);
         break;
     case PROP_ENABLE_TEST:
         g_value_set_boolean (value, priv->enable_test);
@@ -1110,8 +1138,13 @@ initable_init (GInitable *initable,
         g_signal_connect (priv->udev, "uevent", G_CALLBACK (handle_uevent), initable);
 #endif
 
+    /* Create filter */
+    priv->filter = mm_filter_new (priv->filter_policy, error);
+    if (!priv->filter)
+        return FALSE;
+
     /* Create plugin manager */
-    priv->plugin_manager = mm_plugin_manager_new (priv->plugin_dir, error);
+    priv->plugin_manager = mm_plugin_manager_new (priv->plugin_dir, priv->filter, error);
     if (!priv->plugin_manager)
         return FALSE;
 
@@ -1158,6 +1191,9 @@ finalize (GObject *object)
     if (priv->udev)
         g_object_unref (priv->udev);
 #endif
+
+    if (priv->filter)
+        g_object_unref (priv->filter);
 
     if (priv->plugin_manager)
         g_object_unref (priv->plugin_manager);
@@ -1215,6 +1251,15 @@ mm_base_manager_class_init (MMBaseManagerClass *manager_class)
                                "Automatically look for new devices",
                                TRUE,
                                G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+    g_object_class_install_property (
+        object_class, PROP_FILTER_POLICY,
+        g_param_spec_flags (MM_BASE_MANAGER_FILTER_POLICY,
+                            "Filter policy",
+                            "Mask of rules enabled in the filter",
+                            MM_TYPE_FILTER_RULE,
+                            MM_FILTER_RULE_NONE,
+                            G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 
     g_object_class_install_property
         (object_class, PROP_ENABLE_TEST,
