@@ -2485,6 +2485,51 @@ mm_3gpp_parse_cfun_query_generic_response (const gchar        *response,
     }
 }
 
+static MMModem3gppEpsUeModeOperation cemode_values[] = {
+    [0] = MM_MODEM_3GPP_EPS_UE_MODE_OPERATION_PS_2,
+    [1] = MM_MODEM_3GPP_EPS_UE_MODE_OPERATION_CSPS_1,
+    [2] = MM_MODEM_3GPP_EPS_UE_MODE_OPERATION_CSPS_2,
+    [3] = MM_MODEM_3GPP_EPS_UE_MODE_OPERATION_PS_1,
+};
+
+gchar *
+mm_3gpp_build_cemode_set_request (MMModem3gppEpsUeModeOperation mode)
+{
+    guint i;
+
+    g_return_val_if_fail (mode != MM_MODEM_3GPP_EPS_UE_MODE_OPERATION_UNKNOWN, NULL);
+
+    for (i = 0; i < G_N_ELEMENTS (cemode_values); i++) {
+        if (mode == cemode_values[i])
+            return g_strdup_printf ("+CEMODE=%u", i);
+    }
+
+    g_assert_not_reached ();
+    return NULL;
+}
+
+gboolean
+mm_3gpp_parse_cemode_query_response (const gchar                    *response,
+                                     MMModem3gppEpsUeModeOperation  *out_mode,
+                                     GError                        **error)
+{
+    guint value = 0;
+
+    response = mm_strip_tag (response, "+CEMODE:");
+    if (mm_get_uint_from_str (response, &value) && value < G_N_ELEMENTS (cemode_values)) {
+        if (out_mode)
+            *out_mode = cemode_values[value];
+        return TRUE;
+    }
+
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_FAILED,
+                 "Couldn't parse UE mode of operation: '%s' (value %u)",
+                 response, value);
+    return FALSE;
+}
+
 /*************************************************************************/
 
 static MMSmsStorage
@@ -2623,7 +2668,7 @@ mm_3gpp_parse_cpms_query_response (const gchar *reply,
 
     if (!g_regex_match (r, reply, 0, &match_info)) {
         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                     "Could not parse CPMS query reponse '%s'", reply);
+                     "Could not parse CPMS query response '%s'", reply);
         goto end;
     }
 
@@ -3960,7 +4005,7 @@ mm_cdma_get_index_from_rm_protocol (MMModemCdmaRmProtocol protocol,
         return 0;
     }
 
-    /* just substracting 1 from the enum value should give us the index */
+    /* just subtracting 1 from the enum value should give us the index */
     return (protocol - 1);
 }
 
