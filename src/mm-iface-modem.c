@@ -1222,6 +1222,7 @@ signal_quality_check_ready (MMIfaceModem *self,
 static void
 peridic_signal_check_step (MMIfaceModem *self)
 {
+    gboolean periodic_signal_check_disabled = FALSE;
     SignalCheckContext *ctx;
 
     ctx = get_signal_check_context (self);
@@ -1263,15 +1264,6 @@ peridic_signal_check_step (MMIfaceModem *self)
             return;
         }
 
-        /* If both tasks are unsupported, implicitly disable. Do NOT clear the
-         * values, because if we're told they are unsupported it may be that
-         * they're really updated via unsolicited messages. */
-        if (!ctx->access_technology_polling_supported && !ctx->signal_quality_polling_supported) {
-            mm_dbg ("Periodic signal checks not supported");
-            periodic_signal_check_disable (self, FALSE);
-            return;
-        }
-
         /* Schedule when we poll next time.
          * Initially we poll at a higher frequency until we get valid signal
          * quality and access technology values. As soon as we get them, OR if
@@ -1280,6 +1272,7 @@ peridic_signal_check_step (MMIfaceModem *self)
         if (ctx->interval == SIGNAL_CHECK_INITIAL_TIMEOUT_SEC) {
             gboolean signal_quality_ready;
             gboolean access_technology_ready;
+            gboolean initial_check_done;
 
             /* Signal quality is ready if unsupported or if we got a valid
              * value reported */
@@ -1289,13 +1282,27 @@ peridic_signal_check_step (MMIfaceModem *self)
             access_technology_ready = (!ctx->access_technology_polling_supported ||
                                        ((ctx->access_technologies & ctx->access_technologies_mask) != MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN));
 
-            if (signal_quality_ready && access_technology_ready) {
-                mm_dbg ("Initial signal quality and access technology ready: fallback to default frequency");
-                ctx->interval = SIGNAL_CHECK_TIMEOUT_SEC;
-            } else if (--ctx->initial_retries == 0) {
-                mm_dbg ("Too many periodic signal checks at high frequency: fallback to default frequency");
+            initial_check_done = ((signal_quality_ready && access_technology_ready) ||
+                                  (--ctx->initial_retries == 0));
+            if (initial_check_done) {
+                /* After the initial check is done, check if periodic signal
+                 * check is disabled. */
+                g_object_get (self,
+                              MM_IFACE_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED,
+                              &periodic_signal_check_disabled,
+                              NULL);
                 ctx->interval = SIGNAL_CHECK_TIMEOUT_SEC;
             }
+        }
+
+        /* If both tasks are unsupported, implicitly disable. Do NOT clear the
+         * values, because if we're told they are unsupported it may be that
+         * they're really updated via unsolicited messages. */
+        if (!ctx->access_technology_polling_supported &&
+            (!ctx->signal_quality_polling_supported || periodic_signal_check_disabled)) {
+            mm_dbg ("Periodic signal and access technologies checks not supported");
+            periodic_signal_check_disable (self, FALSE);
+            return;
         }
 
         mm_dbg ("Periodic signal quality checks scheduled in %ds", ctx->interval);
@@ -5366,6 +5373,15 @@ iface_modem_init (gpointer g_iface)
                                "Whether the sim hot swap support is configured correctly.",
                                FALSE,
                                G_PARAM_READWRITE));
+
+    g_object_interface_install_property
+        (g_iface,
+         g_param_spec_boolean (MM_IFACE_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED,
+                               "Periodic signal check disabled",
+                               "Whether periodic signal check is disabled.",
+                               FALSE,
+                               G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
     initialized = TRUE;
 }
 
