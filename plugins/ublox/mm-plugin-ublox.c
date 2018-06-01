@@ -50,13 +50,11 @@ create_modem (MMPlugin     *self,
 /*****************************************************************************/
 /* Custom init context */
 
-/* Wait up to 20s for the +READY URC */
-#define READY_WAIT_TIME_SECS 20
-
 typedef struct {
     MMPortSerialAt *port;
     GRegex         *ready_regex;
     guint           timeout_id;
+    gint            wait_timeout_secs;
 } CustomInitContext;
 
 static void
@@ -147,8 +145,13 @@ wait_for_ready (GTask *task)
                                                    task,
                                                    NULL);
 
+    mm_dbg ("(%s/%s) waiting %d seconds for init timeout",
+            mm_port_probe_get_port_subsys (probe),
+            mm_port_probe_get_port_name   (probe),
+            ctx->wait_timeout_secs);
+
     /* Otherwise, let the custom init timeout in some seconds. */
-    ctx->timeout_id = g_timeout_add_seconds (READY_WAIT_TIME_SECS, (GSourceFunc) ready_timeout, task);
+    ctx->timeout_id = g_timeout_add_seconds (ctx->wait_timeout_secs, (GSourceFunc) ready_timeout, task);
 }
 
 static void
@@ -199,10 +202,20 @@ ublox_custom_init (MMPortProbe         *probe,
 {
     GTask             *task;
     CustomInitContext *ctx;
+    gint               wait_timeout_secs;
 
     task = g_task_new (probe, cancellable, callback, user_data);
 
+    /* If no explicit READY_DELAY configured, we don't need a custom init procedure */
+    wait_timeout_secs = mm_kernel_device_get_property_as_int (mm_port_probe_peek_port (probe), "ID_MM_UBLOX_PORT_READY_DELAY");
+    if (wait_timeout_secs <= 0) {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
     ctx = g_slice_new0 (CustomInitContext);
+    ctx->wait_timeout_secs = wait_timeout_secs;
     ctx->port = g_object_ref (port);
     ctx->ready_regex = g_regex_new ("\\r\\n\\+AT:\\s*READY\\r\\n",
                                     G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
@@ -225,7 +238,7 @@ ublox_custom_init (MMPortProbe         *probe,
         return;
     }
 
-    /* Device hotplugged, wait for READY URC */
+    /* Device hotplugged and has a defined ready delay, wait for READY URC */
     wait_for_ready (task);
 }
 
