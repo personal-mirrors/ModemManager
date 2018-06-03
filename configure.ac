@@ -5,8 +5,8 @@ dnl Package and library versioning support
 dnl
 
 m4_define([mm_major_version], [1])
-m4_define([mm_minor_version], [7])
-m4_define([mm_micro_version], [991])
+m4_define([mm_minor_version], [9])
+m4_define([mm_micro_version], [0])
 m4_define([mm_version],
           [mm_major_version.mm_minor_version.mm_micro_version])
 
@@ -317,7 +317,7 @@ dnl-----------------------------------------------------------------------------
 dnl MBIM support (enabled by default)
 dnl
 
-LIBMBIM_VERSION=1.16.0
+LIBMBIM_VERSION=1.17.1
 
 AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support]), [], [with_mbim=yes])
 AM_CONDITIONAL(WITH_MBIM, test "x$with_mbim" = "xyes")
