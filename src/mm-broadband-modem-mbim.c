@@ -50,6 +50,8 @@ static void iface_modem_location_init  (MMIfaceModemLocation  *iface);
 static void iface_modem_messaging_init (MMIfaceModemMessaging *iface);
 static void iface_modem_signal_init    (MMIfaceModemSignal    *iface);
 
+static MMIfaceModemSignal *iface_modem_signal_parent;
+
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbim, mm_broadband_modem_mbim, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
@@ -78,11 +80,16 @@ struct _MMBroadbandModemMbimPrivate {
     gchar *caps_firmware_info;
     gchar *caps_hardware_info;
 
+    /* Supported features */
+    gboolean is_pco_supported;
+    gboolean is_ussd_supported;
+    gboolean is_atds_location_supported;
+    gboolean is_atds_signal_supported;
+
     /* Process unsolicited notifications */
     guint notification_id;
     ProcessNotificationFlag setup_flags;
     ProcessNotificationFlag enable_flags;
-    gboolean is_pco_supported;
 
     /* 3GPP registration helpers */
     gchar *current_operator_id;
@@ -1751,7 +1758,6 @@ query_device_services_ready (MbimDevice   *device,
     guint32 device_services_count;
 
     self = g_task_get_source_object (task);
-    self->priv->is_pco_supported = FALSE;
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
@@ -1769,18 +1775,40 @@ query_device_services_ready (MbimDevice   *device,
             guint32 j;
 
             service = mbim_uuid_to_service (&device_services[i]->device_service_id);
-            if (service != MBIM_SERVICE_BASIC_CONNECT_EXTENSIONS)
-                continue;
 
-            for (j = 0; j < device_services[i]->cids_count; j++) {
-                if (device_services[i]->cids[j] == MBIM_CID_BASIC_CONNECT_EXTENSIONS_PCO) {
-                    mm_dbg ("PCO is supported");
-                    self->priv->is_pco_supported = TRUE;
+            switch (service) {
+                case MBIM_SERVICE_BASIC_CONNECT_EXTENSIONS:
+                    for (j = 0; j < device_services[i]->cids_count; j++) {
+                        if (device_services[i]->cids[j] == MBIM_CID_BASIC_CONNECT_EXTENSIONS_PCO) {
+                            mm_dbg ("PCO is supported");
+                            self->priv->is_pco_supported = TRUE;
+                            break;
+                        }
+                    }
                     break;
-                }
+                case MBIM_SERVICE_USSD:
+                    for (j = 0; j < device_services[i]->cids_count; j++) {
+                        if (device_services[i]->cids[j] == MBIM_CID_USSD) {
+                            mm_dbg ("USSD is supported");
+                            self->priv->is_ussd_supported = TRUE;
+                            break;
+                        }
+                    }
+                    break;
+                case MBIM_SERVICE_ATDS:
+                    for (j = 0; j < device_services[i]->cids_count; j++) {
+                        if (device_services[i]->cids[j] == MBIM_CID_ATDS_LOCATION) {
+                            mm_dbg ("ATDS location is supported");
+                            self->priv->is_atds_location_supported = TRUE;
+                        } else if (device_services[i]->cids[j] == MBIM_CID_ATDS_SIGNAL) {
+                            mm_dbg ("ATDS signal is supported");
+                            self->priv->is_atds_signal_supported = TRUE;
+                        }
+                    }
+                    break;
+                default:
+                    break;
             }
-
-            break;
         }
         mbim_device_service_element_array_free (device_services);
     } else {
@@ -3033,29 +3061,56 @@ modem_3gpp_load_operator_code (MMIfaceModem3gpp *_self,
 /* Registration checks (3GPP interface) */
 
 static gboolean
-modem_3gpp_run_registration_checks_finish (MMIfaceModem3gpp *self,
-                                           GAsyncResult *res,
-                                           GError **error)
+modem_3gpp_run_registration_checks_finish (MMIfaceModem3gpp  *self,
+                                           GAsyncResult      *res,
+                                           GError           **error)
 {
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
-register_state_query_ready (MbimDevice *device,
-                            GAsyncResult *res,
-                            GTask *task)
+atds_location_query_ready (MbimDevice   *device,
+                           GAsyncResult *res,
+                           GTask        *task)
 {
-    MbimMessage *response;
-    GError *error = NULL;
-    MbimRegisterState register_state;
-    MbimDataClass available_data_classes;
-    gchar *provider_id;
-    gchar *provider_name;
+    MMBroadbandModemMbim *self;
+    MbimMessage          *response;
+    GError               *error = NULL;
+    guint32               lac;
+    guint32               tac;
+    guint32               cid;
+
+    self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
-    if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_register_state_response_parse (
+    if (!response ||
+        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
+        !mbim_message_atds_location_response_parse (response, &lac, &tac, &cid, &error)) {
+        g_task_return_error (task, error);
+    } else {
+        mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, tac, cid);
+        g_task_return_boolean (task, TRUE);
+    }
+    g_object_unref (task);
+}
+
+static void
+register_state_query_ready (MbimDevice   *device,
+                            GAsyncResult *res,
+                            GTask        *task)
+{
+    MMBroadbandModemMbim *self;
+    MbimMessage          *response;
+    GError               *error = NULL;
+    MbimRegisterState     register_state;
+    MbimDataClass         available_data_classes;
+    gchar                *provider_id;
+    gchar                *provider_name;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response ||
+        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
+        !mbim_message_register_state_response_parse (
             response,
             NULL, /* nw_error */
             &register_state,
@@ -3066,37 +3121,53 @@ register_state_query_ready (MbimDevice *device,
             &provider_name,
             NULL, /* roaming_text */
             NULL, /* registration_flag */
-            NULL)) {
-        MMBroadbandModemMbim *self;
-
-        self = g_task_get_source_object (task);
-        update_registration_info (self,
-                                  register_state,
-                                  available_data_classes,
-                                  provider_id,
-                                  provider_name);
-
-        g_task_return_boolean (task, TRUE);
-    } else
+            &error)) {
         g_task_return_error (task, error);
+        g_object_unref (task);
+        goto out;
+    }
 
+    self = g_task_get_source_object (task);
+    update_registration_info (self,
+                              register_state,
+                              available_data_classes,
+                              provider_id,
+                              provider_name);
+
+    if (self->priv->is_atds_location_supported) {
+        MbimMessage *message;
+
+        message = mbim_message_atds_location_query_new (NULL);
+
+        mbim_device_command (device,
+                             message,
+                             10,
+                             NULL,
+                             (GAsyncReadyCallback)atds_location_query_ready,
+                             task);
+        mbim_message_unref (message);
+        goto out;
+    }
+
+    g_task_return_boolean (task, TRUE);
     g_object_unref (task);
 
+ out:
     if (response)
         mbim_message_unref (response);
 }
 
 static void
-modem_3gpp_run_registration_checks (MMIfaceModem3gpp *self,
-                                    gboolean cs_supported,
-                                    gboolean ps_supported,
-                                    gboolean eps_supported,
-                                    GAsyncReadyCallback callback,
-                                    gpointer user_data)
+modem_3gpp_run_registration_checks (MMIfaceModem3gpp    *self,
+                                    gboolean             cs_supported,
+                                    gboolean             ps_supported,
+                                    gboolean             eps_supported,
+                                    GAsyncReadyCallback  callback,
+                                    gpointer             user_data)
 {
-    MbimDevice *device;
+    MbimDevice  *device;
     MbimMessage *message;
-    GTask *task;
+    GTask       *task;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
@@ -3265,6 +3336,252 @@ modem_3gpp_scan_networks (MMIfaceModem3gpp *self,
                          (GAsyncReadyCallback)visible_providers_query_ready,
                          task);
     mbim_message_unref (message);
+}
+
+/*****************************************************************************/
+/* Check support (Signal interface) */
+
+static gboolean
+modem_signal_check_support_finish (MMIfaceModemSignal  *self,
+                                   GAsyncResult        *res,
+                                   GError             **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+parent_signal_check_support_ready (MMIfaceModemSignal *self,
+                                   GAsyncResult       *res,
+                                   GTask              *task)
+{
+    gboolean parent_supported;
+
+    parent_supported = iface_modem_signal_parent->check_support_finish (self, res, NULL);
+    g_task_return_boolean (task, parent_supported);
+    g_object_unref (task);
+}
+
+static void
+modem_signal_check_support (MMIfaceModemSignal  *self,
+                            GAsyncReadyCallback  callback,
+                            gpointer             user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* If ATDS signal is supported, we support the Signal interface */
+    if (MM_BROADBAND_MODEM_MBIM (self)->priv->is_atds_signal_supported) {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    /* Otherwise, check if the parent CESQ-based implementation works */
+    g_assert (iface_modem_signal_parent->check_support && iface_modem_signal_parent->check_support_finish);
+    iface_modem_signal_parent->check_support (self,
+                                              (GAsyncReadyCallback)parent_signal_check_support_ready,
+                                              task);
+}
+
+/*****************************************************************************/
+/* Load extended signal information (Signal interface) */
+
+typedef struct {
+    MMSignal *gsm;
+    MMSignal *umts;
+    MMSignal *lte;
+} SignalLoadValuesResult;
+
+static void
+signal_load_values_result_free (SignalLoadValuesResult *result)
+{
+    g_clear_object (&result->gsm);
+    g_clear_object (&result->umts);
+    g_clear_object (&result->lte);
+    g_slice_free (SignalLoadValuesResult, result);
+}
+
+static gboolean
+modem_signal_load_values_finish (MMIfaceModemSignal  *self,
+                                 GAsyncResult        *res,
+                                 MMSignal           **cdma,
+                                 MMSignal           **evdo,
+                                 MMSignal           **gsm,
+                                 MMSignal           **umts,
+                                 MMSignal           **lte,
+                                 GError             **error)
+{
+    SignalLoadValuesResult *result;
+
+    result = g_task_propagate_pointer (G_TASK (res), error);
+    if (!result)
+        return FALSE;
+
+    if (gsm && result->gsm) {
+        *gsm = result->gsm;
+        result->gsm = NULL;
+    }
+
+    if (umts && result->umts) {
+        *umts = result->umts;
+        result->umts = NULL;
+    }
+
+    if (lte && result->lte) {
+        *lte = result->lte;
+        result->lte = NULL;
+    }
+
+    signal_load_values_result_free (result);
+
+    /* No 3GPP2 support */
+    if (cdma)
+        *cdma = NULL;
+    if (evdo)
+        *evdo = NULL;
+    return TRUE;
+}
+
+static void
+atds_signal_query_ready (MbimDevice   *device,
+                         GAsyncResult *res,
+                         GTask        *task)
+{
+    MbimMessage            *response;
+    SignalLoadValuesResult *result;
+    GError                 *error = NULL;
+    guint32                 rssi;
+    guint32                 error_rate;
+    guint32                 rscp;
+    guint32                 ecno;
+    guint32                 rsrq;
+    guint32                 rsrp;
+    guint32                 snr;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response ||
+        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
+        !mbim_message_atds_signal_response_parse (response, &rssi, &error_rate, &rscp, &ecno, &rsrq, &rsrp, &snr, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    result = g_slice_new0 (SignalLoadValuesResult);
+
+    if (rscp <= 96) {
+        result->umts = mm_signal_new ();
+        mm_signal_set_rscp (result->umts, -120.0 + rscp);
+    }
+
+    if (ecno <= 49) {
+        if (!result->umts)
+            result->umts = mm_signal_new ();
+        mm_signal_set_ecio (result->umts, -24.0 + ((float) ecno / 2));
+    }
+
+    if (rsrq <= 34) {
+        result->lte = mm_signal_new ();
+        mm_signal_set_rsrq (result->lte, -19.5 + ((float) rsrq / 2));
+    }
+
+    if (rsrp <= 97) {
+        if (!result->lte)
+            result->lte = mm_signal_new ();
+        mm_signal_set_rsrp (result->lte, -140.0 + rsrp);
+    }
+
+    if (snr <= 35) {
+        if (!result->lte)
+            result->lte = mm_signal_new ();
+        mm_signal_set_snr (result->lte, -5.0 + snr);
+    }
+
+    /* RSSI may be given for all 2G, 3G or 4G so we detect to which one applies */
+    if (rssi <= 31) {
+        gdouble value;
+
+        value = -113.0 + (2 * rssi);
+        if (result->lte)
+            mm_signal_set_rssi (result->lte, value);
+        else if (result->umts)
+            mm_signal_set_rssi (result->umts, value);
+        else {
+            result->gsm = mm_signal_new ();
+            mm_signal_set_rssi (result->gsm, value);
+        }
+    }
+
+    if (!result->gsm && !result->umts && !result->lte) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "No signal details given");
+        g_object_unref (task);
+        signal_load_values_result_free (result);
+        return;
+    }
+
+    g_task_return_pointer (task, result, (GDestroyNotify) signal_load_values_result_free);
+    g_object_unref (task);
+}
+
+static void
+parent_signal_load_values_ready (MMIfaceModemSignal *self,
+                                 GAsyncResult       *res,
+                                 GTask              *task)
+{
+    SignalLoadValuesResult *result;
+    GError                 *error = NULL;
+
+    result = g_slice_new0 (SignalLoadValuesResult);
+    if (!iface_modem_signal_parent->load_values_finish (self, res,
+                                                        NULL, NULL,
+                                                        &result->gsm, &result->umts, &result->lte,
+                                                        &error)) {
+        signal_load_values_result_free (result);
+        g_task_return_error (task, error);
+    } else if (!result->gsm && !result->umts && !result->lte) {
+        signal_load_values_result_free (result);
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "No signal details given");
+    } else
+        g_task_return_pointer (task, result, (GDestroyNotify) signal_load_values_result_free);
+    g_object_unref (task);
+}
+
+static void
+modem_signal_load_values (MMIfaceModemSignal  *self,
+                          GCancellable        *cancellable,
+                          GAsyncReadyCallback  callback,
+                          gpointer             user_data)
+{
+    MbimDevice  *device;
+    MbimMessage *message;
+    GTask       *task;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    if (MM_BROADBAND_MODEM_MBIM (self)->priv->is_atds_signal_supported) {
+        message = mbim_message_atds_signal_query_new (NULL);
+        mbim_device_command (device,
+                             message,
+                             5,
+                             NULL,
+                             (GAsyncReadyCallback)atds_signal_query_ready,
+                             task);
+        mbim_message_unref (message);
+        return;
+    }
+
+    /* Fallback to parent CESQ based implementation */
+    g_assert (iface_modem_signal_parent->load_values && iface_modem_signal_parent->load_values_finish);
+    iface_modem_signal_parent->load_values (self,
+                                            NULL,
+                                            (GAsyncReadyCallback)parent_signal_load_values_ready,
+                                            task);
 }
 
 /*****************************************************************************/
@@ -3708,10 +4025,12 @@ iface_modem_messaging_init (MMIfaceModemMessaging *iface)
 static void
 iface_modem_signal_init (MMIfaceModemSignal *iface)
 {
-    iface->check_support = NULL;
-    iface->check_support_finish = NULL;
-    iface->load_values = NULL;
-    iface->load_values_finish = NULL;
+    iface_modem_signal_parent = g_type_interface_peek_parent (iface);
+
+    iface->check_support = modem_signal_check_support;
+    iface->check_support_finish = modem_signal_check_support_finish;
+    iface->load_values = modem_signal_load_values;
+    iface->load_values_finish = modem_signal_load_values_finish;
 }
 
 static void

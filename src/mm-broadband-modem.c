@@ -4008,7 +4008,7 @@ registration_state_changed (MMPortSerialAt *port,
                             MMBroadbandModem *self)
 {
     MMModem3gppRegistrationState state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
-    gulong lac = 0, cell_id = 0;
+    gulong lac = 0, tac = 0, cell_id = 0;
     MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
     gboolean cgreg = FALSE;
     gboolean cereg = FALSE;
@@ -4028,13 +4028,24 @@ registration_state_changed (MMPortSerialAt *port,
         return;
     }
 
-    /* Report new registration state */
+    /* Report new registration state and fix LAC/TAC.
+     * According to 3GPP TS 27.007:
+     *  - If CREG reports <AcT> 7 (LTE) then the <lac> field contains TAC
+     *  - CEREG always reports TAC
+     */
     if (cgreg)
         mm_iface_modem_3gpp_update_ps_registration_state (MM_IFACE_MODEM_3GPP (self), state);
-    else if (cereg)
+    else if (cereg) {
+        tac = lac;
+        lac = 0;
         mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self), state);
-    else
+    } else {
+        if (act == MM_MODEM_ACCESS_TECHNOLOGY_LTE) {
+            tac = lac;
+            lac = 0;
+        }
         mm_iface_modem_3gpp_update_cs_registration_state (MM_IFACE_MODEM_3GPP (self), state);
+    }
 
     /* Only update access technologies from CREG/CGREG response if the modem
      * doesn't have custom commands for access technology loading, otherwise
@@ -4045,7 +4056,7 @@ registration_state_changed (MMPortSerialAt *port,
         MM_IFACE_MODEM_GET_INTERFACE (self)->load_access_technologies == NULL)
         mm_iface_modem_3gpp_update_access_technologies (MM_IFACE_MODEM_3GPP (self), act);
 
-    mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, cell_id);
+    mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, tac, cell_id);
 }
 
 static void
@@ -4266,6 +4277,7 @@ registration_status_check_ready (MMBroadbandModem *self,
     MMModem3gppRegistrationState state;
     MMModemAccessTechnology act;
     gulong lac;
+    gulong tac;
     gulong cid;
 
     ctx = g_task_get_task_data (task);
@@ -4332,6 +4344,7 @@ registration_status_check_ready (MMBroadbandModem *self,
     cereg = FALSE;
     state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
     act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+    tac = 0;
     lac = 0;
     cid = 0;
     parsed = mm_3gpp_parse_creg_response (match_info,
@@ -4360,7 +4373,11 @@ registration_status_check_ready (MMBroadbandModem *self,
         return;
     }
 
-    /* Report new registration state */
+    /* Report new registration state and fix LAC/TAC.
+     * According to 3GPP TS 27.007:
+     *  - If CREG reports <AcT> 7 (LTE) then the <lac> field contains TAC
+     *  - CEREG always reports TAC
+     */
     if (cgreg) {
         if (ctx->running_cs)
             mm_dbg ("Got PS registration state when checking CS registration state");
@@ -4368,12 +4385,18 @@ registration_status_check_ready (MMBroadbandModem *self,
             mm_dbg ("Got PS registration state when checking EPS registration state");
         mm_iface_modem_3gpp_update_ps_registration_state (MM_IFACE_MODEM_3GPP (self), state);
     } else if (cereg) {
+        tac = lac;
+        lac = 0;
         if (ctx->running_cs)
             mm_dbg ("Got EPS registration state when checking CS registration state");
         else if (ctx->running_ps)
             mm_dbg ("Got EPS registration state when checking PS registration state");
         mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self), state);
     } else {
+        if (act == MM_MODEM_ACCESS_TECHNOLOGY_LTE) {
+            tac = lac;
+            lac = 0;
+        }
         if (ctx->running_ps)
             mm_dbg ("Got CS registration state when checking PS registration state");
         else if (ctx->running_eps)
@@ -4382,7 +4405,7 @@ registration_status_check_ready (MMBroadbandModem *self,
     }
 
     mm_iface_modem_3gpp_update_access_technologies (MM_IFACE_MODEM_3GPP (self), act);
-    mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, cid);
+    mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, tac, cid);
 
     run_registration_checks_context_step (task);
 }
@@ -9969,12 +9992,10 @@ enable (MMBaseModem *self,
         break;
 
     case MM_MODEM_STATE_FAILED:
-    case MM_MODEM_STATE_INITIALIZING:
         g_task_return_new_error (task,
                                  MM_CORE_ERROR,
                                  MM_CORE_ERROR_WRONG_STATE,
-                                 "Cannot enable modem: "
-                                 "device not fully initialized yet");
+                                 "Cannot enable modem: initialization failed");
         break;
 
     case MM_MODEM_STATE_LOCKED:
@@ -9984,7 +10005,9 @@ enable (MMBaseModem *self,
                                  "Cannot enable modem: device locked");
         break;
 
-    case MM_MODEM_STATE_DISABLED: {
+    case MM_MODEM_STATE_INITIALIZING:
+    case MM_MODEM_STATE_DISABLED:
+    case MM_MODEM_STATE_DISABLING: {
         EnablingContext *ctx;
 
         ctx = g_new0 (EnablingContext, 1);
@@ -9997,20 +10020,8 @@ enable (MMBaseModem *self,
         return;
     }
 
-    case MM_MODEM_STATE_DISABLING:
-        g_task_return_new_error (task,
-                                 MM_CORE_ERROR,
-                                 MM_CORE_ERROR_WRONG_STATE,
-                                 "Cannot enable modem: "
-                                 "currently being disabled");
-        break;
-
     case MM_MODEM_STATE_ENABLING:
-        g_task_return_new_error (task,
-                                 MM_CORE_ERROR,
-                                 MM_CORE_ERROR_IN_PROGRESS,
-                                 "Cannot enable modem: "
-                                 "already being enabled");
+        g_assert_not_reached ();
         break;
 
     case MM_MODEM_STATE_ENABLED:
