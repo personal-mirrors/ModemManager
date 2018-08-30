@@ -225,6 +225,51 @@ NOVATEL_COMMON_COMPILER_FLAGS = -I$(top_srcdir)/plugins/novatel
 NOVATEL_COMMON_LIBADD_FLAGS   = $(builddir)/libmm-utils-novatel.la
 
 ################################################################################
+# common xmm support
+################################################################################
+
+noinst_LTLIBRARIES += libhelpers-xmm.la
+libhelpers_xmm_la_SOURCES = \
+	xmm/mm-modem-helpers-xmm.c \
+	xmm/mm-modem-helpers-xmm.h \
+	$(NULL)
+
+noinst_PROGRAMS += test-modem-helpers-xmm
+test_modem_helpers_xmm_SOURCES = \
+	xmm/tests/test-modem-helpers-xmm.c \
+	$(NULL)
+test_modem_helpers_xmm_CPPFLAGS = \
+	-I$(top_srcdir)/plugins/xmm \
+	$(NULL)
+test_modem_helpers_xmm_LDADD = \
+	$(builddir)/libhelpers-xmm.la  \
+	$(top_builddir)/src/libhelpers.la \
+	$(top_builddir)/libmm-glib/libmm-glib.la \
+	$(NULL)
+
+noinst_LTLIBRARIES += libmm-utils-xmm.la
+libmm_utils_xmm_la_SOURCES = \
+	xmm/mm-shared-xmm.h \
+	xmm/mm-shared-xmm.c \
+	xmm/mm-broadband-modem-xmm.h \
+	xmm/mm-broadband-modem-xmm.c \
+	$(NULL)
+
+if WITH_MBIM
+libmm_utils_xmm_la_SOURCES += \
+	xmm/mm-broadband-modem-mbim-xmm.h \
+	xmm/mm-broadband-modem-mbim-xmm.c \
+	$(NULL)
+endif
+
+libmm_utils_xmm_la_LIBADD = \
+	$(builddir)/libhelpers-xmm.la \
+	$(NULL)
+
+XMM_COMMON_COMPILER_FLAGS = -I$(top_srcdir)/plugins/xmm
+XMM_COMMON_LIBADD_FLAGS   = $(builddir)/libmm-utils-xmm.la
+
+################################################################################
 # plugin: generic
 ################################################################################
 
@@ -605,8 +650,8 @@ pkglib_LTLIBRARIES += libmm-plugin-cinterion.la
 libmm_plugin_cinterion_la_SOURCES = \
 	cinterion/mm-plugin-cinterion.c \
 	cinterion/mm-plugin-cinterion.h \
-	cinterion/mm-common-cinterion.c \
-	cinterion/mm-common-cinterion.h \
+	cinterion/mm-shared-cinterion.c \
+	cinterion/mm-shared-cinterion.h \
 	cinterion/mm-broadband-modem-cinterion.c \
 	cinterion/mm-broadband-modem-cinterion.h \
 	cinterion/mm-broadband-bearer-cinterion.c \
@@ -986,6 +1031,23 @@ libmm_plugin_quectel_la_SOURCES = \
 	$(NULL)
 libmm_plugin_quectel_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
 libmm_plugin_quectel_la_LDFLAGS  = $(PLUGIN_COMMON_LINKER_FLAGS)
+
+################################################################################
+# plugin: fibocom
+################################################################################
+
+pkglib_LTLIBRARIES += libmm-plugin-fibocom.la
+libmm_plugin_fibocom_la_SOURCES = \
+	fibocom/mm-plugin-fibocom.c \
+	fibocom/mm-plugin-fibocom.h \
+	$(NULL)
+libmm_plugin_fibocom_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS) $(XMM_COMMON_COMPILER_FLAGS)
+libmm_plugin_fibocom_la_LDFLAGS  = $(PLUGIN_COMMON_LINKER_FLAGS)
+libmm_plugin_fibocom_la_LIBADD   = $(XMM_COMMON_LIBADD_FLAGS)
+
+dist_udevrules_DATA += fibocom/77-mm-fibocom-port-types.rules
+
+AM_CFLAGS += -DTESTUDEVRULESDIR_FIBOCOM=\"${srcdir}/fibocom\"
 
 ################################################################################
 # udev rules tester
