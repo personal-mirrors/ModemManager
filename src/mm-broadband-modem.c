@@ -2238,20 +2238,17 @@ modem_load_access_technologies_finish (MMIfaceModem *self,
 {
     AccessTechAndMask *tech;
 
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+    tech = g_task_propagate_pointer (G_TASK (res), error);
+    if (!tech)
         return FALSE;
-
-    tech = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
-    g_assert (tech);
 
     *access_technologies = tech->access_technologies;
     *mask = tech->mask;
+    g_free (tech);
     return TRUE;
 }
 
 typedef struct {
-    MMBroadbandModem *self;
-    GSimpleAsyncResult *result;
     MMPortSerialQcdm *port;
 
     guint32 opmode;
@@ -2266,18 +2263,21 @@ typedef struct {
 } AccessTechContext;
 
 static void
-access_tech_context_complete_and_free (AccessTechContext *ctx,
-                                       GError *error, /* takes ownership */
-                                       gboolean idle)
+access_tech_context_free (AccessTechContext *ctx)
+{
+    if (ctx->port) {
+        mm_port_serial_close (MM_PORT_SERIAL (ctx->port));
+        g_object_unref (ctx->port);
+    }
+    g_free (ctx);
+}
+
+static AccessTechAndMask *
+access_tech_and_mask_new (AccessTechContext *ctx)
 {
     AccessTechAndMask *tech;
     MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
     guint mask = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
-
-    if (error) {
-        g_simple_async_result_take_error (ctx->result, error);
-        goto done;
-    }
 
     if (ctx->fallback_mask) {
         mm_dbg ("Fallback access technology: 0x%08x", ctx->fallback_act);
@@ -2333,32 +2333,18 @@ access_tech_context_complete_and_free (AccessTechContext *ctx,
     }
 
 done:
-    if (error == NULL) {
-        tech = g_new0 (AccessTechAndMask, 1);
-        tech->access_technologies = act;
-        tech->mask = mask;
-        g_simple_async_result_set_op_res_gpointer (ctx->result, tech, g_free);
-    }
-
-    if (idle)
-        g_simple_async_result_complete_in_idle (ctx->result);
-    else
-        g_simple_async_result_complete (ctx->result);
-
-    g_object_unref (ctx->result);
-    g_object_unref (ctx->self);
-    if (ctx->port) {
-        mm_port_serial_close (MM_PORT_SERIAL (ctx->port));
-        g_object_unref (ctx->port);
-    }
-    g_free (ctx);
+    tech = g_new0 (AccessTechAndMask, 1);
+    tech->access_technologies = act;
+    tech->mask = mask;
+    return tech;
 }
 
 static void
 access_tech_qcdm_wcdma_ready (MMPortSerialQcdm *port,
                               GAsyncResult *res,
-                              AccessTechContext *ctx)
+                              GTask *task)
 {
+    AccessTechContext *ctx;
     QcdmResult *result;
     gint err = QCDM_SUCCESS;
     guint8 l1;
@@ -2367,9 +2353,12 @@ access_tech_qcdm_wcdma_ready (MMPortSerialQcdm *port,
 
     response = mm_port_serial_qcdm_command_finish (port, res, &error);
     if (error) {
-        access_tech_context_complete_and_free (ctx, error, FALSE);
+        g_task_return_error (task, error);
+        g_object_unref (task);
         return;
     }
+
+    ctx = g_task_get_task_data (task);
 
     /* Parse the response */
     result = qcdm_cmd_wcdma_subsys_state_info_result ((const gchar *) response->data,
@@ -2387,14 +2376,16 @@ access_tech_qcdm_wcdma_ready (MMPortSerialQcdm *port,
             ctx->wcdma_open = TRUE;
     }
 
-    access_tech_context_complete_and_free (ctx, NULL, FALSE);
+    g_task_return_pointer (task, access_tech_and_mask_new (ctx), g_free);
+    g_object_unref (task);
 }
 
 static void
 access_tech_qcdm_gsm_ready (MMPortSerialQcdm *port,
                             GAsyncResult *res,
-                            AccessTechContext *ctx)
+                            GTask *task)
 {
+    AccessTechContext *ctx;
     GByteArray *cmd;
     QcdmResult *result;
     gint err = QCDM_SUCCESS;
@@ -2405,7 +2396,8 @@ access_tech_qcdm_gsm_ready (MMPortSerialQcdm *port,
 
     response = mm_port_serial_qcdm_command_finish (port, res, &error);
     if (error) {
-        access_tech_context_complete_and_free (ctx, error, FALSE);
+        g_task_return_error (task, error);
+        g_object_unref (task);
         return;
     }
 
@@ -2415,13 +2407,16 @@ access_tech_qcdm_gsm_ready (MMPortSerialQcdm *port,
                                                     &err);
     g_byte_array_unref (response);
     if (!result) {
-        error = g_error_new (MM_CORE_ERROR,
-                             MM_CORE_ERROR_FAILED,
-                             "Failed to parse GSM subsys command result: %d",
-                             err);
-        access_tech_context_complete_and_free (ctx, error, FALSE);
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Failed to parse GSM subsys command result: %d",
+                                 err);
+        g_object_unref (task);
         return;
     }
+
+    ctx = g_task_get_task_data (task);
 
     qcdm_result_get_u8 (result, QCDM_CMD_GSM_SUBSYS_STATE_INFO_ITEM_CM_OP_MODE, &opmode);
     qcdm_result_get_u8 (result, QCDM_CMD_GSM_SUBSYS_STATE_INFO_ITEM_CM_SYS_MODE, &sysmode);
@@ -2440,15 +2435,16 @@ access_tech_qcdm_gsm_ready (MMPortSerialQcdm *port,
                                  3,
                                  NULL,
                                  (GAsyncReadyCallback)access_tech_qcdm_wcdma_ready,
-                                 ctx);
+                                 task);
     g_byte_array_unref (cmd);
 }
 
 static void
 access_tech_qcdm_hdr_ready (MMPortSerialQcdm *port,
                             GAsyncResult *res,
-                            AccessTechContext *ctx)
+                            GTask *task)
 {
+    AccessTechContext *ctx;
     QcdmResult *result;
     gint err = QCDM_SUCCESS;
     guint8 session = 0;
@@ -2458,9 +2454,12 @@ access_tech_qcdm_hdr_ready (MMPortSerialQcdm *port,
 
     response = mm_port_serial_qcdm_command_finish (port, res, &error);
     if (error) {
-        access_tech_context_complete_and_free (ctx, error, FALSE);
+        g_task_return_error (task, error);
+        g_object_unref (task);
         return;
     }
+
+    ctx = g_task_get_task_data (task);
 
     /* Parse the response */
     result = qcdm_cmd_hdr_subsys_state_info_result ((const gchar *) response->data,
@@ -2478,14 +2477,16 @@ access_tech_qcdm_hdr_ready (MMPortSerialQcdm *port,
             ctx->evdo_open = TRUE;
     }
 
-    access_tech_context_complete_and_free (ctx, NULL, FALSE);
+    g_task_return_pointer (task, access_tech_and_mask_new (ctx), g_free);
+    g_object_unref (task);
 }
 
 static void
 access_tech_qcdm_cdma_ready (MMPortSerialQcdm *port,
                              GAsyncResult *res,
-                             AccessTechContext *ctx)
+                             GTask *task)
 {
+    AccessTechContext *ctx;
     GByteArray *cmd;
     QcdmResult *result;
     gint err = QCDM_SUCCESS;
@@ -2495,7 +2496,8 @@ access_tech_qcdm_cdma_ready (MMPortSerialQcdm *port,
 
     response = mm_port_serial_qcdm_command_finish (port, res, &error);
     if (error) {
-        access_tech_context_complete_and_free (ctx, error, FALSE);
+        g_task_return_error (task, error);
+        g_object_unref (task);
         return;
     }
 
@@ -2505,13 +2507,16 @@ access_tech_qcdm_cdma_ready (MMPortSerialQcdm *port,
                                                    &err);
     g_byte_array_unref (response);
     if (!result) {
-        error = g_error_new (MM_CORE_ERROR,
-                             MM_CORE_ERROR_FAILED,
-                             "Failed to parse CM subsys command result: %d",
-                             err);
-        access_tech_context_complete_and_free (ctx, error, FALSE);
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Failed to parse CM subsys command result: %d",
+                                 err);
+        g_object_unref (task);
         return;
     }
+
+    ctx = g_task_get_task_data (task);
 
     qcdm_result_get_u32 (result, QCDM_CMD_CM_SUBSYS_STATE_INFO_ITEM_OPERATING_MODE, &ctx->opmode);
     qcdm_result_get_u32 (result, QCDM_CMD_CM_SUBSYS_STATE_INFO_ITEM_SYSTEM_MODE, &ctx->sysmode);
@@ -2530,7 +2535,7 @@ access_tech_qcdm_cdma_ready (MMPortSerialQcdm *port,
                                  3,
                                  NULL,
                                  (GAsyncReadyCallback)access_tech_qcdm_hdr_ready,
-                                 ctx);
+                                 task);
     g_byte_array_unref (cmd);
 }
 
@@ -2566,6 +2571,7 @@ modem_load_access_technologies (MMIfaceModem *self,
                                 gpointer user_data)
 {
     AccessTechContext *ctx;
+    GTask *task;
     GByteArray *cmd;
     GError *error = NULL;
 
@@ -2574,13 +2580,11 @@ modem_load_access_technologies (MMIfaceModem *self,
      * registration state
      */
     ctx = g_new0 (AccessTechContext, 1);
-    ctx->self = g_object_ref (self);
-    ctx->result = g_simple_async_result_new (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             modem_load_access_technologies);
-
     ctx->port = mm_base_modem_peek_port_qcdm (MM_BASE_MODEM (self));
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, ctx, (GDestroyNotify)access_tech_context_free);
+
     if (ctx->port) {
         /* Need to open QCDM port as it may be closed/blocked */
         if (mm_port_serial_open (MM_PORT_SERIAL (ctx->port), &error)) {
@@ -2603,7 +2607,7 @@ modem_load_access_technologies (MMIfaceModem *self,
                                              3,
                                              NULL,
                                              (GAsyncReadyCallback)access_tech_qcdm_gsm_ready,
-                                             ctx);
+                                             task);
                 g_byte_array_unref (cmd);
                 return;
             }
@@ -2618,7 +2622,7 @@ modem_load_access_technologies (MMIfaceModem *self,
                                              3,
                                              NULL,
                                              (GAsyncReadyCallback)access_tech_qcdm_cdma_ready,
-                                             ctx);
+                                             task);
                 g_byte_array_unref (cmd);
                 return;
             }
@@ -2637,12 +2641,14 @@ modem_load_access_technologies (MMIfaceModem *self,
          * guess access technologies from the registration information.
          */
         access_tech_from_cdma_registration_state (MM_BROADBAND_MODEM (self), ctx);
+        g_task_return_pointer (task, access_tech_and_mask_new (ctx), g_free);
     } else {
-        error = g_error_new_literal (MM_CORE_ERROR,
-                                     MM_CORE_ERROR_UNSUPPORTED,
-                                     "Cannot get 3GPP access technology without a QCDM port");
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_UNSUPPORTED,
+                                 "Cannot get 3GPP access technology without a QCDM port");
     }
-    access_tech_context_complete_and_free (ctx, error, TRUE);
+    g_object_unref (task);
 }
 
 /*****************************************************************************/
@@ -7139,27 +7145,15 @@ modem_cdma_load_meid (MMIfaceModemCdma *self,
 /* Setup/Cleanup unsolicited events (CDMA interface) */
 
 typedef struct {
-    MMBroadbandModem *self;
     gboolean setup;
-    GSimpleAsyncResult *result;
     MMPortSerialQcdm *qcdm;
+    gboolean close_port;
 } CdmaUnsolicitedEventsContext;
 
 static void
-cdma_unsolicited_events_context_complete_and_free (CdmaUnsolicitedEventsContext *ctx,
-                                                   gboolean close_port,
-                                                   GError *error)
+cdma_unsolicited_events_context_free (CdmaUnsolicitedEventsContext *ctx)
 {
-    if (error)
-        g_simple_async_result_take_error (ctx->result, error);
-    else
-        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-    g_simple_async_result_complete_in_idle (ctx->result);
-
-    g_clear_object (&ctx->result);
-    g_clear_object (&ctx->self);
-
-    if (ctx->qcdm && close_port)
+    if (ctx->qcdm && ctx->close_port)
         mm_port_serial_close (MM_PORT_SERIAL (ctx->qcdm));
     g_clear_object (&ctx->qcdm);
 
@@ -7169,16 +7163,23 @@ cdma_unsolicited_events_context_complete_and_free (CdmaUnsolicitedEventsContext 
 static void
 logcmd_qcdm_ready (MMPortSerialQcdm *port,
                    GAsyncResult *res,
-                   CdmaUnsolicitedEventsContext *ctx)
+                   GTask *task)
 {
+    MMBroadbandModem *self;
+    CdmaUnsolicitedEventsContext *ctx;
     QcdmResult *result;
     gint err = QCDM_SUCCESS;
     GByteArray *response;
     GError *error = NULL;
 
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
     response = mm_port_serial_qcdm_command_finish (port, res, &error);
     if (error) {
-        cdma_unsolicited_events_context_complete_and_free (ctx, TRUE, error);
+        ctx->close_port = TRUE;
+        g_task_return_error (task, error);
+        g_object_unref (task);
         return;
     }
 
@@ -7188,18 +7189,20 @@ logcmd_qcdm_ready (MMPortSerialQcdm *port,
                                                   &err);
     g_byte_array_unref (response);
     if (!result) {
-        error = g_error_new (MM_CORE_ERROR,
-                             MM_CORE_ERROR_FAILED,
-                             "Failed to parse Log Config Set Mask command result: %d",
-                             err);
-        cdma_unsolicited_events_context_complete_and_free (ctx, TRUE, error);
+        ctx->close_port = TRUE;
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Failed to parse Log Config Set Mask command result: %d",
+                                 err);
+        g_object_unref (task);
         return;
     }
 
     mm_port_serial_qcdm_add_unsolicited_msg_handler (port,
                                                      DM_LOG_ITEM_EVDO_PILOT_SETS_V2,
                                                      ctx->setup ? qcdm_evdo_pilot_sets_log_handle : NULL,
-                                                     ctx->self,
+                                                     self,
                                                      NULL);
 
     qcdm_result_unref (result);
@@ -7212,7 +7215,9 @@ logcmd_qcdm_ready (MMPortSerialQcdm *port,
      * Setup should leave the port open to allow log messages to be received
      * and sent to handlers.
      */
-    cdma_unsolicited_events_context_complete_and_free (ctx, ctx->setup ? FALSE : TRUE, NULL);
+    ctx->close_port = ctx->setup ? FALSE : TRUE;
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
 }
 
 static void
@@ -7222,20 +7227,21 @@ modem_cdma_setup_cleanup_unsolicited_events (MMBroadbandModem *self,
                                              gpointer user_data)
 {
     CdmaUnsolicitedEventsContext *ctx;
+    GTask *task;
     GByteArray *logcmd;
     uint16_t log_items[] = { DM_LOG_ITEM_EVDO_PILOT_SETS_V2, 0 };
     GError *error = NULL;
 
     ctx = g_new0 (CdmaUnsolicitedEventsContext, 1);
-    ctx->self = g_object_ref (self);
     ctx->setup = TRUE;
-    ctx->result = g_simple_async_result_new (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             modem_cdma_setup_cleanup_unsolicited_events);
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, ctx, (GDestroyNotify)cdma_unsolicited_events_context_free);
+
     ctx->qcdm = mm_base_modem_get_port_qcdm (MM_BASE_MODEM (self));
     if (!ctx->qcdm) {
-        cdma_unsolicited_events_context_complete_and_free (ctx, FALSE, NULL);
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
         return;
     }
 
@@ -7245,7 +7251,8 @@ modem_cdma_setup_cleanup_unsolicited_events (MMBroadbandModem *self,
      */
     if (setup || !mm_port_serial_is_open (MM_PORT_SERIAL (ctx->qcdm))) {
         if (!mm_port_serial_open (MM_PORT_SERIAL (ctx->qcdm), &error)) {
-            cdma_unsolicited_events_context_complete_and_free (ctx, FALSE, error);
+            g_task_return_boolean (task, TRUE);
+            g_object_unref (task);
             return;
         }
     }
@@ -7262,7 +7269,7 @@ modem_cdma_setup_cleanup_unsolicited_events (MMBroadbandModem *self,
                                  5,
                                  NULL,
                                  (GAsyncReadyCallback)logcmd_qcdm_ready,
-                                 ctx);
+                                 task);
     g_byte_array_unref (logcmd);
 }
 
@@ -7271,7 +7278,7 @@ modem_cdma_setup_cleanup_unsolicited_events_finish (MMIfaceModemCdma *self,
                                                     GAsyncResult *res,
                                                     GError **error)
 {
-    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
@@ -8142,14 +8149,13 @@ typedef struct {
 } SetupRegistrationChecksResults;
 
 typedef struct {
-    MMBroadbandModem *self;
-    GSimpleAsyncResult *result;
     gboolean has_qcdm_port;
     gboolean has_sprint_commands;
 } SetupRegistrationChecksContext;
 
-static void
-setup_registration_checks_context_complete_and_free (SetupRegistrationChecksContext *ctx)
+static SetupRegistrationChecksResults *
+setup_registration_checks_results_new (MMBroadbandModem *self,
+                                       SetupRegistrationChecksContext *ctx)
 {
     SetupRegistrationChecksResults *results;
 
@@ -8162,7 +8168,7 @@ setup_registration_checks_context_complete_and_free (SetupRegistrationChecksCont
         results->skip_qcdm_hdr_step = TRUE;
     }
 
-    if (MM_IFACE_MODEM_CDMA_GET_INTERFACE (ctx->self)->get_detailed_registration_state ==
+    if (MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->get_detailed_registration_state ==
         modem_cdma_get_detailed_registration_state) {
         /* Skip CDMA1x Serving System check if we have Sprint specific
          * commands AND if the default detailed registration checker
@@ -8183,11 +8189,7 @@ setup_registration_checks_context_complete_and_free (SetupRegistrationChecksCont
         }
     }
 
-    g_simple_async_result_set_op_res_gpointer (ctx->result, results, g_free);
-    g_simple_async_result_complete_in_idle (ctx->result);
-    g_object_unref (ctx->result);
-    g_object_unref (ctx->self);
-    g_free (ctx);
+    return results;
 }
 
 static gboolean
@@ -8202,86 +8204,104 @@ modem_cdma_setup_registration_checks_finish (MMIfaceModemCdma *self,
 {
     SetupRegistrationChecksResults *results;
 
-    if (g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error))
+    results = g_task_propagate_pointer (G_TASK (res), error);
+    if (!results)
         return FALSE;
 
-    results = g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (res));
     *skip_qcdm_call_manager_step = results->skip_qcdm_call_manager_step;
     *skip_qcdm_hdr_step = results->skip_qcdm_hdr_step;
     *skip_at_cdma_service_status_step = results->skip_at_cdma_service_status_step;
     *skip_at_cdma1x_serving_system_step = results->skip_at_cdma1x_serving_system_step;
     *skip_detailed_registration_state = results->skip_detailed_registration_state;
+    g_free (results);
     return TRUE;
 }
 
 static void
-speri_check_ready (MMIfaceModemCdma *self,
+speri_check_ready (MMIfaceModemCdma *_self,
                    GAsyncResult *res,
-                   SetupRegistrationChecksContext *ctx)
+                   GTask *task)
 {
+    MMBroadbandModem *self = MM_BROADBAND_MODEM (_self);
+    SetupRegistrationChecksContext *ctx;
     GError *error = NULL;
+
+    ctx = g_task_get_task_data (task);
 
     mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
     if (error)
         g_error_free (error);
     else
         /* We DO have SPERI */
-        ctx->self->priv->has_speri = TRUE;
+        self->priv->has_speri = TRUE;
 
     /* All done */
-    ctx->self->priv->checked_sprint_support = TRUE;
-    setup_registration_checks_context_complete_and_free (ctx);
+    self->priv->checked_sprint_support = TRUE;
+    g_task_return_pointer (task,
+                           setup_registration_checks_results_new (self, ctx),
+                           g_free);
+    g_object_unref (task);
 }
 
 static void
-spservice_check_ready (MMIfaceModemCdma *self,
+spservice_check_ready (MMIfaceModemCdma *_self,
                        GAsyncResult *res,
-                       SetupRegistrationChecksContext *ctx)
+                       GTask *task)
 {
+    MMBroadbandModem *self = MM_BROADBAND_MODEM (_self);
+    SetupRegistrationChecksContext *ctx;
     GError *error = NULL;
+
+    ctx = g_task_get_task_data (task);
 
     mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
     if (error) {
         g_error_free (error);
-        ctx->self->priv->checked_sprint_support = TRUE;
-        setup_registration_checks_context_complete_and_free (ctx);
+        self->priv->checked_sprint_support = TRUE;
+        g_task_return_pointer (task,
+                               setup_registration_checks_results_new (self, ctx),
+                               g_free);
+        g_object_unref (task);
         return;
     }
 
     /* We DO have SPSERVICE, look for SPERI */
     ctx->has_sprint_commands = TRUE;
-    ctx->self->priv->has_spservice = TRUE;
+    self->priv->has_spservice = TRUE;
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               "$SPERI?",
                               3,
                               FALSE,
                               (GAsyncReadyCallback)speri_check_ready,
-                              ctx);
+                              task);
 }
 
 static void
-modem_cdma_setup_registration_checks (MMIfaceModemCdma *self,
+modem_cdma_setup_registration_checks (MMIfaceModemCdma *_self,
                                       GAsyncReadyCallback callback,
                                       gpointer user_data)
 {
+    MMBroadbandModem *self = MM_BROADBAND_MODEM (_self);
     SetupRegistrationChecksContext *ctx;
+    GTask *task;
 
     ctx = g_new0 (SetupRegistrationChecksContext, 1);
-    ctx->self = g_object_ref (self);
-    ctx->result = g_simple_async_result_new (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             modem_cdma_setup_registration_checks);
 
     /* Check if we have a QCDM port */
     ctx->has_qcdm_port = !!mm_base_modem_peek_port_qcdm (MM_BASE_MODEM (self));
 
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, ctx, g_free);
+
     /* If we have cached results of Sprint command checking, use them */
-    if (ctx->self->priv->checked_sprint_support) {
-        ctx->has_sprint_commands = ctx->self->priv->has_spservice;
+    if (self->priv->checked_sprint_support) {
+        ctx->has_sprint_commands = self->priv->has_spservice;
 
         /* Completes in idle */
-        setup_registration_checks_context_complete_and_free (ctx);
+        g_task_return_pointer (task,
+                               setup_registration_checks_results_new (self, ctx),
+                               g_free);
+        g_object_unref (task);
         return;
     }
 
@@ -8291,7 +8311,7 @@ modem_cdma_setup_registration_checks (MMIfaceModemCdma *self,
                               3,
                               FALSE,
                               (GAsyncReadyCallback)spservice_check_ready,
-                              ctx);
+                              task);
 }
 
 /*****************************************************************************/
@@ -8299,14 +8319,13 @@ modem_cdma_setup_registration_checks (MMIfaceModemCdma *self,
 
 typedef struct {
     MMBroadbandModem *self;
-    GSimpleAsyncResult *result;
     GCancellable *cancellable;
     GTimer *timer;
     guint max_registration_time;
 } RegisterInCdmaNetworkContext;
 
 static void
-register_in_cdma_network_context_complete_and_free (RegisterInCdmaNetworkContext *ctx)
+register_in_cdma_network_context_free (RegisterInCdmaNetworkContext *ctx)
 {
     /* If our cancellable reference is still around, clear it */
     if (ctx->self->priv->modem_cdma_pending_registration_cancellable ==
@@ -8317,8 +8336,6 @@ register_in_cdma_network_context_complete_and_free (RegisterInCdmaNetworkContext
     if (ctx->timer)
         g_timer_destroy (ctx->timer);
 
-    g_simple_async_result_complete (ctx->result);
-    g_object_unref (ctx->result);
     g_object_unref (ctx->cancellable);
     g_object_unref (ctx->self);
     g_free (ctx);
@@ -8329,7 +8346,7 @@ modem_cdma_register_in_network_finish (MMIfaceModemCdma *self,
                                        GAsyncResult *res,
                                        GError **error)
 {
-    return !g_simple_async_result_propagate_error (G_SIMPLE_ASYNC_RESULT (res), error);
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 #undef REG_IS_IDLE
@@ -8344,25 +8361,28 @@ modem_cdma_register_in_network_finish (MMIfaceModemCdma *self,
 
 static void run_cdma_registration_checks_ready (MMBroadbandModem *self,
                                                 GAsyncResult *res,
-                                                RegisterInCdmaNetworkContext *ctx);
+                                                GTask *task);
 
 static gboolean
-run_cdma_registration_checks_again (RegisterInCdmaNetworkContext *ctx)
+run_cdma_registration_checks_again (GTask *task)
 {
     /* Get fresh registration state */
     mm_iface_modem_cdma_run_registration_checks (
-        MM_IFACE_MODEM_CDMA (ctx->self),
+        MM_IFACE_MODEM_CDMA (g_task_get_source_object (task)),
         (GAsyncReadyCallback)run_cdma_registration_checks_ready,
-        ctx);
+        task);
     return G_SOURCE_REMOVE;
 }
 
 static void
 run_cdma_registration_checks_ready (MMBroadbandModem *self,
                                     GAsyncResult *res,
-                                    RegisterInCdmaNetworkContext *ctx)
+                                    GTask *task)
 {
+    RegisterInCdmaNetworkContext *ctx;
     GError *error = NULL;
+
+    ctx = g_task_get_task_data (task);
 
     mm_iface_modem_cdma_run_registration_checks_finish (MM_IFACE_MODEM_CDMA (self), res, &error);
 
@@ -8380,8 +8400,8 @@ run_cdma_registration_checks_ready (MMBroadbandModem *self,
             MM_IFACE_MODEM_CDMA (self),
             MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
 
-        g_simple_async_result_take_error (ctx->result, error);
-        register_in_cdma_network_context_complete_and_free (ctx);
+        g_task_return_error (task, error);
+        g_object_unref (task);
         return;
     }
 
@@ -8392,8 +8412,8 @@ run_cdma_registration_checks_ready (MMBroadbandModem *self,
                 "(CDMA1x: '%s', EV-DO: '%s')",
                 REG_IS_DONE (self->priv->modem_cdma_cdma1x_registration_state) ? "yes" : "no",
                 REG_IS_DONE (self->priv->modem_cdma_evdo_registration_state) ? "yes" : "no");
-        g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
-        register_in_cdma_network_context_complete_and_free (ctx);
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
         return;
     }
 
@@ -8411,10 +8431,9 @@ run_cdma_registration_checks_ready (MMBroadbandModem *self,
         mm_iface_modem_cdma_update_access_technologies (
             MM_IFACE_MODEM_CDMA (self),
             MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
-        g_simple_async_result_take_error (
-            ctx->result,
-            mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_NETWORK_TIMEOUT));
-        register_in_cdma_network_context_complete_and_free (ctx);
+        error = mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_NETWORK_TIMEOUT);
+        g_task_return_error (task, error);
+        g_object_unref (task);
         return;
     }
 
@@ -8422,7 +8441,7 @@ run_cdma_registration_checks_ready (MMBroadbandModem *self,
     mm_dbg ("Modem not yet registered in a CDMA network... will recheck soon");
     g_timeout_add_seconds (3,
                            (GSourceFunc)run_cdma_registration_checks_again,
-                           ctx);
+                           task);
 }
 
 static void
@@ -8433,6 +8452,7 @@ modem_cdma_register_in_network (MMIfaceModemCdma *self,
 {
     MMBroadbandModem *broadband = MM_BROADBAND_MODEM (self);
     RegisterInCdmaNetworkContext *ctx;
+    GTask *task;
 
     /* (Try to) cancel previous registration request */
     if (broadband->priv->modem_cdma_pending_registration_cancellable) {
@@ -8443,10 +8463,6 @@ modem_cdma_register_in_network (MMIfaceModemCdma *self,
     ctx = g_new0 (RegisterInCdmaNetworkContext, 1);
     ctx->self = g_object_ref (self);
     ctx->max_registration_time = max_registration_time;
-    ctx->result = g_simple_async_result_new (G_OBJECT (self),
-                                             callback,
-                                             user_data,
-                                             modem_cdma_register_in_network);
     ctx->cancellable = g_cancellable_new ();
 
     /* Keep an accessible reference to the cancellable, so that we can cancel
@@ -8456,10 +8472,14 @@ modem_cdma_register_in_network (MMIfaceModemCdma *self,
 
     /* Get fresh registration state */
     ctx->timer = g_timer_new ();
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, ctx, (GDestroyNotify)register_in_cdma_network_context_free);
+
     mm_iface_modem_cdma_run_registration_checks (
         self,
         (GAsyncReadyCallback)run_cdma_registration_checks_ready,
-        ctx);
+        task);
 }
 
 /*****************************************************************************/

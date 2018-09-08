@@ -365,13 +365,13 @@ load_current_capabilities_get_capabilities_ready (QmiClientDms *client,
                                                                              QmiDmsRadioInterface,
                                                                              i));
         }
+
+        g_task_return_int (task,
+                           mm_modem_capability_from_qmi_capabilities_context (&ctx->capabilities_context));
     }
 
     if (output)
         qmi_message_dms_get_capabilities_output_unref (output);
-
-    g_task_return_int (task,
-                       mm_modem_capability_from_qmi_capabilities_context (&ctx->capabilities_context));
     g_object_unref (task);
 }
 
@@ -9961,16 +9961,22 @@ signal_load_values_context_step (GTask *task)
     case SIGNAL_LOAD_VALUES_STEP_SIGNAL_LAST:
         /* If any result is set, succeed */
         if (VALUES_RESULT_LOADED (ctx)) {
-            g_task_return_pointer (task,
-                                   g_memdup (&ctx->values_result, sizeof (ctx->values_result)),
-                                   (GDestroyNotify)signal_load_values_result_free);
+            SignalLoadValuesResult *values_result;
+
+            /* Steal results from context in order to return them */
+            values_result = ctx->values_result;
             ctx->values_result = NULL;
+
+            g_task_return_pointer (task,
+                                   values_result,
+                                   (GDestroyNotify)signal_load_values_result_free);
         } else {
             g_task_return_new_error (task,
                                      MM_CORE_ERROR,
                                      MM_CORE_ERROR_FAILED,
                                      "No way to load extended signal information");
         }
+        g_object_unref (task);
         return;
     }
 
