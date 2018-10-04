@@ -3311,8 +3311,13 @@ ifc_test_ready (MMBaseModem  *_self,
     MMBroadbandModem *self;
     GError           *error = NULL;
     const gchar      *response;
-    MMFlowControl     mask;
     const gchar      *cmd;
+    MMFlowControl     flow_control_supported;
+    MMFlowControl     flow_control_selected = MM_FLOW_CONTROL_UNKNOWN;
+    MMFlowControl     flow_control_requested;
+    gchar            *flow_control_supported_str = NULL;
+    gchar            *flow_control_selected_str = NULL;
+    MMPortSerialAt   *port;
 
     self = MM_BROADBAND_MODEM (_self);
 
@@ -3322,34 +3327,79 @@ ifc_test_ready (MMBaseModem  *_self,
         goto out;
 
     /* Parse response */
-    mask = mm_parse_ifc_test_response (response, &error);
-    if (mask == MM_FLOW_CONTROL_UNKNOWN)
+    flow_control_supported = mm_parse_ifc_test_response (response, &error);
+    if (flow_control_supported == MM_FLOW_CONTROL_UNKNOWN)
+        goto out;
+    flow_control_supported_str = mm_flow_control_build_string_from_mask (flow_control_supported);
+
+    port = mm_base_modem_peek_best_at_port (_self, &error);
+    if (!port)
         goto out;
 
-    /* We prefer the methods in this order:
-     *  RTS/CTS
-     *  XON/XOFF
-     *  None.
-     */
-    if (mask & MM_FLOW_CONTROL_RTS_CTS) {
-        self->priv->flow_control = MM_FLOW_CONTROL_RTS_CTS;
-        cmd = "+IFC=2,2";
-    } else if (mask & MM_FLOW_CONTROL_XON_XOFF) {
-        self->priv->flow_control = MM_FLOW_CONTROL_XON_XOFF;
-        cmd = "+IFC=1,1";
-    } else if (mask & MM_FLOW_CONTROL_NONE) {
-        self->priv->flow_control = MM_FLOW_CONTROL_NONE;
-        cmd = "+IFC=0,0";
-    } else
-        g_assert_not_reached ();
+    flow_control_requested = mm_port_serial_get_flow_control (MM_PORT_SERIAL (port));
+    if (flow_control_requested != MM_FLOW_CONTROL_UNKNOWN) {
+        gchar *flow_control_requested_str;
 
-    /* Notify the flow control property update */
+        flow_control_requested_str = mm_flow_control_build_string_from_mask (flow_control_requested);
+
+        /* If flow control settings requested via udev tag are not supported by
+         * the modem, we trigger a fatal error */
+        if (!(flow_control_supported & flow_control_requested)) {
+            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                     "Explicitly requested flow control settings (%s) are not supported by the device (%s)",
+                                     flow_control_requested_str, flow_control_supported_str);
+            g_object_unref (task);
+            g_free (flow_control_requested_str);
+            g_free (flow_control_supported_str);
+            return;
+        }
+
+        mm_dbg ("Flow control settings explicitly requested (%s)", flow_control_requested_str);
+        flow_control_selected = flow_control_requested;
+        flow_control_selected_str = flow_control_requested_str;
+    } else {
+        /* If flow control is not set explicitly by udev tags,
+         * we prefer the methods in this order:
+         *  RTS/CTS
+         *  XON/XOFF
+         *  None.
+         */
+        if (flow_control_supported & MM_FLOW_CONTROL_RTS_CTS)
+            flow_control_selected = MM_FLOW_CONTROL_RTS_CTS;
+        else if (flow_control_supported & MM_FLOW_CONTROL_XON_XOFF)
+            flow_control_selected = MM_FLOW_CONTROL_XON_XOFF;
+        else if (flow_control_supported & MM_FLOW_CONTROL_NONE)
+            flow_control_selected = MM_FLOW_CONTROL_NONE;
+        else
+            g_assert_not_reached ();
+        flow_control_selected_str = mm_flow_control_build_string_from_mask (flow_control_selected);
+        mm_dbg ("Flow control settings automatically selected (%s)", flow_control_selected_str);
+    }
+
+    /* Select flow control for all connections */
+    self->priv->flow_control = flow_control_selected;
     g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_FLOW_CONTROL]);
 
     /* Set flow control settings and ignore result */
+    switch (flow_control_selected) {
+    case MM_FLOW_CONTROL_RTS_CTS:
+        cmd = "+IFC=2,2";
+        break;
+    case MM_FLOW_CONTROL_XON_XOFF:
+        cmd = "+IFC=1,1";
+        break;
+    case MM_FLOW_CONTROL_NONE:
+        cmd = "+IFC=0,0";
+        break;
+    default:
+        g_assert_not_reached ();
+    }
     mm_base_modem_at_command (_self, cmd, 3, FALSE, NULL, NULL);
 
 out:
+    g_free (flow_control_supported_str);
+    g_free (flow_control_selected_str);
+
     /* Ignore errors */
     if (error) {
         mm_dbg ("couldn't load supported flow control methods: %s", error->message);
@@ -10494,6 +10544,7 @@ sim_hot_swap_enabled:
                 mm_iface_modem_3gpp_ussd_shutdown (MM_IFACE_MODEM_3GPP_USSD (ctx->self));
                 mm_iface_modem_cdma_shutdown (MM_IFACE_MODEM_CDMA (ctx->self));
                 mm_iface_modem_location_shutdown (MM_IFACE_MODEM_LOCATION (ctx->self));
+                mm_iface_modem_signal_shutdown (MM_IFACE_MODEM_SIGNAL (ctx->self));
                 mm_iface_modem_messaging_shutdown (MM_IFACE_MODEM_MESSAGING (ctx->self));
                 mm_iface_modem_voice_shutdown (MM_IFACE_MODEM_VOICE (ctx->self));
                 mm_iface_modem_time_shutdown (MM_IFACE_MODEM_TIME (ctx->self));
@@ -10818,6 +10869,9 @@ set_property (GObject *object,
     case PROP_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED:
         self->priv->periodic_signal_check_disabled = g_value_get_boolean (value);
         break;
+    case PROP_FLOW_CONTROL:
+        self->priv->flow_control = g_value_get_flags (value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -11013,6 +11067,11 @@ dispose (GObject *object)
     if (self->priv->modem_location_dbus_skeleton) {
         mm_iface_modem_location_shutdown (MM_IFACE_MODEM_LOCATION (object));
         g_clear_object (&self->priv->modem_location_dbus_skeleton);
+    }
+
+    if (self->priv->modem_signal_dbus_skeleton) {
+        mm_iface_modem_signal_shutdown (MM_IFACE_MODEM_SIGNAL (object));
+        g_clear_object (&self->priv->modem_signal_dbus_skeleton);
     }
 
     if (self->priv->modem_messaging_dbus_skeleton) {
@@ -11454,6 +11513,6 @@ mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
                             "Flow control settings to use in the connected TTY",
                             MM_TYPE_FLOW_CONTROL,
                             MM_FLOW_CONTROL_NONE,
-                            G_PARAM_READABLE);
+                            G_PARAM_READWRITE);
     g_object_class_install_property (object_class, PROP_FLOW_CONTROL, properties[PROP_FLOW_CONTROL]);
 }

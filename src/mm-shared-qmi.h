@@ -25,6 +25,7 @@
 #include <libqmi-glib.h>
 
 #include "mm-iface-modem.h"
+#include "mm-iface-modem-3gpp.h"
 #include "mm-iface-modem-location.h"
 #include "mm-port-qmi.h"
 
@@ -59,6 +60,93 @@ gboolean   mm_shared_qmi_ensure_client (MMSharedQmi          *self,
                                         QmiClient           **o_client,
                                         GAsyncReadyCallback   callback,
                                         gpointer              user_data);
+
+/* Shared QMI 3GPP operations */
+
+void     mm_shared_qmi_3gpp_register_in_network        (MMIfaceModem3gpp     *self,
+                                                        const gchar          *operator_id,
+                                                        GCancellable         *cancellable,
+                                                        GAsyncReadyCallback   callback,
+                                                        gpointer              user_data);
+gboolean mm_shared_qmi_3gpp_register_in_network_finish (MMIfaceModem3gpp     *self,
+                                                        GAsyncResult         *res,
+                                                        GError              **error);
+
+/* Shared QMI device management support */
+
+void               mm_shared_qmi_load_supported_capabilities        (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+GArray            *mm_shared_qmi_load_supported_capabilities_finish (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_load_current_capabilities          (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+MMModemCapability  mm_shared_qmi_load_current_capabilities_finish   (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_set_current_capabilities           (MMIfaceModem         *self,
+                                                                     MMModemCapability     capabilities,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+gboolean           mm_shared_qmi_set_current_capabilities_finish    (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_load_supported_modes               (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+GArray            *mm_shared_qmi_load_supported_modes_finish        (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_load_current_modes                 (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+gboolean           mm_shared_qmi_load_current_modes_finish          (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     MMModemMode          *allowed,
+                                                                     MMModemMode          *preferred,
+                                                                     GError              **error);
+void               mm_shared_qmi_set_current_modes                  (MMIfaceModem         *self,
+                                                                     MMModemMode           allowed,
+                                                                     MMModemMode           preferred,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+gboolean           mm_shared_qmi_set_current_modes_finish           (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_load_supported_bands               (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+GArray            *mm_shared_qmi_load_supported_bands_finish        (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_load_current_bands                 (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+GArray            *mm_shared_qmi_load_current_bands_finish          (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_set_current_bands                  (MMIfaceModem         *self,
+                                                                     GArray               *bands_array,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+gboolean           mm_shared_qmi_set_current_bands_finish           (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_reset                              (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+gboolean           mm_shared_qmi_reset_finish                       (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_factory_reset                      (MMIfaceModem         *self,
+                                                                     const gchar          *code,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+gboolean           mm_shared_qmi_factory_reset_finish               (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
 
 /* Shared QMI location support */
 

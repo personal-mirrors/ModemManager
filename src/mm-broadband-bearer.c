@@ -1418,16 +1418,6 @@ data_flash_cdma_ready (MMPortSerial *data,
 
     mm_port_serial_flash_finish (data, res, &error);
 
-    /* Cleanup flow control */
-    if (self->priv->flow_control != MM_FLOW_CONTROL_NONE) {
-        GError *flow_control_error = NULL;
-
-        if (!mm_port_serial_set_flow_control (MM_PORT_SERIAL (data), MM_FLOW_CONTROL_NONE, &flow_control_error)) {
-            mm_dbg ("Couldn't reset flow control settings: %s", flow_control_error->message);
-            g_clear_error (&flow_control_error);
-        }
-    }
-
     /* We kept the serial port open during connection, now we close that open
      * count */
     mm_port_serial_close (data);
@@ -1559,16 +1549,6 @@ data_flash_3gpp_ready (MMPortSerial *data,
     ctx = g_task_get_task_data (task);
 
     mm_port_serial_flash_finish (data, res, &error);
-
-    /* Cleanup flow control */
-    if (self->priv->flow_control != MM_FLOW_CONTROL_NONE) {
-        GError *flow_control_error = NULL;
-
-        if (!mm_port_serial_set_flow_control (MM_PORT_SERIAL (data), MM_FLOW_CONTROL_NONE, &flow_control_error)) {
-            mm_dbg ("Couldn't reset flow control settings: %s", flow_control_error->message);
-            g_clear_error (&flow_control_error);
-        }
-    }
 
     /* We kept the serial port open during connection, now we close that open
      * count */
@@ -1991,6 +1971,14 @@ load_connection_status (MMBaseBearer        *self,
     g_object_get (MM_BASE_BEARER (self),
                   MM_BASE_BEARER_MODEM, &modem,
                   NULL);
+
+    /* No connection status checks on CDMA-only */
+    if (MM_BROADBAND_BEARER (self)->priv->connection_type == CONNECTION_TYPE_CDMA) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "Couldn't load connection status: unsupported in CDMA");
+        g_object_unref (task);
+        goto out;
+    }
 
     /* If CID not defined, error out */
     if (!MM_BROADBAND_BEARER (self)->priv->cid) {

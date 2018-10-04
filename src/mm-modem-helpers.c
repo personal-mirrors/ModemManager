@@ -30,6 +30,7 @@
 
 #include "mm-sms-part.h"
 #include "mm-modem-helpers.h"
+#include "mm-helper-enums-types.h"
 #include "mm-log.h"
 
 /*****************************************************************************/
@@ -644,6 +645,28 @@ out:
         g_propagate_error (error, inner_error);
 
     return mask;
+}
+
+MMFlowControl
+mm_flow_control_from_string (const gchar  *str,
+                             GError      **error)
+{
+    GFlagsClass *flags_class;
+    guint i;
+
+    flags_class = G_FLAGS_CLASS (g_type_class_ref (MM_TYPE_FLOW_CONTROL));
+
+    for (i = 0; flags_class->values[i].value_nick; i++) {
+        if (!g_ascii_strcasecmp (str, flags_class->values[i].value_nick))
+            return flags_class->values[i].value;
+    }
+
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_INVALID_ARGS,
+                 "Couldn't match '%s' with a valid MMFlowControl value",
+                 str);
+    return MM_FLOW_CONTROL_UNKNOWN;
 }
 
 /*************************************************************************/
@@ -2237,12 +2260,12 @@ mm_3gpp_parse_cesq_response (const gchar  *response,
     GRegex     *r;
     GMatchInfo *match_info;
     GError     *inner_error = NULL;
-    guint       rxlev = 0;
-    guint       ber = 0;
-    guint       rscp = 0;
-    guint       ecn0 = 0;
-    guint       rsrq = 0;
-    guint       rsrp = 0;
+    guint       rxlev = 99;
+    guint       ber = 99;
+    guint       rscp = 255;
+    guint       ecn0 = 255;
+    guint       rsrq = 255;
+    guint       rsrp = 255;
     gboolean    success = FALSE;
 
     g_assert (out_rxlev);
@@ -2313,9 +2336,9 @@ out:
     return TRUE;
 }
 
-static gboolean
-rxlev_to_rssi (guint    rxlev,
-               gdouble *out_rssi)
+gboolean
+mm_3gpp_rxlev_to_rssi (guint    rxlev,
+                       gdouble *out_rssi)
 {
     if (rxlev <= 63) {
         *out_rssi = -111.0 + rxlev;
@@ -2327,9 +2350,9 @@ rxlev_to_rssi (guint    rxlev,
     return FALSE;
 }
 
-static gboolean
-rscp_level_to_rscp (guint    rscp_level,
-                    gdouble *out_rscp)
+gboolean
+mm_3gpp_rscp_level_to_rscp (guint    rscp_level,
+                            gdouble *out_rscp)
 {
     if (rscp_level <= 96) {
         *out_rscp = -121.0 + rscp_level;
@@ -2341,9 +2364,9 @@ rscp_level_to_rscp (guint    rscp_level,
     return FALSE;
 }
 
-static gboolean
-ecn0_level_to_ecio (guint    ecn0_level,
-                    gdouble *out_ecio)
+gboolean
+mm_3gpp_ecn0_level_to_ecio (guint    ecn0_level,
+                            gdouble *out_ecio)
 {
     if (ecn0_level <= 49) {
         *out_ecio = -24.5 + (((gdouble) ecn0_level) * 0.5);
@@ -2355,9 +2378,9 @@ ecn0_level_to_ecio (guint    ecn0_level,
     return FALSE;
 }
 
-static gboolean
-rsrq_level_to_rsrq (guint    rsrq_level,
-                    gdouble *out_rsrq)
+gboolean
+mm_3gpp_rsrq_level_to_rsrq (guint    rsrq_level,
+                            gdouble *out_rsrq)
 {
     if (rsrq_level <= 34) {
         *out_rsrq = -20.0 + (((gdouble) rsrq_level) * 0.5);
@@ -2369,9 +2392,9 @@ rsrq_level_to_rsrq (guint    rsrq_level,
     return FALSE;
 }
 
-static gboolean
-rsrp_level_to_rsrp (guint    rsrp_level,
-                    gdouble *out_rsrp)
+gboolean
+mm_3gpp_rsrp_level_to_rsrp (guint    rsrp_level,
+                            gdouble *out_rsrp)
 {
     if (rsrp_level <= 97) {
         *out_rsrp = -141.0 + rsrp_level;
@@ -2413,7 +2436,7 @@ mm_3gpp_cesq_response_to_signal_info (const gchar  *response,
         return FALSE;
 
     /* GERAN RSSI */
-    if (rxlev_to_rssi (rxlev, &rssi)) {
+    if (mm_3gpp_rxlev_to_rssi (rxlev, &rssi)) {
         gsm = mm_signal_new ();
         mm_signal_set_rssi (gsm, rssi);
     }
@@ -2421,26 +2444,26 @@ mm_3gpp_cesq_response_to_signal_info (const gchar  *response,
     /* ignore BER */
 
     /* UMTS RSCP */
-    if (rscp_level_to_rscp (rscp_level, &rscp)) {
+    if (mm_3gpp_rscp_level_to_rscp (rscp_level, &rscp)) {
         umts = mm_signal_new ();
         mm_signal_set_rscp (umts, rscp);
     }
 
     /* UMTS EcIo (assumed EcN0) */
-    if (ecn0_level_to_ecio (ecn0_level, &ecio)) {
+    if (mm_3gpp_ecn0_level_to_ecio (ecn0_level, &ecio)) {
         if (!umts)
             umts = mm_signal_new ();
         mm_signal_set_ecio (umts, ecio);
     }
 
     /* LTE RSRQ */
-    if (rsrq_level_to_rsrq (rsrq_level, &rsrq)) {
+    if (mm_3gpp_rsrq_level_to_rsrq (rsrq_level, &rsrq)) {
         lte = mm_signal_new ();
         mm_signal_set_rsrq (lte, rsrq);
     }
 
     /* LTE RSRP */
-    if (rsrp_level_to_rsrp (rsrp_level, &rsrp)) {
+    if (mm_3gpp_rsrp_level_to_rsrp (rsrp_level, &rsrp)) {
         if (!lte)
             lte = mm_signal_new ();
         mm_signal_set_rsrp (lte, rsrp);
@@ -3477,14 +3500,21 @@ mm_3gpp_get_ip_family_from_pdp_type (const gchar *pdp_type)
 }
 
 /*************************************************************************/
-
+/* ICCID validation */
+/*
+ * 89: telecom (2 digits)
+ * cc: country (2 digits)
+ * oo: operator (2 digits)
+ * aaaaaaaaaaaaa: operator-specific account number (13 digits)
+ * x: checksum (1 digit)
+ */
 char *
 mm_3gpp_parse_iccid (const char *raw_iccid, GError **error)
 {
     gboolean swap;
     char *buf, *swapped = NULL;
     gsize len = 0;
-    int f_pos = -1, i;
+    int i;
 
     g_return_val_if_fail (raw_iccid != NULL, NULL);
 
@@ -3495,13 +3525,20 @@ mm_3gpp_parse_iccid (const char *raw_iccid, GError **error)
     /* Make sure the buffer is only digits or 'F' */
     buf = g_strdup (raw_iccid);
     for (len = 0; buf[len]; len++) {
-        if (isdigit (buf[len]))
+        /* Digit values allowed anywhere */
+        if (g_ascii_isdigit (buf[len]))
             continue;
-        if (buf[len] == 'F' || buf[len] == 'f') {
-            buf[len] = 'F';  /* canonicalize the F */
-            f_pos = len;
+
+        /* There are operators (e.g. the Chinese CMCC operator) that abuse the
+         * fact that 4 bits are used to store the BCD encoded numbers, and also
+         * use the [A-F] range as valid characters for the ICCID. Explicitly
+         * allow this range in the operator-specific part. */
+        if (len >= 6 && g_ascii_isxdigit (buf[len])) {
+            /* canonicalize hex digit */
+            buf[len] = g_ascii_toupper (buf[len]);
             continue;
         }
+
         if (buf[len] == '\"') {
             buf[len] = 0;
             break;
@@ -3509,15 +3546,15 @@ mm_3gpp_parse_iccid (const char *raw_iccid, GError **error)
 
         /* Invalid character */
         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                     "ICCID response contained invalid character '%c'",
-                     buf[len]);
+                     "ICCID response contained invalid character '%c' at index '%zu'",
+                     buf[len], len);
         goto error;
     }
 
-    /* BCD encoded ICCIDs are 20 digits long */
-    if (len != 20) {
+    /* ICCIDs are 19 or 20 digits long */
+    if (len < 19 || len > 20) {
         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                     "Invalid ICCID response size (was %zd, expected 20)",
+                     "Invalid ICCID response size (was %zd, expected 19 or 20)",
                      len);
         goto error;
     }
@@ -3526,9 +3563,16 @@ mm_3gpp_parse_iccid (const char *raw_iccid, GError **error)
      * should be '89' for telecommunication purposes according to ISO/IEC 7812.
      */
     if (buf[0] == '8' && buf[1] == '9') {
-      swap = FALSE;
+        swap = FALSE;
     } else if (buf[0] == '9' && buf[1] == '8') {
-      swap = TRUE;
+        /* swapped digits are only expected in raw +CRSM responses, which must all
+         * be 20-bytes long */
+        if (len != 20) {
+            g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                         "Invalid ICCID response size while swap needed (expected 20)");
+            goto error;
+        }
+        swap = TRUE;
     } else {
       /* FIXME: Instead of erroring out, revisit this solution if we find any SIM
        * that doesn't use '89' as the major industry identifier of the ICCID.
@@ -3538,23 +3582,14 @@ mm_3gpp_parse_iccid (const char *raw_iccid, GError **error)
       goto error;
     }
 
-    /* Ensure if there's an 'F' that it's second-to-last if swap = TRUE,
-     * otherwise last if swap = FALSE */
-    if (f_pos >= 0) {
-        if ((swap && (f_pos != len - 2)) || (!swap && (f_pos != len - 1))) {
-            g_set_error_literal (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                                 "Invalid ICCID length (unexpected F position)");
-            goto error;
-        }
-    }
-
     if (swap) {
         /* Swap digits in the ICCID response to get the actual ICCID, each
          * group of 2 digits is reversed.
          *
          *    21436587 -> 12345678
          */
-        swapped = g_malloc0 (25);
+        g_assert (len == 20);
+        swapped = g_malloc0 (21);
         for (i = 0; i < 10; i++) {
             swapped[i * 2] = buf[(i * 2) + 1];
             swapped[(i * 2) + 1] = buf[i * 2];
@@ -4371,4 +4406,62 @@ out:
 
     g_assert (retries >= 0);
     return retries;
+}
+
+/*****************************************************************************/
+
+gboolean
+mm_parse_supl_address (const gchar  *supl,
+                       gchar       **out_fqdn,
+                       guint32      *out_ip,
+                       guint16      *out_port,
+                       GError      **error)
+{
+    gboolean   valid = FALSE;
+    gchar    **split;
+    guint      port;
+    guint32    ip;
+
+    split = g_strsplit (supl, ":", -1);
+    if (g_strv_length (split) != 2) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                     "Invalid SUPL address format: expected FQDN:PORT or IP:PORT");
+        goto out;
+    }
+
+    if (!mm_get_uint_from_str (split[1], &port)) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                     "Invalid SUPL port number specified: not a number: %s", split[1]);
+        goto out;
+    }
+
+    if (port == 0 || port > G_MAXUINT16) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                     "Invalid SUPL port number specified: out of range: %u", port);
+        goto out;
+    }
+
+    /* Port is valid */
+    if (out_port)
+        *out_port = (guint16) port;
+
+    /* Try to parse first item as IP */
+    if (inet_pton (AF_INET, split[0], &ip) <= 0) {
+        /* Otherwise, assume it's a domain name */
+        if (out_fqdn)
+            *out_fqdn = g_strdup (split[0]);
+        if (out_ip)
+            *out_ip = 0;
+    } else {
+        if (out_ip)
+            *out_ip = ip;
+        if (out_fqdn)
+            *out_fqdn = NULL;
+    }
+
+    valid = TRUE;
+
+out:
+    g_strfreev (split);
+    return valid;
 }

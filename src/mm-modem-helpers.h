@@ -112,6 +112,9 @@ typedef enum { /*< underscore_name=mm_flow_control >*/
 MMFlowControl mm_parse_ifc_test_response (const gchar  *response,
                                           GError      **error);
 
+MMFlowControl mm_flow_control_from_string (const gchar  *str,
+                                           GError      **error);
+
 /*****************************************************************************/
 /* 3GPP specific helpers and utilities */
 /*****************************************************************************/
@@ -354,6 +357,30 @@ MMBearerIpFamily  mm_3gpp_get_ip_family_from_pdp_type (const gchar *pdp_type);
 
 char *mm_3gpp_parse_iccid (const char *raw_iccid, GError **error);
 
+gboolean
+mm_3gpp_rscp_level_to_rscp (guint    rscp_level,
+                            gdouble *out_rscp);
+
+gboolean
+mm_3gpp_rxlev_to_rssi (guint    rxlev,
+                       gdouble *out_rssi);
+
+gboolean
+mm_3gpp_ecn0_level_to_ecio (guint    ecn0_level,
+                            gdouble *out_ecio);
+
+gboolean
+mm_3gpp_rsrq_level_to_rsrq (guint    rsrq_level,
+                            gdouble *out_rsrq);
+
+gboolean
+mm_3gpp_rsrp_level_to_rsrp (guint    rsrp_level,
+                            gdouble *out_rsrp);
+
+gboolean
+mm_3gpp_rssnr_level_to_rssnr (gint     rssnr_level,
+                              gdouble *out_rssnr);
+
 /*****************************************************************************/
 /* CDMA specific helpers and utilities */
 /*****************************************************************************/
@@ -403,5 +430,11 @@ gboolean mm_parse_cclk_response (const gchar *response,
 /* +CSIM response parser */
 gint mm_parse_csim_response (const gchar *response,
                                    GError **error);
+
+gboolean mm_parse_supl_address (const gchar  *supl,
+                                gchar       **out_fqdn,
+                                guint32      *out_ip,
+                                guint16      *out_port,
+                                GError      **error);
 
 #endif  /* MM_MODEM_HELPERS_H */
