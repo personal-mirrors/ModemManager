@@ -808,3 +808,206 @@ mm_xmm_xcesq_response_to_signal_info (const gchar  *response,
 
     return TRUE;
 }
+
+/*****************************************************************************/
+/* AT+XLCSLSR=? response parser */
+
+static gboolean
+number_group_contains_value (const gchar  *group,
+                             const gchar  *group_name,
+                             guint         value,
+                             GError      **error)
+{
+    GArray   *aux;
+    guint     i;
+    gboolean  found;
+
+    aux = mm_parse_uint_list (group, NULL);
+    if (!aux) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                     "Unsupported +XLCSLSR format: invalid %s field format", group_name);
+        return FALSE;
+    }
+
+    found = FALSE;
+    for (i = 0; i < aux->len; i++) {
+        guint value_i;
+
+        value_i = g_array_index (aux, guint, i);
+        if (value == value_i) {
+            found = TRUE;
+            break;
+        }
+    }
+
+    g_array_unref (aux);
+    return found;
+}
+
+gboolean
+mm_xmm_parse_xlcslsr_test_response (const gchar  *response,
+                                    gboolean     *transport_protocol_invalid_supported,
+                                    gboolean     *transport_protocol_supl_supported,
+                                    gboolean     *standalone_position_mode_supported,
+                                    gboolean     *ms_assisted_based_position_mode_supported,
+                                    gboolean     *loc_response_type_nmea_supported,
+                                    gboolean     *gnss_type_gps_glonass_supported,
+                                    GError      **error)
+{
+    gboolean   ret = FALSE;
+    gchar    **groups = NULL;
+    GError    *inner_error = NULL;
+
+    /*
+     * AT+XLCSLSR=?
+     * +XLCSLSR:(0-2),(0-3), ,(0,1), ,(0,1),(0 -7200),(0-255),(0-1),(0-2),(1-256),(0,1)
+     *    transport_protocol:  2 (invalid) or 1 (supl)
+     *    pos_mode:            3 (standalone) or 2 (ms assisted/based)
+     *    client_id:           <empty>
+     *    client_id_type:      <empty>
+     *    mlc_number:          <empty>
+     *    mlc_number_type:     <empty>
+     *    interval:            1 (seconds)
+     *    service_type_id:     <empty>
+     *    pseudonym_indicator: <empty>
+     *    loc_response_type:   1 (NMEA strings)
+     *    nmea_mask:           118 (01110110: GGA,GSA,GSV,RMC,VTG)
+     *    gnss_type:           0 (GPS or GLONASS)
+     */
+    response = mm_strip_tag (response, "+XLCSLSR:");
+    groups = mm_split_string_groups (response);
+
+    /* We expect 12 groups */
+    if (g_strv_length (groups) < 12) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                   "Unsupported +XLCSLSR format: expected 12 fields");
+        goto out;
+    }
+
+    if (transport_protocol_invalid_supported) {
+        *transport_protocol_invalid_supported = number_group_contains_value (groups[0],
+                                                                             "transport protocol",
+                                                                             2, /* invalid */
+                                                                             &inner_error);
+        if (inner_error)
+            goto out;
+    }
+
+    if (transport_protocol_supl_supported) {
+        *transport_protocol_supl_supported = number_group_contains_value (groups[0],
+                                                                          "transport protocol",
+                                                                          1, /* supl */
+                                                                          &inner_error);
+        if (inner_error)
+            goto out;
+    }
+
+    if (standalone_position_mode_supported) {
+        *standalone_position_mode_supported = number_group_contains_value (groups[1],
+                                                                           "position mode",
+                                                                           3, /* standalone */
+                                                                           &inner_error);
+        if (inner_error)
+            goto out;
+    }
+
+    if (ms_assisted_based_position_mode_supported) {
+        *ms_assisted_based_position_mode_supported = number_group_contains_value (groups[1],
+                                                                                  "position mode",
+                                                                                  2, /* ms assisted/based */
+                                                                                  &inner_error);
+        if (inner_error)
+            goto out;
+    }
+
+    if (loc_response_type_nmea_supported) {
+        *loc_response_type_nmea_supported = number_group_contains_value (groups[9],
+                                                                         "location response type",
+                                                                         1, /* NMEA */
+                                                                         &inner_error);
+        if (inner_error)
+            goto out;
+    }
+
+    if (gnss_type_gps_glonass_supported) {
+        *gnss_type_gps_glonass_supported = number_group_contains_value (groups[11],
+                                                                        "gnss type",
+                                                                        0, /* GPS/GLONASS */
+                                                                        &inner_error);
+        if (inner_error)
+            goto out;
+    }
+
+    ret = TRUE;
+
+ out:
+    g_strfreev (groups);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    return ret;
+}
+
+/*****************************************************************************/
+/* AT+XLCSSLP? response parser */
+
+gboolean
+mm_xmm_parse_xlcsslp_query_response (const gchar  *response,
+                                     gchar       **supl_address,
+                                     GError      **error)
+{
+    GRegex     *r;
+    GMatchInfo *match_info;
+    GError     *inner_error = NULL;
+    gchar      *address = NULL;
+    guint       port = 0;
+
+    /*
+     * E.g.:
+     *  +XLCSSLP:1,"www.spirent-lcs.com",7275
+     */
+
+    r = g_regex_new ("\\+XLCSSLP:\\s*(\\d+),([^,]*),(\\d+)(?:\\r\\n)?",
+                     G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (!inner_error && g_match_info_matches (match_info)) {
+        guint  type;
+
+        /* We only support types 0 (IPv4) and 1 (FQDN) */
+        mm_get_uint_from_match_info (match_info, 1, &type);
+        if (type != 0 && type != 1) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                       "Unsupported SUPL server address type (%u) in response: %s", type, response);
+            goto out;
+        }
+
+        address = mm_get_string_unquoted_from_match_info (match_info, 2);
+        mm_get_uint_from_match_info (match_info, 3, &port);
+        if (!port) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                       "Invalid SUPL address port number in response: %s", response);
+            goto out;
+        }
+    }
+
+out:
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    if (supl_address)
+        *supl_address = g_strdup_printf ("%s:%u", address, port);
+    g_free (address);
+
+    return TRUE;
+}
