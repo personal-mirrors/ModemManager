@@ -1376,8 +1376,7 @@ detailed_disconnect_finish (MMBroadbandBearer *self,
 static void
 detailed_disconnect_context_free (DetailedDisconnectContext *ctx)
 {
-    if (ctx->cgact_command)
-        g_free (ctx->cgact_command);
+    g_free (ctx->cgact_command);
     g_object_unref (ctx->data);
     g_object_unref (ctx->primary);
     if (ctx->secondary)
@@ -1411,10 +1410,7 @@ data_flash_cdma_ready (MMPortSerial *data,
                        GAsyncResult *res,
                        GTask *task)
 {
-    MMBroadbandBearer *self;
     GError *error = NULL;
-
-    self = g_task_get_source_object (task);
 
     mm_port_serial_flash_finish (data, res, &error);
 
@@ -1541,11 +1537,9 @@ data_flash_3gpp_ready (MMPortSerial *data,
                        GAsyncResult *res,
                        GTask *task)
 {
-    MMBroadbandBearer *self;
     DetailedDisconnectContext *ctx;
     GError *error = NULL;
 
-    self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
 
     mm_port_serial_flash_finish (data, res, &error);
