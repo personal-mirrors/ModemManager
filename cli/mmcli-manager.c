@@ -38,6 +38,7 @@
 
 #include "mmcli.h"
 #include "mmcli-common.h"
+#include "mmcli-output.h"
 
 /* Context */
 typedef struct {
@@ -50,6 +51,7 @@ typedef struct {
 static Context *ctx;
 
 /* Options */
+static gboolean get_daemon_version_flag;
 static gboolean list_modems_flag;
 static gboolean monitor_modems_flag;
 static gboolean scan_modems_flag;
@@ -61,6 +63,10 @@ static gboolean report_kernel_event_auto_scan;
 #endif
 
 static GOptionEntry entries[] = {
+    { "get-daemon-version", 'B', 0, G_OPTION_ARG_NONE, &get_daemon_version_flag,
+      "Get ModemManager daemon version",
+      NULL
+    },
     { "set-logging", 'G', 0, G_OPTION_ARG_STRING, &set_logging_str,
       "Set logging level in the ModemManager daemon",
       "[ERR,WARN,INFO,DEBUG]",
@@ -115,7 +121,8 @@ mmcli_manager_options_enabled (void)
     if (checked)
         return !!n_actions;
 
-    n_actions = (list_modems_flag +
+    n_actions = (get_daemon_version_flag +
+                 list_modems_flag +
                  monitor_modems_flag +
                  scan_modems_flag +
                  !!set_logging_str +
@@ -130,8 +137,15 @@ mmcli_manager_options_enabled (void)
         exit (EXIT_FAILURE);
     }
 
-    if (monitor_modems_flag)
+    if (get_daemon_version_flag)
+        mmcli_force_sync_operation ();
+    else if (monitor_modems_flag) {
+        if (mmcli_output_get () != MMC_OUTPUT_TYPE_HUMAN) {
+            g_printerr ("error: modem monitoring not available in keyvalue output\n");
+            exit (EXIT_FAILURE);
+        }
         mmcli_force_async_operation ();
+    }
 
 #if defined WITH_UDEV
     if (report_kernel_event_auto_scan)
@@ -265,58 +279,56 @@ scan_devices_ready (MMManager    *manager,
     mmcli_async_operation_done ();
 }
 
+#define FOUND_ACTION_PREFIX   "    "
+#define ADDED_ACTION_PREFIX   "(+) "
+#define REMOVED_ACTION_PREFIX "(-) "
+
 static void
-print_modem_short_info (MMObject *modem)
+output_modem_info (MMObject    *obj,
+                   const gchar *prefix)
 {
-    const gchar *manufacturer, *model;
+    gchar       *extra;
+    const gchar *manufacturer;
+    const gchar *model;
 
-    manufacturer = mm_modem_get_manufacturer (mm_object_peek_modem (modem));
-    model = mm_modem_get_model (mm_object_peek_modem (modem));
-
-    g_print ("\t%s [%s] %s\n",
-             mm_object_get_path (modem),
-             manufacturer ? manufacturer : "unknown",
-             model ? model : "unknown");
+    manufacturer = mm_modem_get_manufacturer (mm_object_peek_modem (obj));
+    model = mm_modem_get_model (mm_object_peek_modem (obj));
+    extra = g_strdup_printf ("[%s] %s",
+                             manufacturer ? manufacturer : "manufacturer unknown",
+                             model        ? model        : "model unknown");
+    mmcli_output_listitem (MMC_F_MODEM_LIST_DBUS_PATH,
+                           prefix,
+                           mm_object_get_path (obj),
+                           extra);
+    g_free (extra);
 }
 
 static void
 device_added (MMManager *manager,
               MMObject  *modem)
 {
-    g_print ("Added modem:\n");
-    print_modem_short_info (modem);
-    fflush (stdout);
+    output_modem_info (modem, ADDED_ACTION_PREFIX);
+    mmcli_output_list_dump (MMC_F_MODEM_LIST_DBUS_PATH);
 }
 
 static void
 device_removed (MMManager *manager,
                 MMObject  *modem)
 {
-    g_print ("Removed modem:\n");
-    print_modem_short_info (modem);
-    fflush (stdout);
+    output_modem_info (modem, REMOVED_ACTION_PREFIX);
+    mmcli_output_list_dump (MMC_F_MODEM_LIST_DBUS_PATH);
 }
 
 static void
 list_current_modems (MMManager *manager)
 {
     GList *modems;
+    GList *l;
 
     modems = g_dbus_object_manager_get_objects (G_DBUS_OBJECT_MANAGER (ctx->manager));
-
-    g_print ("\n");
-    if (!modems)
-        g_print ("No modems were found\n");
-    else {
-        GList *l;
-
-        g_print ("Found %u modems:\n", g_list_length (modems));
-        for (l = modems; l; l = g_list_next (l)) {
-            print_modem_short_info (MM_OBJECT (l->data));
-        }
-        g_list_free_full (modems, g_object_unref);
-    }
-    g_print ("\n");
+    for (l = modems; l; l = g_list_next (l))
+        output_modem_info ((MMObject *)(l->data), FOUND_ACTION_PREFIX);
+    mmcli_output_list_dump (MMC_F_MODEM_LIST_DBUS_PATH);
 }
 
 static void
@@ -490,6 +502,12 @@ mmcli_manager_run_synchronous (GDBusConnection *connection)
     /* Initialize context */
     ctx = g_new0 (Context, 1);
     ctx->manager = mmcli_get_manager_sync (connection);
+
+    /* Get daemon version? */
+    if (get_daemon_version_flag) {
+        g_print ("ModemManager daemon %s running\n", mm_manager_get_version (ctx->manager));
+        return;
+    }
 
     /* Setup operation timeout */
     mmcli_force_operation_timeout (mm_manager_peek_proxy (ctx->manager));

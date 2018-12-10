@@ -36,6 +36,7 @@
 #include <mm-gdbus-manager.h>
 #include <mm-gdbus-test.h>
 
+#include "mm-context.h"
 #include "mm-base-manager.h"
 #include "mm-daemon-enums-types.h"
 #include "mm-device.h"
@@ -288,13 +289,16 @@ device_added (MMBaseManager  *manager,
 {
     MMDevice    *device;
     const gchar *physdev_uid;
+    const gchar *subsys;
+    const gchar *name;
 
     g_return_if_fail (port != NULL);
 
+    subsys = mm_kernel_device_get_subsystem (port);
+    name = mm_kernel_device_get_name (port);
+
     mm_dbg ("(%s/%s): adding device at sysfs path: %s",
-            mm_kernel_device_get_subsystem (port),
-            mm_kernel_device_get_name (port),
-            mm_kernel_device_get_sysfs_path (port));
+            subsys, name, mm_kernel_device_get_sysfs_path (port));
 
     /* Ignore devices that aren't completely configured by udev yet.  If
      * ModemManager is started in parallel with udev, explicitly requesting
@@ -310,9 +314,7 @@ device_added (MMBaseManager  *manager,
          * flags (such as Bluetooth RFCOMM devices upon disconnect.
          * Try to forget it. */
         device_removed (manager, port);
-        mm_dbg ("(%s/%s): port not candidate",
-                mm_kernel_device_get_subsystem (port),
-                mm_kernel_device_get_name (port));
+        mm_dbg ("(%s/%s): port not candidate", subsys, name);
         return;
     }
 
@@ -322,9 +324,7 @@ device_added (MMBaseManager  *manager,
 
     /* If already added, ignore new event */
     if (find_device_by_port (manager, port)) {
-        mm_dbg ("(%s/%s): port already added",
-                mm_kernel_device_get_subsystem (port),
-                mm_kernel_device_get_name (port));
+        mm_dbg ("(%s/%s): port already added", subsys, name);
         return;
     }
 
@@ -339,9 +339,7 @@ device_added (MMBaseManager  *manager,
         FindDeviceSupportContext *ctx;
 
         mm_dbg ("(%s/%s): first port in device %s",
-                mm_kernel_device_get_subsystem (port),
-                mm_kernel_device_get_name (port),
-                physdev_uid);
+                subsys, name, physdev_uid);
 
         /* Keep the device listed in the Manager */
         device = mm_device_new (physdev_uid, hotplugged, FALSE);
@@ -360,9 +358,7 @@ device_added (MMBaseManager  *manager,
             ctx);
     } else
         mm_dbg ("(%s/%s): additional port in device %s",
-                mm_kernel_device_get_subsystem (port),
-                mm_kernel_device_get_name (port),
-                physdev_uid);
+                subsys, name, physdev_uid);
 
     /* Grab the port in the existing device. */
     mm_device_grab_port (device, port);
@@ -988,6 +984,7 @@ mm_base_manager_new (GDBusConnection  *connection,
                            MM_BASE_MANAGER_FILTER_POLICY,         filter_policy,
                            MM_BASE_MANAGER_INITIAL_KERNEL_EVENTS, initial_kernel_events,
                            MM_BASE_MANAGER_ENABLE_TEST,           enable_test,
+                           "version",                             MM_DIST_VERSION,
                            NULL);
 }
 

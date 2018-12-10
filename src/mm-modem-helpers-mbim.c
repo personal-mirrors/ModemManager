@@ -315,6 +315,110 @@ mm_mobile_equipment_error_from_mbim_nw_error (MbimNwError nw_error)
 
 /*****************************************************************************/
 
+MMBearerAllowedAuth
+mm_bearer_allowed_auth_from_mbim_auth_protocol (MbimAuthProtocol auth_protocol)
+{
+    switch (auth_protocol) {
+    case MBIM_AUTH_PROTOCOL_NONE:
+        return MM_BEARER_ALLOWED_AUTH_NONE;
+    case MBIM_AUTH_PROTOCOL_PAP:
+        return MM_BEARER_ALLOWED_AUTH_PAP;
+    case MBIM_AUTH_PROTOCOL_CHAP:
+        return MM_BEARER_ALLOWED_AUTH_CHAP;
+    case MBIM_AUTH_PROTOCOL_MSCHAPV2:
+        return MM_BEARER_ALLOWED_AUTH_MSCHAPV2;
+    default:
+        return MM_BEARER_ALLOWED_AUTH_UNKNOWN;
+    }
+}
+
+MbimAuthProtocol
+mm_bearer_allowed_auth_to_mbim_auth_protocol (MMBearerAllowedAuth   bearer_auth,
+                                              GError              **error)
+{
+    gchar *str;
+
+    /* NOTE: the input is a BITMASK, so we try to find a "best match" */
+
+    if (bearer_auth == MM_BEARER_ALLOWED_AUTH_UNKNOWN) {
+        mm_dbg ("Using default (PAP) authentication method");
+        return MBIM_AUTH_PROTOCOL_PAP;
+    }
+    if (bearer_auth & MM_BEARER_ALLOWED_AUTH_PAP)
+        return MBIM_AUTH_PROTOCOL_PAP;
+    if (bearer_auth & MM_BEARER_ALLOWED_AUTH_CHAP)
+        return MBIM_AUTH_PROTOCOL_CHAP;
+    if (bearer_auth & MM_BEARER_ALLOWED_AUTH_MSCHAPV2)
+        return MBIM_AUTH_PROTOCOL_MSCHAPV2;
+    if (bearer_auth & MM_BEARER_ALLOWED_AUTH_NONE)
+        return MBIM_AUTH_PROTOCOL_NONE;
+
+    str = mm_bearer_allowed_auth_build_string_from_mask (bearer_auth);
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_UNSUPPORTED,
+                 "Unsupported authentication methods (%s)",
+                 str);
+    g_free (str);
+    return MBIM_AUTH_PROTOCOL_NONE;
+}
+
+/*****************************************************************************/
+
+MMBearerIpFamily
+mm_bearer_ip_family_from_mbim_context_ip_type (MbimContextIpType ip_type)
+{
+    switch (ip_type) {
+    case MBIM_CONTEXT_IP_TYPE_IPV4:
+        return MM_BEARER_IP_FAMILY_IPV4;
+    case MBIM_CONTEXT_IP_TYPE_IPV6:
+        return MM_BEARER_IP_FAMILY_IPV6;
+    case MBIM_CONTEXT_IP_TYPE_IPV4V6:
+        return MM_BEARER_IP_FAMILY_IPV4V6;
+    case MBIM_CONTEXT_IP_TYPE_IPV4_AND_IPV6:
+        return MM_BEARER_IP_FAMILY_IPV4 | MM_BEARER_IP_FAMILY_IPV6;
+    default:
+        return MM_BEARER_IP_FAMILY_NONE;
+    }
+}
+
+MbimContextIpType
+mm_bearer_ip_family_to_mbim_context_ip_type (MMBearerIpFamily   ip_family,
+                                             GError           **error)
+{
+    gchar *str;
+
+    /* NOTE: the input is a BITMASK, so we try to find a "best match" */
+
+    switch ((guint)ip_family) {
+    case MM_BEARER_IP_FAMILY_IPV4:
+        return MBIM_CONTEXT_IP_TYPE_IPV4;
+    case MM_BEARER_IP_FAMILY_IPV6:
+        return MBIM_CONTEXT_IP_TYPE_IPV6;
+    case  MM_BEARER_IP_FAMILY_IPV4V6:
+        return MBIM_CONTEXT_IP_TYPE_IPV4V6;
+    case (MM_BEARER_IP_FAMILY_IPV4 | MM_BEARER_IP_FAMILY_IPV6):
+        return MBIM_CONTEXT_IP_TYPE_IPV4_AND_IPV6;
+    case MM_BEARER_IP_FAMILY_NONE:
+    case MM_BEARER_IP_FAMILY_ANY:
+        /* A valid default IP family should have been specified */
+        g_assert_not_reached ();
+    default:
+        break;
+    }
+
+    str = mm_bearer_ip_family_build_string_from_mask (ip_family);
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_UNSUPPORTED,
+                 "Unsupported IP type configuration: '%s'",
+                 str);
+    g_free (str);
+    return MBIM_CONTEXT_IP_TYPE_DEFAULT;
+}
+
+/*****************************************************************************/
+
 MMSmsState
 mm_sms_state_from_mbim_message_status (MbimSmsStatus status)
 {

@@ -30,6 +30,7 @@
 
 #include <ModemManager.h>
 
+#include "mm-bearer.h"
 #include "mm-gdbus-modem.h"
 
 G_BEGIN_DECLS
@@ -43,6 +44,7 @@ G_BEGIN_DECLS
 
 typedef struct _MMModem3gpp MMModem3gpp;
 typedef struct _MMModem3gppClass MMModem3gppClass;
+typedef struct _MMModem3gppPrivate MMModem3gppPrivate;
 
 /**
  * MMModem3gpp:
@@ -52,8 +54,8 @@ typedef struct _MMModem3gppClass MMModem3gppClass;
  */
 struct _MMModem3gpp {
     /*< private >*/
-    MmGdbusModem3gppProxy parent;
-    gpointer unused;
+    MmGdbusModem3gppProxy  parent;
+    MMModem3gppPrivate    *priv;
 };
 
 struct _MMModem3gppClass {
@@ -81,7 +83,13 @@ MMModem3gppFacility           mm_modem_3gpp_get_enabled_facility_locks (MMModem3
 
 MMModem3gppEpsUeModeOperation mm_modem_3gpp_get_eps_ue_mode_operation  (MMModem3gpp *self);
 
-GList   *mm_modem_3gpp_get_pco         (MMModem3gpp *self);
+GList       *mm_modem_3gpp_get_pco (MMModem3gpp *self);
+
+const gchar *mm_modem_3gpp_get_initial_eps_bearer_path (MMModem3gpp *self);
+gchar       *mm_modem_3gpp_dup_initial_eps_bearer_path (MMModem3gpp *self);
+
+MMBearerProperties *mm_modem_3gpp_get_initial_eps_bearer_settings  (MMModem3gpp *self);
+MMBearerProperties *mm_modem_3gpp_peek_initial_eps_bearer_settings (MMModem3gpp *self);
 
 void     mm_modem_3gpp_register        (MMModem3gpp *self,
                                         const gchar *network_id,
@@ -134,6 +142,30 @@ gboolean mm_modem_3gpp_set_eps_ue_mode_operation_sync   (MMModem3gpp            
                                                          MMModem3gppEpsUeModeOperation   mode,
                                                          GCancellable                   *cancellable,
                                                          GError                        **error);
+
+void      mm_modem_3gpp_get_initial_eps_bearer        (MMModem3gpp          *self,
+                                                       GCancellable         *cancellable,
+                                                       GAsyncReadyCallback   callback,
+                                                       gpointer              user_data);
+MMBearer *mm_modem_3gpp_get_initial_eps_bearer_finish (MMModem3gpp          *self,
+                                                       GAsyncResult         *res,
+                                                       GError              **error);
+MMBearer *mm_modem_3gpp_get_initial_eps_bearer_sync   (MMModem3gpp          *self,
+                                                       GCancellable         *cancellable,
+                                                       GError              **error);
+
+void     mm_modem_3gpp_set_initial_eps_bearer_settings        (MMModem3gpp          *self,
+                                                               MMBearerProperties   *config,
+                                                               GCancellable         *cancellable,
+                                                               GAsyncReadyCallback   callback,
+                                                               gpointer              user_data);
+gboolean mm_modem_3gpp_set_initial_eps_bearer_settings_finish (MMModem3gpp          *self,
+                                                               GAsyncResult         *res,
+                                                               GError              **error);
+gboolean mm_modem_3gpp_set_initial_eps_bearer_settings_sync   (MMModem3gpp          *self,
+                                                               MMBearerProperties   *config,
+                                                               GCancellable         *cancellable,
+                                                               GError              **error);
 
 /* Deprecated APIs */
 G_DEPRECATED
