@@ -99,7 +99,7 @@ common_setup_cleanup_unsolicited_events (MMBaseCall  *self,
     gint            i;
 
     if (G_UNLIKELY (!self->priv->in_call_events))
-        self->priv->in_call_events = g_regex_new ("\\r\\n(NO CARRIER)|(BUSY)|(NO ANSWER)|(NO DIALTONE)\\r\\n$",
+        self->priv->in_call_events = g_regex_new ("\\r\\n(NO CARRIER|BUSY|NO ANSWER|NO DIALTONE)\\r\\n$",
                                                   G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 
     g_object_get (self,
@@ -147,7 +147,7 @@ cleanup_unsolicited_events (MMBaseCall  *self,
  * then we assume the call attempt is finished and we transition to TERMINATED.
  */
 
-#define INCOMING_TIMEOUT_SECS 5
+#define INCOMING_TIMEOUT_SECS 10
 
 static gboolean
 incoming_timeout_cb (MMBaseCall *self)
