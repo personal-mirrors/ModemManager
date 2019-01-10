@@ -45,10 +45,15 @@ typedef struct {
 static Context *ctx;
 
 /* Options */
+static gboolean status_flag;
 static gboolean list_flag;
 static gchar *select_str;
 
 static GOptionEntry entries[] = {
+    { "firmware-status", 0, 0, G_OPTION_ARG_NONE, &status_flag,
+      "Show status of firmware management.",
+      NULL
+    },
     { "firmware-list", 0, 0, G_OPTION_ARG_NONE, &list_flag,
       "List firmware images installed in a given modem",
       NULL
@@ -84,13 +89,17 @@ mmcli_modem_firmware_options_enabled (void)
     if (checked)
         return !!n_actions;
 
-    n_actions = (list_flag +
+    n_actions = (status_flag +
+                 list_flag +
                  !!select_str);
 
     if (n_actions > 1) {
         g_printerr ("error: too many Firmware actions requested\n");
         exit (EXIT_FAILURE);
     }
+
+    if (status_flag)
+        mmcli_force_sync_operation ();
 
     checked = TRUE;
     return !!n_actions;
@@ -128,6 +137,54 @@ void
 mmcli_modem_firmware_shutdown (void)
 {
     context_free (ctx);
+}
+
+static void
+print_firmware_status (void)
+{
+    MMFirmwareUpdateSettings  *update_settings;
+    gchar                     *method = NULL;
+    const gchar              **device_ids = NULL;
+    const gchar               *version = NULL;
+    const gchar               *fastboot_at = NULL;
+
+    update_settings = mm_modem_firmware_peek_update_settings (ctx->modem_firmware);
+    if (update_settings) {
+        MMModemFirmwareUpdateMethod m;
+
+        m = mm_firmware_update_settings_get_method (update_settings);
+        if (m != MM_MODEM_FIRMWARE_UPDATE_METHOD_NONE) {
+            method = mm_modem_firmware_update_method_build_string_from_mask (m);
+            device_ids = mm_firmware_update_settings_get_device_ids (update_settings);
+            version = mm_firmware_update_settings_get_version (update_settings);
+        }
+
+        switch (m) {
+        case MM_MODEM_FIRMWARE_UPDATE_METHOD_FASTBOOT:
+            fastboot_at = mm_firmware_update_settings_get_fastboot_at (update_settings);
+            break;
+        default:
+            break;
+        }
+    }
+
+    /* There's not much to print in this status info, and if the modem
+     * does not support any firmware update method, we would just be returning
+     * an empty response to the --firmware-status action. So, instead, just
+     * return an error message explicitly when in human output type.
+     * We can remove this error message as soon as there is some parameter
+     * that will always be printed.
+     */
+    if (!method && !fastboot_at && mmcli_output_get () == MMC_OUTPUT_TYPE_HUMAN) {
+        g_printerr ("error: firmware status unsupported\n");
+        exit (EXIT_FAILURE);
+    }
+
+    mmcli_output_string_take  (MMC_F_FIRMWARE_METHOD,      method);
+    mmcli_output_string_array (MMC_F_FIRMWARE_DEVICE_IDS,  device_ids, TRUE);
+    mmcli_output_string       (MMC_F_FIRMWARE_VERSION,     version);
+    mmcli_output_string       (MMC_F_FIRMWARE_FASTBOOT_AT, fastboot_at);
+    mmcli_output_dump ();
 }
 
 static void
@@ -205,6 +262,9 @@ get_modem_ready (GObject      *source,
 
     ensure_modem_firmware ();
 
+    if (status_flag)
+        g_assert_not_reached ();
+
     /* Request to list images? */
     if (list_flag) {
         g_debug ("Asynchronously listing firmware images in modem...");
@@ -263,6 +323,13 @@ mmcli_modem_firmware_run_synchronous (GDBusConnection *connection)
         mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_firmware));
 
     ensure_modem_firmware ();
+
+    /* Request to get firmware status? */
+    if (status_flag) {
+        g_debug ("Printing firmware status...");
+        print_firmware_status ();
+        return;
+    }
 
     /* Request to list firmware images? */
     if (list_flag) {
