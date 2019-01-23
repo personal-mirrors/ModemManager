@@ -159,13 +159,8 @@ print_firmware_status (void)
             version = mm_firmware_update_settings_get_version (update_settings);
         }
 
-        switch (m) {
-        case MM_MODEM_FIRMWARE_UPDATE_METHOD_FASTBOOT:
+        if (m & MM_MODEM_FIRMWARE_UPDATE_METHOD_FASTBOOT)
             fastboot_at = mm_firmware_update_settings_get_fastboot_at (update_settings);
-            break;
-        default:
-            break;
-        }
     }
 
     /* There's not much to print in this status info, and if the modem
@@ -180,10 +175,10 @@ print_firmware_status (void)
         exit (EXIT_FAILURE);
     }
 
-    mmcli_output_string_take  (MMC_F_FIRMWARE_METHOD,      method);
-    mmcli_output_string_array (MMC_F_FIRMWARE_DEVICE_IDS,  device_ids, TRUE);
-    mmcli_output_string       (MMC_F_FIRMWARE_VERSION,     version);
-    mmcli_output_string       (MMC_F_FIRMWARE_FASTBOOT_AT, fastboot_at);
+    mmcli_output_string_list_take (MMC_F_FIRMWARE_METHOD,      method);
+    mmcli_output_string_array     (MMC_F_FIRMWARE_DEVICE_IDS,  device_ids, TRUE);
+    mmcli_output_string           (MMC_F_FIRMWARE_VERSION,     version);
+    mmcli_output_string           (MMC_F_FIRMWARE_FASTBOOT_AT, fastboot_at);
     mmcli_output_dump ();
 }
 

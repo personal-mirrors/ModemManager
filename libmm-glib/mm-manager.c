@@ -89,6 +89,15 @@ get_proxy_type (GDBusObjectManagerClient *manager,
 
 /*****************************************************************************/
 
+static void
+cleanup_modem_manager1_proxy (MMManager *self)
+{
+    if (self->priv->manager_iface_proxy) {
+        g_signal_handlers_disconnect_by_func (self, cleanup_modem_manager1_proxy, NULL);
+        g_clear_object (&self->priv->manager_iface_proxy);
+    }
+}
+
 static gboolean
 ensure_modem_manager1_proxy (MMManager  *self,
                              GError    **error)
@@ -124,6 +133,12 @@ ensure_modem_manager1_proxy (MMManager  *self,
     g_free (object_path);
     g_free (name);
 
+    if (self->priv->manager_iface_proxy)
+        g_signal_connect (self,
+                          "notify::name-owner",
+                          G_CALLBACK (cleanup_modem_manager1_proxy),
+                          NULL);
+
     return !!self->priv->manager_iface_proxy;
 }
 
@@ -142,10 +157,13 @@ MMManager *
 mm_manager_new_finish (GAsyncResult  *res,
                        GError       **error)
 {
-    GDBusObjectManager *ret;
+    GObject *ret;
+    GObject *source_object;
 
-    ret = mm_gdbus_object_manager_client_new_finish (res, error);
-    return (ret ? MM_MANAGER (ret) : NULL);
+    source_object = g_async_result_get_source_object (res);
+    ret = g_async_initable_new_finish (G_ASYNC_INITABLE (source_object), res, error);
+    g_object_unref (source_object);
+    return MM_MANAGER (ret);
 }
 
 /**
@@ -207,19 +225,15 @@ mm_manager_new_sync (GDBusConnection                *connection,
                      GCancellable                   *cancellable,
                      GError                        **error)
 {
-    GInitable *ret;
-
-    ret = g_initable_new (MM_TYPE_MANAGER,
-                          cancellable,
-                          error,
-                          "name", MM_DBUS_SERVICE,
-                          "object-path", MM_DBUS_PATH,
-                          "flags", flags,
-                          "connection", connection,
-                          "get-proxy-type-func", get_proxy_type,
-                          NULL);
-
-    return (ret ? MM_MANAGER (ret) : NULL);
+    return MM_MANAGER (g_initable_new (MM_TYPE_MANAGER,
+                                       cancellable,
+                                       error,
+                                       "name", MM_DBUS_SERVICE,
+                                       "object-path", MM_DBUS_PATH,
+                                       "flags", flags,
+                                       "connection", connection,
+                                       "get-proxy-type-func", get_proxy_type,
+                                       NULL));
 }
 
 /*****************************************************************************/
