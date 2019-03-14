@@ -20,6 +20,28 @@
 #include <ModemManager.h>
 
 /*****************************************************************************/
+/* AT Commands Support */
+
+typedef enum {
+    FEATURE_SUPPORT_UNKNOWN,
+    FEATURE_SUPPORTED,
+    FEATURE_UNSUPPORTED,
+} FeatureSupport;
+
+typedef enum {
+    SETTINGS_UPDATE_METHOD_UNKNOWN,
+    SETTINGS_UPDATE_METHOD_CFUN,
+    SETTINGS_UPDATE_METHOD_COPS,
+} SettingsUpdateMethod;
+
+typedef struct UbloxSupportConfig {
+    gboolean             loaded;
+    SettingsUpdateMethod method;
+    FeatureSupport       uact;
+    FeatureSupport       ubandsel;
+} UbloxSupportConfig;
+
+/*****************************************************************************/
 /* +UPINCNT response parser */
 
 gboolean mm_ublox_parse_upincnt_response (const gchar  *response,
@@ -82,6 +104,13 @@ GArray *mm_ublox_parse_urat_test_response (const gchar  *response,
                                            GError      **error);
 
 /*****************************************************************************/
+/* Model-based config support loading */
+
+gboolean mm_ublox_get_support_config (const gchar         *model,
+                                      UbloxSupportConfig  *config,
+                                      GError             **error);
+
+/*****************************************************************************/
 /* Model-based supported modes filtering */
 
 GArray *mm_ublox_filter_supported_modes (const gchar  *model,
@@ -91,20 +120,22 @@ GArray *mm_ublox_filter_supported_modes (const gchar  *model,
 /*****************************************************************************/
 /* Model-based supported bands loading */
 
-GArray *mm_ublox_get_supported_bands (const gchar  *model,
-                                      GError      **error);
+GArray *mm_ublox_get_supported_bands (const gchar *model,
+                                      GError     **error);
 
 /*****************************************************************************/
 /* UBANDSEL? response parser */
 
 GArray *mm_ublox_parse_ubandsel_response (const gchar  *response,
+                                          const gchar  *model,
                                           GError      **error);
 
 /*****************************************************************************/
 /* UBANDSEL=X command builder */
 
-gchar *mm_ublox_build_ubandsel_set_command (GArray  *bands,
-                                            GError **error);
+gchar *mm_ublox_build_ubandsel_set_command (GArray       *bands,
+                                            const gchar  *model,
+                                            GError      **error);
 
 /*****************************************************************************/
 /* UACT? response parser */
