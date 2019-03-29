@@ -1046,19 +1046,19 @@ mm_ublox_get_supported_bands (const gchar  *model,
     mode = band_configuration[i].mode;
 
     if (mode & MM_MODEM_MODE_2G) {
-        for (j = 0; band_configuration[i].bands_2g[j] && j < G_N_ELEMENTS (band_configuration[i].bands_2g); j++) {
+        for (j = 0; j < G_N_ELEMENTS (band_configuration[i].bands_2g) && band_configuration[i].bands_2g[j]; j++) {
             bands = g_array_append_val (bands, band_configuration[i].bands_2g[j]);
         }
     }
 
     if (mode & MM_MODEM_MODE_3G) {
-        for (j = 0; band_configuration[i].bands_3g[j] && j < G_N_ELEMENTS (band_configuration[i].bands_3g); j++) {
+        for (j = 0; j < G_N_ELEMENTS (band_configuration[i].bands_3g) && band_configuration[i].bands_3g[j]; j++) {
             bands = g_array_append_val (bands, band_configuration[i].bands_3g[j]);
         }
     }
 
     if (mode & MM_MODEM_MODE_4G) {
-        for (j = 0; band_configuration[i].bands_4g[j] && j < G_N_ELEMENTS (band_configuration[i].bands_4g); j++) {
+        for (j = 0; j < G_N_ELEMENTS (band_configuration[i].bands_4g) && band_configuration[i].bands_4g[j]; j++) {
             bands = g_array_append_val (bands, band_configuration[i].bands_4g[j]);
         }
     }
@@ -1144,7 +1144,7 @@ band_to_num (MMModemBand band)
 
     /* Search 2G list */
     for (i = 0; i < G_N_ELEMENTS (num_bands_2g); i++) {
-        for (j = 0; num_bands_2g[i].band[j] && j < G_N_ELEMENTS (num_bands_2g[i].band); j++) {
+        for (j = 0; j < G_N_ELEMENTS (num_bands_2g[i].band) && num_bands_2g[i].band[j]; j++) {
             if (band == num_bands_2g[i].band[j])
                 return num_bands_2g[i].num;
         }
@@ -1152,7 +1152,7 @@ band_to_num (MMModemBand band)
 
     /* Search 3G list */
     for (i = 0; i < G_N_ELEMENTS (num_bands_3g); i++) {
-        for (j = 0; num_bands_3g[i].band[j] && j < G_N_ELEMENTS (num_bands_3g[i].band); j++) {
+        for (j = 0; j < G_N_ELEMENTS (num_bands_3g[i].band) && num_bands_3g[i].band[j]; j++) {
             if (band == num_bands_3g[i].band[j])
                 return num_bands_3g[i].num;
         }
@@ -1160,7 +1160,7 @@ band_to_num (MMModemBand band)
 
     /* Search 4G list */
     for (i = 0; i < G_N_ELEMENTS (num_bands_4g); i++) {
-        for (j = 0; num_bands_4g[i].band[j] && j < G_N_ELEMENTS (num_bands_4g[i].band); j++) {
+        for (j = 0; j < G_N_ELEMENTS (num_bands_4g[i].band) && num_bands_4g[i].band[j]; j++) {
             if (band == num_bands_4g[i].band[j])
                 return num_bands_4g[i].num;
         }
@@ -1329,17 +1329,17 @@ mm_ublox_build_ubandsel_set_command (GArray       *bands,
         band = g_array_index (bands, MMModemBand, j);
 
         /* Check to see if band is supported by the model */
-        for (k = 0; band_configuration[i].bands_2g[k] && !found && k < G_N_ELEMENTS (band_configuration[i].bands_2g); k++) {
+        for (k = 0; !found && k < G_N_ELEMENTS (band_configuration[i].bands_2g) && band_configuration[i].bands_2g[k]; k++) {
             if (band == band_configuration[i].bands_2g[k])
                 found = TRUE;
         }
 
-        for (k = 0; band_configuration[i].bands_3g[k] && !found && k < G_N_ELEMENTS (band_configuration[i].bands_3g); k++) {
+        for (k = 0; !found && k < G_N_ELEMENTS (band_configuration[i].bands_3g) && band_configuration[i].bands_3g[k]; k++) {
             if (band == band_configuration[i].bands_3g[k])
                 found = TRUE;
         }
 
-        for (k = 0; band_configuration[i].bands_4g[k] && !found && k < G_N_ELEMENTS (band_configuration[i].bands_4g); k++) {
+        for (k = 0; !found && k < G_N_ELEMENTS (band_configuration[i].bands_4g) && band_configuration[i].bands_4g[k]; k++) {
             if (band == band_configuration[i].bands_4g[k])
                 found = TRUE;
         }
@@ -1958,19 +1958,19 @@ out:
 gboolean
 mm_ublox_parse_ugcntrd_response_for_cid (const gchar  *response,
                                          guint         in_cid,
-                                         guint        *out_session_tx_bytes,
-                                         guint        *out_session_rx_bytes,
-                                         guint        *out_total_tx_bytes,
-                                         guint        *out_total_rx_bytes,
+                                         guint64      *out_session_tx_bytes,
+                                         guint64      *out_session_rx_bytes,
+                                         guint64      *out_total_tx_bytes,
+                                         guint64      *out_total_rx_bytes,
                                          GError      **error)
 {
     GRegex     *r;
     GMatchInfo *match_info = NULL;
     GError     *inner_error = NULL;
-    guint       session_tx_bytes = 0;
-    guint       session_rx_bytes = 0;
-    guint       total_tx_bytes   = 0;
-    guint       total_rx_bytes   = 0;
+    guint64     session_tx_bytes = 0;
+    guint64     session_rx_bytes = 0;
+    guint64     total_tx_bytes   = 0;
+    guint64     total_rx_bytes   = 0;
     gboolean    matched = FALSE;
 
     /* Response may be e.g.:
@@ -1997,22 +1997,22 @@ mm_ublox_parse_ugcntrd_response_for_cid (const gchar  *response,
             continue;
         }
 
-        if (out_session_tx_bytes && !mm_get_uint_from_match_info (match_info, 2, &session_tx_bytes)) {
+        if (out_session_tx_bytes && !mm_get_u64_from_match_info (match_info, 2, &session_tx_bytes)) {
             inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing session TX bytes");
             goto out;
         }
 
-        if (out_session_rx_bytes && !mm_get_uint_from_match_info (match_info, 3, &session_rx_bytes)) {
+        if (out_session_rx_bytes && !mm_get_u64_from_match_info (match_info, 3, &session_rx_bytes)) {
             inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing session RX bytes");
             goto out;
         }
 
-        if (out_total_tx_bytes && !mm_get_uint_from_match_info (match_info, 4, &total_tx_bytes)) {
+        if (out_total_tx_bytes && !mm_get_u64_from_match_info (match_info, 4, &total_tx_bytes)) {
             inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing total TX bytes");
             goto out;
         }
 
-        if (out_total_rx_bytes && !mm_get_uint_from_match_info (match_info, 5, &total_rx_bytes)) {
+        if (out_total_rx_bytes && !mm_get_u64_from_match_info (match_info, 5, &total_rx_bytes)) {
             inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing total RX bytes");
             goto out;
         }
