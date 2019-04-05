@@ -238,44 +238,47 @@ modem_load_current_capabilities_finish (MMIfaceModem *self,
 static void
 complete_current_capabilities (GTask *task)
 {
-    MMBroadbandModemMbim           *self;
     LoadCurrentCapabilitiesContext *ctx;
     MMModemCapability               result = 0;
 
-    self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
-    /* Warn if the MBIM loaded capabilities isn't a subset of the QMI loaded ones */
-    if (ctx->current_qmi && ctx->current_mbim) {
-        gchar *mbim_caps_str;
-        gchar *qmi_caps_str;
+    {
+        MMBroadbandModemMbim *self;
 
-        mbim_caps_str = mm_common_build_capabilities_string ((const MMModemCapability *)&(ctx->current_mbim), 1);
-        qmi_caps_str = mm_common_build_capabilities_string ((const MMModemCapability *)&(ctx->current_qmi), 1);
+        self = g_task_get_source_object (task);
+        /* Warn if the MBIM loaded capabilities isn't a subset of the QMI loaded ones */
+        if (ctx->current_qmi && ctx->current_mbim) {
+            gchar *mbim_caps_str;
+            gchar *qmi_caps_str;
 
-        if ((ctx->current_mbim & ctx->current_qmi) != ctx->current_mbim)
-            mm_warn ("MBIM reported current capabilities (%s) not found in QMI-over-MBIM reported ones (%s)",
-                     mbim_caps_str, qmi_caps_str);
-        else
-            mm_dbg ("MBIM reported current capabilities (%s) is a subset of the QMI-over-MBIM reported ones (%s)",
-                    mbim_caps_str, qmi_caps_str);
-        g_free (mbim_caps_str);
-        g_free (qmi_caps_str);
+            mbim_caps_str = mm_common_build_capabilities_string ((const MMModemCapability *)&(ctx->current_mbim), 1);
+            qmi_caps_str = mm_common_build_capabilities_string ((const MMModemCapability *)&(ctx->current_qmi), 1);
 
-        result = ctx->current_qmi;
-        self->priv->qmi_capability_and_mode_switching = TRUE;
-    } else if (ctx->current_qmi) {
-        result = ctx->current_qmi;
-        self->priv->qmi_capability_and_mode_switching = TRUE;
-    } else
-        result = ctx->current_mbim;
+            if ((ctx->current_mbim & ctx->current_qmi) != ctx->current_mbim)
+                mm_warn ("MBIM reported current capabilities (%s) not found in QMI-over-MBIM reported ones (%s)",
+                         mbim_caps_str, qmi_caps_str);
+            else
+                mm_dbg ("MBIM reported current capabilities (%s) is a subset of the QMI-over-MBIM reported ones (%s)",
+                        mbim_caps_str, qmi_caps_str);
+            g_free (mbim_caps_str);
+            g_free (qmi_caps_str);
 
-    /* If current capabilities loading is done via QMI, we can safely assume that all the other
-     * capability and mode related operations are going to be done via QMI as well, so that we
-     * don't mix both logics */
-    if (self->priv->qmi_capability_and_mode_switching)
-        mm_info ("QMI-based capability and mode switching support enabled");
+            result = ctx->current_qmi;
+            self->priv->qmi_capability_and_mode_switching = TRUE;
+        } else if (ctx->current_qmi) {
+            result = ctx->current_qmi;
+            self->priv->qmi_capability_and_mode_switching = TRUE;
+        } else
+            result = ctx->current_mbim;
+
+        /* If current capabilities loading is done via QMI, we can safely assume that all the other
+         * capability and mode related operations are going to be done via QMI as well, so that we
+         * don't mix both logics */
+        if (self->priv->qmi_capability_and_mode_switching)
+            mm_info ("QMI-based capability and mode switching support enabled");
+    }
 #else
     result = ctx->current_mbim;
 #endif
@@ -1874,8 +1877,7 @@ enabling_started (MMBroadbandModem *self,
 typedef struct {
     MMPortMbim *mbim;
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
-    QmiService qmi_services[32];
-    guint      qmi_service_index;
+    guint       qmi_service_index;
 #endif
 } InitializationStartedContext;
 
@@ -1933,6 +1935,14 @@ parent_initialization_started (GTask *task)
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
 
+static const QmiService qmi_services[] = {
+    QMI_SERVICE_DMS,
+    QMI_SERVICE_NAS,
+    QMI_SERVICE_PDS,
+    QMI_SERVICE_LOC,
+    QMI_SERVICE_PDC,
+};
+
 static void allocate_next_qmi_client (GTask *task);
 
 static void
@@ -1947,7 +1957,7 @@ mbim_port_allocate_qmi_client_ready (MMPortMbim   *mbim,
 
     if (!mm_port_mbim_allocate_qmi_client_finish (mbim, res, &error)) {
         mm_dbg ("Couldn't allocate QMI client for service '%s': %s",
-                qmi_service_get_string (ctx->qmi_services[ctx->qmi_service_index]),
+                qmi_service_get_string (qmi_services[ctx->qmi_service_index]),
                 error->message);
         g_error_free (error);
     }
@@ -1960,19 +1970,17 @@ static void
 allocate_next_qmi_client (GTask *task)
 {
     InitializationStartedContext *ctx;
-    MMBroadbandModemMbim         *self;
 
-    self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
 
-    if (ctx->qmi_services[ctx->qmi_service_index] == QMI_SERVICE_UNKNOWN) {
+    if (ctx->qmi_service_index == G_N_ELEMENTS (qmi_services)) {
         parent_initialization_started (task);
         return;
     }
 
     /* Otherwise, allocate next client */
     mm_port_mbim_allocate_qmi_client (ctx->mbim,
-                                      ctx->qmi_services[ctx->qmi_service_index],
+                                      qmi_services[ctx->qmi_service_index],
                                       NULL,
                                       (GAsyncReadyCallback)mbim_port_allocate_qmi_client_ready,
                                       task);
@@ -2186,15 +2194,6 @@ initialization_started (MMBroadbandModem    *self,
         query_device_services (task);
         return;
     }
-
-#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
-    /* Setup services to open */
-    ctx->qmi_services[0] = QMI_SERVICE_DMS;
-    ctx->qmi_services[1] = QMI_SERVICE_NAS;
-    ctx->qmi_services[2] = QMI_SERVICE_PDS;
-    ctx->qmi_services[3] = QMI_SERVICE_LOC;
-    ctx->qmi_services[4] = QMI_SERVICE_UNKNOWN;
-#endif
 
     /* Now open our MBIM port */
     mm_port_mbim_open (ctx->mbim,
@@ -2610,11 +2609,8 @@ set_lte_attach_configuration_set_ready (MbimDevice   *device,
                                         GAsyncResult *res,
                                         GTask        *task)
 {
-    MMBroadbandModemMbim *self;
     MbimMessage          *response;
     GError               *error = NULL;
-
-    self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
     if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error))
@@ -2632,7 +2628,6 @@ before_set_lte_attach_configuration_query_ready (MbimDevice   *device,
                                                  GAsyncResult *res,
                                                  GTask        *task)
 {
-    MMBroadbandModemMbim        *self;
     MbimMessage                 *request;
     MbimMessage                 *response;
     GError                      *error = NULL;
@@ -2641,7 +2636,6 @@ before_set_lte_attach_configuration_query_ready (MbimDevice   *device,
     MbimLteAttachConfiguration **configurations = NULL;
     guint                        i;
 
-    self   = g_task_get_source_object (task);
     config = g_task_get_task_data (task);
 
     response = mbim_device_command_finish (device, res, &error);
@@ -5234,6 +5228,10 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_supported_ip_families_finish = modem_load_supported_ip_families_finish;
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+    iface->load_carrier_config = mm_shared_qmi_load_carrier_config;
+    iface->load_carrier_config_finish = mm_shared_qmi_load_carrier_config_finish;
+    iface->setup_carrier_config = mm_shared_qmi_setup_carrier_config;
+    iface->setup_carrier_config_finish = mm_shared_qmi_setup_carrier_config_finish;
     iface->load_supported_bands = mm_shared_qmi_load_supported_bands;
     iface->load_supported_bands_finish = mm_shared_qmi_load_supported_bands_finish;
     iface->load_current_bands = mm_shared_qmi_load_current_bands;

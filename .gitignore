@@ -69,8 +69,6 @@ Makefile.in
 /libqcdm/tests/ipv6pref
 /libqcdm/tests/reset
 
-/libwmc/tests/test-wmc
-
 /data/org.freedesktop.ModemManager1.conf
 /data/org.freedesktop.ModemManager1.service
 /data/org.freedesktop.ModemManager1.policy
@@ -159,10 +157,9 @@ Makefile.in
 /m4/fcntl-o.m4
 /m4/threadlib.m4
 
-/uml290/uml290mode
-
 /plugins/test-suite.log
 /plugins/test-udev-rules
+/plugins/test-keyfiles
 /plugins/test-modem-helpers-*
 /plugins/test-service-*
 

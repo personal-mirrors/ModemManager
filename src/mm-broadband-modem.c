@@ -114,11 +114,13 @@ enum {
     PROP_MODEM_MESSAGING_SMS_LIST,
     PROP_MODEM_MESSAGING_SMS_PDU_MODE,
     PROP_MODEM_MESSAGING_SMS_DEFAULT_STORAGE,
+    PROP_MODEM_LOCATION_ALLOW_GPS_UNMANAGED_ALWAYS,
     PROP_MODEM_VOICE_CALL_LIST,
     PROP_MODEM_SIMPLE_STATUS,
     PROP_MODEM_SIM_HOT_SWAP_SUPPORTED,
     PROP_MODEM_SIM_HOT_SWAP_CONFIGURED,
     PROP_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED,
+    PROP_MODEM_CARRIER_CONFIG_MAPPING,
     PROP_FLOW_CONTROL,
     PROP_LAST
 };
@@ -146,6 +148,7 @@ struct _MMBroadbandModemPrivate {
     MMBaseSim *modem_sim;
     MMBearerList *modem_bearer_list;
     MMModemState modem_state;
+    gchar *carrier_config_mapping;
     /* Implementation helpers */
     MMModemCharset modem_current_charset;
     gboolean modem_cind_support_checked;
@@ -203,6 +206,7 @@ struct _MMBroadbandModemPrivate {
     /*<--- Modem Location interface --->*/
     /* Properties */
     GObject *modem_location_dbus_skeleton;
+    gboolean modem_location_allow_gps_unmanaged_always;
 
     /*<--- Modem Messaging interface --->*/
     /* Properties */
@@ -11167,6 +11171,9 @@ set_property (GObject *object,
     case PROP_MODEM_MESSAGING_SMS_DEFAULT_STORAGE:
         self->priv->modem_messaging_sms_default_storage = g_value_get_enum (value);
         break;
+    case PROP_MODEM_LOCATION_ALLOW_GPS_UNMANAGED_ALWAYS:
+        self->priv->modem_location_allow_gps_unmanaged_always = g_value_get_boolean (value);
+        break;
     case PROP_MODEM_VOICE_CALL_LIST:
         g_clear_object (&self->priv->modem_voice_call_list);
         self->priv->modem_voice_call_list = g_value_dup_object (value);
@@ -11183,6 +11190,9 @@ set_property (GObject *object,
         break;
     case PROP_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED:
         self->priv->periodic_signal_check_disabled = g_value_get_boolean (value);
+        break;
+    case PROP_MODEM_CARRIER_CONFIG_MAPPING:
+        self->priv->carrier_config_mapping = g_value_dup_string (value);
         break;
     case PROP_FLOW_CONTROL:
         self->priv->flow_control = g_value_get_flags (value);
@@ -11286,6 +11296,9 @@ get_property (GObject *object,
     case PROP_MODEM_MESSAGING_SMS_DEFAULT_STORAGE:
         g_value_set_enum (value, self->priv->modem_messaging_sms_default_storage);
         break;
+    case PROP_MODEM_LOCATION_ALLOW_GPS_UNMANAGED_ALWAYS:
+        g_value_set_boolean (value, self->priv->modem_location_allow_gps_unmanaged_always);
+        break;
     case PROP_MODEM_VOICE_CALL_LIST:
         g_value_set_object (value, self->priv->modem_voice_call_list);
         break;
@@ -11300,6 +11313,9 @@ get_property (GObject *object,
         break;
     case PROP_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED:
         g_value_set_boolean (value, self->priv->periodic_signal_check_disabled);
+        break;
+    case PROP_MODEM_CARRIER_CONFIG_MAPPING:
+        g_value_set_string (value, self->priv->carrier_config_mapping);
         break;
     case PROP_FLOW_CONTROL:
         g_value_set_flags (value, self->priv->flow_control);
@@ -11353,6 +11369,8 @@ finalize (GObject *object)
 
     if (self->priv->modem_3gpp_registration_regex)
         mm_3gpp_creg_regex_destroy (self->priv->modem_3gpp_registration_regex);
+
+    g_free (self->priv->carrier_config_mapping);
 
     G_OBJECT_CLASS (mm_broadband_modem_parent_class)->finalize (object);
 }
@@ -11810,6 +11828,10 @@ mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
                                       MM_IFACE_MODEM_MESSAGING_SMS_DEFAULT_STORAGE);
 
     g_object_class_override_property (object_class,
+                                      PROP_MODEM_LOCATION_ALLOW_GPS_UNMANAGED_ALWAYS,
+                                      MM_IFACE_MODEM_LOCATION_ALLOW_GPS_UNMANAGED_ALWAYS);
+
+    g_object_class_override_property (object_class,
                                       PROP_MODEM_VOICE_CALL_LIST,
                                       MM_IFACE_MODEM_VOICE_CALL_LIST);
 
@@ -11828,6 +11850,10 @@ mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
     g_object_class_override_property (object_class,
                                       PROP_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED,
                                       MM_IFACE_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED);
+
+    g_object_class_override_property (object_class,
+                                      PROP_MODEM_CARRIER_CONFIG_MAPPING,
+                                      MM_IFACE_MODEM_CARRIER_CONFIG_MAPPING);
 
     properties[PROP_FLOW_CONTROL] =
         g_param_spec_flags (MM_BROADBAND_MODEM_FLOW_CONTROL,
