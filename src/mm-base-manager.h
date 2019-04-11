@@ -37,6 +37,9 @@
 #define MM_BASE_MANAGER_ENABLE_TEST           "enable-test"           /* Construct-only */
 #define MM_BASE_MANAGER_PLUGIN_DIR            "plugin-dir"            /* Construct-only */
 #define MM_BASE_MANAGER_INITIAL_KERNEL_EVENTS "initial-kernel-events" /* Construct-only */
+#define MM_BASE_MANAGER_IDLE_QUIT_SECONDS     "idle-quit-seconds"     /* Construct-only */
+
+#define MM_BASE_MANAGER_IDLE_QUIT             "idle-quit"
 
 typedef struct _MMBaseManagerPrivate MMBaseManagerPrivate;
 
@@ -56,6 +59,7 @@ MMBaseManager   *mm_base_manager_new         (GDBusConnection  *bus,
                                               gboolean          auto_scan,
                                               MMFilterRule      filter_policy,
                                               const gchar      *initial_kernel_events,
+                                              guint             idle_quit_seconds,
                                               gboolean          enable_test,
                                               GError          **error);
 

@@ -31,6 +31,7 @@ void mm_context_init (gint    argc,
 gboolean     mm_context_get_debug                 (void);
 const gchar *mm_context_get_initial_kernel_events (void);
 gboolean     mm_context_get_no_auto_scan          (void);
+guint        mm_context_get_idle_quit_seconds     (void);
 
 /* Filter support */
 MMFilterRule mm_context_get_filter_policy (void);

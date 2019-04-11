@@ -55,6 +55,17 @@ quit_cb (gpointer user_data)
     return FALSE;
 }
 
+static void
+idle_quit_cb (MMSleepMonitor *sleep_monitor)
+{
+    mm_info ("No more devices, shutting down...");
+
+    if (loop)
+	g_main_loop_quit (loop);
+    else
+        exit (0);
+}
+
 #if defined WITH_SYSTEMD_SUSPEND_RESUME
 
 static void
@@ -89,6 +100,7 @@ bus_acquired_cb (GDBusConnection *connection,
                                    !mm_context_get_no_auto_scan (),
                                    mm_context_get_filter_policy (),
                                    mm_context_get_initial_kernel_events (),
+                                   10,
                                    mm_context_get_test_enable (),
                                    &error);
     if (!manager) {
@@ -97,6 +109,8 @@ bus_acquired_cb (GDBusConnection *connection,
         g_main_loop_quit (loop);
         return;
     }
+
+    g_signal_connect (manager, MM_BASE_MANAGER_IDLE_QUIT, G_CALLBACK (idle_quit_cb), NULL);
 }
 
 static void

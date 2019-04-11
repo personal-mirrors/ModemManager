@@ -41,6 +41,7 @@ static gboolean      debug;
 static MMFilterRule  filter_policy = MM_FILTER_POLICY_DEFAULT;
 static gboolean      no_auto_scan = NO_AUTO_SCAN_DEFAULT;
 static const gchar  *initial_kernel_events;
+static guint         idle_quit_seconds = 0;
 
 static gboolean
 filter_policy_option_arg (const gchar  *option_name,
@@ -91,6 +92,11 @@ static const GOptionEntry entries[] = {
         "[PATH]"
     },
     {
+        "idle-quit-seconds", 0, 0 , G_OPTION_ARG_INT, &idle_quit_seconds,
+        "Quit after given number of seconds without a device (0 = never)",
+        NULL
+    },
+    {
         "debug", 0, 0, G_OPTION_ARG_NONE, &debug,
         "Run with extended debugging capabilities",
         NULL
@@ -130,6 +136,12 @@ MMFilterRule
 mm_context_get_filter_policy (void)
 {
     return filter_policy;
+}
+
+guint
+mm_context_get_idle_quit_seconds (void)
+{
+    return idle_quit_seconds;
 }
 
 /*****************************************************************************/

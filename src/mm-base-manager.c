@@ -60,8 +60,15 @@ enum {
     PROP_ENABLE_TEST,
     PROP_PLUGIN_DIR,
     PROP_INITIAL_KERNEL_EVENTS,
+    PROP_IDLE_QUIT_SECONDS,
     LAST_PROP
 };
+
+enum {
+    SIGNAL_IDLE_QUIT,
+    SIGNAL_LAST
+};
+static guint signals[SIGNAL_LAST];
 
 struct _MMBaseManagerPrivate {
     /* The connection to the system bus */
@@ -89,6 +96,10 @@ struct _MMBaseManagerPrivate {
     GDBusObjectManagerServer *object_manager;
     /* The map of inhibited devices */
     GHashTable *inhibited_devices;
+    /* Idle quit check timeout */
+    guint idle_quit_seconds;
+    /* Idle quit check id */
+    guint idle_quit_check_id;
 
     /* The Test interface support */
     MmGdbusTest *test_skeleton;
@@ -215,6 +226,28 @@ static void     device_inhibited_track_port   (MMBaseManager  *self,
                                                gboolean        manual_scan);
 static void     device_inhibited_untrack_port (MMBaseManager  *self,
                                                MMKernelDevice *port);
+static gboolean
+idle_quit_check (gpointer user_data)
+{
+	MMBaseManager *self = user_data;
+
+	if (g_hash_table_size (self->priv->devices) == 0)
+		g_signal_emit (self, signals[SIGNAL_IDLE_QUIT], 0);
+
+	self->priv->idle_quit_check_id = 0;
+	return G_SOURCE_REMOVE;
+}
+
+static void
+schedule_idle_quit_check (MMBaseManager *self)
+{
+	g_clear_handle_id (&self->priv->idle_quit_check_id, g_source_remove);
+	if (self->priv->idle_quit_seconds) {
+		self->priv->idle_quit_check_id = g_timeout_add_seconds (self->priv->idle_quit_seconds,
+		                                                        idle_quit_check,
+		                                                        self);
+	}
+}
 
 static void
 device_removed (MMBaseManager  *self,
@@ -223,6 +256,8 @@ device_removed (MMBaseManager  *self,
     MMDevice *device;
     const gchar *subsys;
     const gchar *name;
+
+    schedule_idle_quit_check (self);
 
     g_return_if_fail (kernel_device != NULL);
 
@@ -1323,6 +1358,7 @@ mm_base_manager_new (GDBusConnection  *connection,
                      gboolean          auto_scan,
                      MMFilterRule      filter_policy,
                      const gchar      *initial_kernel_events,
+                     guint             idle_quit_seconds,
                      gboolean          enable_test,
                      GError          **error)
 {
@@ -1336,6 +1372,7 @@ mm_base_manager_new (GDBusConnection  *connection,
                            MM_BASE_MANAGER_AUTO_SCAN,             auto_scan,
                            MM_BASE_MANAGER_FILTER_POLICY,         filter_policy,
                            MM_BASE_MANAGER_INITIAL_KERNEL_EVENTS, initial_kernel_events,
+                           MM_BASE_MANAGER_IDLE_QUIT_SECONDS,     idle_quit_seconds,
                            MM_BASE_MANAGER_ENABLE_TEST,           enable_test,
                            "version",                             MM_DIST_VERSION,
                            NULL);
@@ -1389,6 +1426,9 @@ set_property (GObject *object,
         g_free (priv->initial_kernel_events);
         priv->initial_kernel_events = g_value_dup_string (value);
         break;
+    case PROP_IDLE_QUIT_SECONDS:
+        priv->idle_quit_seconds = g_value_get_uint (value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -1421,6 +1461,9 @@ get_property (GObject *object,
         break;
     case PROP_INITIAL_KERNEL_EVENTS:
         g_value_set_string (value, priv->initial_kernel_events);
+        break;
+    case PROP_IDLE_QUIT_SECONDS:
+        g_value_set_uint (value, priv->idle_quit_seconds);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1480,7 +1523,8 @@ initable_init (GInitable *initable,
                GCancellable *cancellable,
                GError **error)
 {
-    MMBaseManagerPrivate *priv = MM_BASE_MANAGER (initable)->priv;
+    MMBaseManager *self = MM_BASE_MANAGER (initable);
+    MMBaseManagerPrivate *priv = self->priv;
 
 #if defined WITH_UDEV
     /* If autoscan enabled, list for udev events */
@@ -1522,6 +1566,8 @@ initable_init (GInitable *initable,
                                                error))
             return FALSE;
     }
+
+    schedule_idle_quit_check (self);
 
     /* All good */
     return TRUE;
@@ -1635,4 +1681,20 @@ mm_base_manager_class_init (MMBaseManagerClass *manager_class)
                               "Path to a file with the list of initial kernel events",
                               NULL,
                               G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+    g_object_class_install_property
+        (object_class, PROP_IDLE_QUIT_SECONDS,
+         g_param_spec_uint (MM_BASE_MANAGER_IDLE_QUIT_SECONDS,
+                            "Quit on idle timeout",
+                            "Quit after given number of seconds without a device (0 = never)",
+                            0, G_MAXUINT, 0,
+                            G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+    /* Signals */
+
+    signals[SIGNAL_IDLE_QUIT] =
+        g_signal_new (MM_BASE_MANAGER_IDLE_QUIT,
+                      G_OBJECT_CLASS_TYPE (object_class),
+                      G_SIGNAL_RUN_FIRST,
+                      0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 }
