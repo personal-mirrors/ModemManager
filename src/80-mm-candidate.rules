@@ -9,6 +9,9 @@
 
 ACTION!="add|change|move|bind", GOTO="mm_candidate_end"
 
+# Devices that are explicitely blacklisted are not candidates
+ENV{ID_MM_DEVICE_IGNORE}=="1", GOTO="mm_candidate_end"
+
 # Opening bound but disconnected Bluetooth RFCOMM ttys would initiate the
 # connection. Don't do that.
 KERNEL=="rfcomm*", DEVPATH=="*/virtual/*", GOTO="mm_candidate_end"
