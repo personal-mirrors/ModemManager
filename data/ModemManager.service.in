@@ -4,7 +4,7 @@ Description=Modem Manager
 [Service]
 Type=dbus
 BusName=org.freedesktop.ModemManager1
-ExecStart=@sbindir@/ModemManager
+ExecStart=@sbindir@/ModemManager --idle-quit-seconds=30
 StandardError=null
 Restart=on-abort
 CapabilityBoundingSet=CAP_SYS_ADMIN

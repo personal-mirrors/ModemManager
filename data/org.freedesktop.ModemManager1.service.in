@@ -6,6 +6,6 @@
 
 [D-BUS Service]
 Name=org.freedesktop.ModemManager1
-Exec=@sbindir@/ModemManager
+Exec=@sbindir@/ModemManager --idle-quit-seconds=30
 User=root
 SystemdService=dbus-org.freedesktop.ModemManager1.service
