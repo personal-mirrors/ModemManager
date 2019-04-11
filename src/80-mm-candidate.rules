@@ -19,6 +19,10 @@ KERNEL=="rfcomm*", DEVPATH=="*/virtual/*", GOTO="mm_candidate_end"
 # Ignore virtual consoles
 SUBSYSTEM=="tty", ENV{DRIVER}=="", DEVPATH=="*/virtual/*", GOTO="mm_candidate_end"
 
+# The serial8250 driver exposes the ttys before the port is actually probed.
+# We can tell by the type of 0 (PORT_UNKNOWN)>
+SUBSYSTEMS=="platform", DRIVERS=="serial8250", ATTR{type}=="0", GOTO="mm_candidate_end"
+
 SUBSYSTEM=="tty", ENV{ID_MM_CANDIDATE}="1"
 SUBSYSTEM=="net", ENV{DEVTYPE}=="wwan", ENV{ID_MM_CANDIDATE}="1"
 KERNEL=="cdc-wdm*", SUBSYSTEM=="usb", ENV{ID_MM_CANDIDATE}="1"
