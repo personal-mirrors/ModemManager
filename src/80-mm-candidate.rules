@@ -28,4 +28,6 @@ SUBSYSTEM=="net", ENV{DEVTYPE}=="wwan", ENV{ID_MM_CANDIDATE}="1"
 KERNEL=="cdc-wdm*", SUBSYSTEM=="usb", ENV{ID_MM_CANDIDATE}="1"
 KERNEL=="cdc-wdm*", SUBSYSTEM=="usbmisc", ENV{ID_MM_CANDIDATE}="1"
 
+ENV{ID_MM_CANDIDATE}=="1", ENV{SYSTEMD_WANTS}="ModemManager.service"
+
 LABEL="mm_candidate_end"
