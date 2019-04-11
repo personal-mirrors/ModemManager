@@ -93,11 +93,6 @@ split_item (const gchar  *item,
 
     g_strdelimit (right, "\"", ' ');
     g_strstrip (right);
-    if (!right[0]) {
-        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                                   "Invalid rule item, missing right field: '%s'", item);
-        goto out;
-    }
 
 out:
     if (inner_error) {
