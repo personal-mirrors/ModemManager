@@ -89,7 +89,7 @@ mmcli_get_manager_sync (GDBusConnection *connection)
     GError *error = NULL;
 
     manager = mm_manager_new_sync (connection,
-                                   G_DBUS_OBJECT_MANAGER_CLIENT_FLAGS_DO_NOT_AUTO_START,
+                                   G_DBUS_OBJECT_MANAGER_CLIENT_FLAGS_NONE,
                                    NULL,
                                    &error);
     if (!manager) {
