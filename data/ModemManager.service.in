@@ -14,7 +14,3 @@ PrivateTmp=true
 RestrictAddressFamilies=AF_NETLINK AF_UNIX
 NoNewPrivileges=true
 User=root
-
-[Install]
-WantedBy=multi-user.target
-Alias=dbus-org.freedesktop.ModemManager1.service

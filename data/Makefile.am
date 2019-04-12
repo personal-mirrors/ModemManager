@@ -30,6 +30,9 @@ if HAVE_SYSTEMD
 systemdsystemunit_DATA = ModemManager.service
 ModemManager.service: ModemManager.service.in
 	$(edit) $< >$@
+
+install-data-hook: ModemManager.service install-systemdsystemunitDATA
+	$(LN_S) -f ModemManager.service $(DESTDIR)$(systemdsystemunitdir)/dbus-org.freedesktop.ModemManager1.service
 endif
 
 
