@@ -27,6 +27,7 @@
 /**
  * SECTION:mm-compat
  * @title: API break replacements
+ * @short_description: List of deprecated methods, types and symbols.
  *
  * These compatibility types and methods are flagged as deprecated and
  * therefore shouldn't be used in newly written code. They are provided to
@@ -693,6 +694,20 @@ typedef int MMModemBandDeprecated;
  * Deprecated: 1.8.0: Use #MM_MODEM_BAND_CDMA_BC19 instead.
  */
 #define MM_MODEM_BAND_CDMA_BC19_US_LOWER_700 ((MMModemBandDeprecated)MM_MODEM_BAND_CDMA_BC19)
+
+/* The following type exists just so that we can get deprecation warnings */
+MM_DEPRECATED
+typedef int MMModemLocationSourceDeprecated;
+
+/**
+ * MM_MODEM_LOCATION_SOURCE_AGPS:
+ *
+ * A-GPS location requested.
+ *
+ * Since: 1.0
+ * Deprecated: 1.12.0: Use #MM_MODEM_LOCATION_SOURCE_AGPS_MSA instead.
+ */
+#define MM_MODEM_LOCATION_SOURCE_AGPS ((MMModemLocationSourceDeprecated)MM_MODEM_LOCATION_SOURCE_AGPS_MSA)
 
 #endif /* MM_DISABLE_DEPRECATED */
 

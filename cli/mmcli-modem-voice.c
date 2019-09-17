@@ -50,6 +50,13 @@ static Context *ctx;
 static gboolean list_flag;
 static gchar *create_str;
 static gchar *delete_str;
+static gboolean hold_and_accept_flag;
+static gboolean hangup_and_accept_flag;
+static gboolean hangup_all_flag;
+static gboolean transfer_flag;
+static gboolean call_waiting_enable_flag;
+static gboolean call_waiting_disable_flag;
+static gboolean call_waiting_query_flag;
 
 static GOptionEntry entries[] = {
     { "voice-list-calls", 0, 0, G_OPTION_ARG_NONE, &list_flag,
@@ -63,6 +70,34 @@ static GOptionEntry entries[] = {
     { "voice-delete-call", 0, 0, G_OPTION_ARG_STRING, &delete_str,
       "Delete a call from a given modem",
       "[PATH|INDEX]"
+    },
+    { "voice-hold-and-accept", 0, 0, G_OPTION_ARG_NONE, &hold_and_accept_flag,
+      "Places all active calls in hold and accepts the next waiting or held call",
+      NULL
+    },
+    { "voice-hangup-and-accept", 0, 0, G_OPTION_ARG_NONE, &hangup_and_accept_flag,
+      "Hangs up all active calls and accepts the next waiting or held call",
+      NULL
+    },
+    { "voice-hangup-all", 0, 0, G_OPTION_ARG_NONE, &hangup_all_flag,
+      "Hangs up all ongoing (active, waiting, held) calls",
+      NULL
+    },
+    { "voice-transfer", 0, 0, G_OPTION_ARG_NONE, &transfer_flag,
+      "Joins active and held calls and disconnects from them",
+      NULL
+    },
+    { "voice-enable-call-waiting", 0, 0, G_OPTION_ARG_NONE, &call_waiting_enable_flag,
+      "Enables the call waiting network service",
+      NULL
+    },
+    { "voice-disable-call-waiting", 0, 0, G_OPTION_ARG_NONE, &call_waiting_disable_flag,
+      "Disables the call waiting network service",
+      NULL
+    },
+    { "voice-query-call-waiting", 0, 0, G_OPTION_ARG_NONE, &call_waiting_query_flag,
+      "Queries the status of the call waiting network service",
+      NULL
     },
     { NULL }
 };
@@ -93,7 +128,14 @@ mmcli_modem_voice_options_enabled (void)
 
     n_actions = (list_flag +
                  !!create_str +
-                 !!delete_str);
+                 !!delete_str +
+                 hold_and_accept_flag +
+                 hangup_and_accept_flag +
+                 hangup_all_flag +
+                 transfer_flag +
+                 call_waiting_enable_flag +
+                 call_waiting_disable_flag +
+                 call_waiting_query_flag);
 
     if (n_actions > 1) {
         g_printerr ("error: too many Voice actions requested\n");
@@ -173,6 +215,158 @@ output_call_info (MMCall *call)
                            mm_call_get_path (call),
                            extra);
     g_free (extra);
+}
+
+static void
+call_waiting_query_process_reply (const GError *error,
+                                  gboolean      status)
+{
+    if (error) {
+        g_printerr ("error: couldn't query call waiting network service status: '%s'\n",
+                    error->message);
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("call waiting service is %s\n", status ? "enabled" : "disabled");
+}
+
+static void
+call_waiting_query_ready (MMModemVoice *modem,
+                          GAsyncResult *result,
+                          gpointer     nothing)
+{
+    GError   *error = NULL;
+    gboolean  status = FALSE;
+
+    mm_modem_voice_call_waiting_query_finish (modem, result, &status, &error);
+    call_waiting_query_process_reply (error, status);
+
+    mmcli_async_operation_done ();
+}
+
+static void
+call_waiting_setup_process_reply (const GError *error)
+{
+    if (error) {
+        g_printerr ("error: couldn't setup call waiting network service: '%s'\n",
+                    error->message);
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("operation successful\n");
+}
+
+static void
+call_waiting_setup_ready (MMModemVoice *modem,
+                          GAsyncResult *result,
+                          gpointer     nothing)
+{
+    GError *error = NULL;
+
+    mm_modem_voice_call_waiting_setup_finish (modem, result, &error);
+    call_waiting_setup_process_reply (error);
+
+    mmcli_async_operation_done ();
+}
+
+static void
+transfer_process_reply (const GError *error)
+{
+    if (error) {
+        g_printerr ("error: couldn't hangup all: '%s'\n",
+                    error->message);
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("operation successful\n");
+}
+
+static void
+transfer_ready (MMModemVoice *modem,
+                GAsyncResult *result,
+                gpointer     nothing)
+{
+    GError *error = NULL;
+
+    mm_modem_voice_transfer_finish (modem, result, &error);
+    transfer_process_reply (error);
+
+    mmcli_async_operation_done ();
+}
+
+static void
+hangup_all_process_reply (const GError *error)
+{
+    if (error) {
+        g_printerr ("error: couldn't hangup all: '%s'\n",
+                    error->message);
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("operation successful\n");
+}
+
+static void
+hangup_all_ready (MMModemVoice *modem,
+                  GAsyncResult *result,
+                  gpointer     nothing)
+{
+    GError *error = NULL;
+
+    mm_modem_voice_hangup_all_finish (modem, result, &error);
+    hangup_all_process_reply (error);
+
+    mmcli_async_operation_done ();
+}
+
+static void
+hangup_and_accept_process_reply (const GError *error)
+{
+    if (error) {
+        g_printerr ("error: couldn't hangup and accept: '%s'\n",
+                    error->message);
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("operation successful\n");
+}
+
+static void
+hangup_and_accept_ready (MMModemVoice *modem,
+                         GAsyncResult *result,
+                         gpointer     nothing)
+{
+    GError *error = NULL;
+
+    mm_modem_voice_hangup_and_accept_finish (modem, result, &error);
+    hangup_and_accept_process_reply (error);
+
+    mmcli_async_operation_done ();
+}
+
+static void
+hold_and_accept_process_reply (const GError *error)
+{
+    if (error) {
+        g_printerr ("error: couldn't hold and accept: '%s'\n",
+                    error->message);
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("operation successful\n");
+}
+
+static void
+hold_and_accept_ready (MMModemVoice *modem,
+                         GAsyncResult *result,
+                         gpointer     nothing)
+{
+    GError *error = NULL;
+
+    mm_modem_voice_hold_and_accept_finish (modem, result, &error);
+    hold_and_accept_process_reply (error);
+
+    mmcli_async_operation_done ();
 }
 
 static void
@@ -334,6 +528,78 @@ get_modem_ready (GObject      *source,
         return;
     }
 
+    /* Request to hold and accept? */
+    if (hold_and_accept_flag) {
+        g_debug ("Asynchronously holding and accepting next call...");
+        mm_modem_voice_hold_and_accept (ctx->modem_voice,
+                                          ctx->cancellable,
+                                          (GAsyncReadyCallback)hold_and_accept_ready,
+                                          NULL);
+        return;
+    }
+
+    /* Request to hangup and accept? */
+    if (hangup_and_accept_flag) {
+        g_debug ("Asynchronously hanging up and accepting next call...");
+        mm_modem_voice_hangup_and_accept (ctx->modem_voice,
+                                          ctx->cancellable,
+                                          (GAsyncReadyCallback)hangup_and_accept_ready,
+                                          NULL);
+        return;
+    }
+
+    /* Request to hangup all? */
+    if (hangup_all_flag) {
+        g_debug ("Asynchronously hanging up all calls...");
+        mm_modem_voice_hangup_all (ctx->modem_voice,
+                                   ctx->cancellable,
+                                   (GAsyncReadyCallback)hangup_all_ready,
+                                   NULL);
+        return;
+    }
+
+    /* Request to transfer? */
+    if (transfer_flag) {
+        g_debug ("Asynchronously transferring calls...");
+        mm_modem_voice_transfer (ctx->modem_voice,
+                                 ctx->cancellable,
+                                 (GAsyncReadyCallback)transfer_ready,
+                                 NULL);
+        return;
+    }
+
+    /* Request to enable call waiting? */
+    if (call_waiting_enable_flag) {
+        g_debug ("Asynchronously enabling call waiting...");
+        mm_modem_voice_call_waiting_setup (ctx->modem_voice,
+                                           TRUE,
+                                           ctx->cancellable,
+                                           (GAsyncReadyCallback)call_waiting_setup_ready,
+                                           NULL);
+        return;
+    }
+
+    /* Request to disable call waiting? */
+    if (call_waiting_disable_flag) {
+        g_debug ("Asynchronously enabling call waiting...");
+        mm_modem_voice_call_waiting_setup (ctx->modem_voice,
+                                           FALSE,
+                                           ctx->cancellable,
+                                           (GAsyncReadyCallback)call_waiting_setup_ready,
+                                           NULL);
+        return;
+    }
+
+    /* Request to query call waiting? */
+    if (call_waiting_query_flag) {
+        g_debug ("Asynchronously querying call waiting status...");
+        mm_modem_voice_call_waiting_query (ctx->modem_voice,
+                                           ctx->cancellable,
+                                           (GAsyncReadyCallback)call_waiting_query_ready,
+                                           NULL);
+        return;
+    }
+
     g_warn_if_reached ();
 }
 
@@ -427,6 +693,64 @@ mmcli_modem_voice_run_synchronous (GDBusConnection *connection)
         g_object_unref (obj);
 
         delete_process_reply (result, error);
+        return;
+    }
+
+    /* Request to hold and accept? */
+    if (hold_and_accept_flag) {
+        g_debug ("Synchronously holding and accepting call...");
+        mm_modem_voice_hold_and_accept_sync (ctx->modem_voice, NULL, &error);
+        hold_and_accept_process_reply (error);
+        return;
+    }
+
+    /* Request to hangup and accept? */
+    if (hangup_and_accept_flag) {
+        g_debug ("Synchronously hanging up and accepting call...");
+        mm_modem_voice_hangup_and_accept_sync (ctx->modem_voice, NULL, &error);
+        hangup_and_accept_process_reply (error);
+        return;
+    }
+
+    /* Request to hangup all? */
+    if (hangup_all_flag) {
+        g_debug ("Synchronously hanging up all calls...");
+        mm_modem_voice_hangup_all_sync (ctx->modem_voice, NULL, &error);
+        hangup_all_process_reply (error);
+        return;
+    }
+
+    /* Request to transfer? */
+    if (transfer_flag) {
+        g_debug ("Synchronously transferring calls...");
+        mm_modem_voice_transfer_sync (ctx->modem_voice, NULL, &error);
+        transfer_process_reply (error);
+        return;
+    }
+
+    /* Request to enable call waiting? */
+    if (call_waiting_enable_flag) {
+        g_debug ("Synchronously enabling call waiting...");
+        mm_modem_voice_call_waiting_setup_sync (ctx->modem_voice, TRUE, NULL, &error);
+        call_waiting_setup_process_reply (error);
+        return;
+    }
+
+    /* Request to disable call waiting? */
+    if (call_waiting_disable_flag) {
+        g_debug ("Synchronously disabling call waiting...");
+        mm_modem_voice_call_waiting_setup_sync (ctx->modem_voice, FALSE, NULL, &error);
+        call_waiting_setup_process_reply (error);
+        return;
+    }
+
+    /* Request to query call waiting? */
+    if (call_waiting_query_flag) {
+        gboolean status = FALSE;
+
+        g_debug ("Synchronously querying call waiting status...");
+        mm_modem_voice_call_waiting_query_sync (ctx->modem_voice, NULL, &status, &error);
+        call_waiting_query_process_reply (error, status);
         return;
     }
 

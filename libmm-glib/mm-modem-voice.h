@@ -110,6 +110,76 @@ gboolean mm_modem_voice_delete_call_sync    (MMModemVoice *self,
                                              GCancellable *cancellable,
                                              GError **error);
 
+void     mm_modem_voice_hold_and_accept         (MMModemVoice        *self,
+                                                 GCancellable        *cancellable,
+                                                 GAsyncReadyCallback  callback,
+                                                 gpointer             user_data);
+gboolean mm_modem_voice_hold_and_accept_finish  (MMModemVoice        *self,
+                                                 GAsyncResult        *res,
+                                                 GError             **error);
+gboolean mm_modem_voice_hold_and_accept_sync    (MMModemVoice        *self,
+                                                 GCancellable        *cancellable,
+                                                 GError             **error);
+
+void     mm_modem_voice_hangup_and_accept         (MMModemVoice        *self,
+                                                   GCancellable        *cancellable,
+                                                   GAsyncReadyCallback  callback,
+                                                   gpointer             user_data);
+gboolean mm_modem_voice_hangup_and_accept_finish  (MMModemVoice        *self,
+                                                   GAsyncResult        *res,
+                                                   GError             **error);
+gboolean mm_modem_voice_hangup_and_accept_sync    (MMModemVoice        *self,
+                                                   GCancellable        *cancellable,
+                                                   GError             **error);
+
+void     mm_modem_voice_hangup_all         (MMModemVoice        *self,
+                                            GCancellable        *cancellable,
+                                            GAsyncReadyCallback  callback,
+                                            gpointer             user_data);
+gboolean mm_modem_voice_hangup_all_finish  (MMModemVoice        *self,
+                                            GAsyncResult        *res,
+                                            GError             **error);
+gboolean mm_modem_voice_hangup_all_sync    (MMModemVoice        *self,
+                                            GCancellable        *cancellable,
+                                            GError             **error);
+
+void     mm_modem_voice_transfer         (MMModemVoice        *self,
+                                          GCancellable        *cancellable,
+                                          GAsyncReadyCallback  callback,
+                                          gpointer             user_data);
+gboolean mm_modem_voice_transfer_finish  (MMModemVoice        *self,
+                                          GAsyncResult        *res,
+                                          GError             **error);
+gboolean mm_modem_voice_transfer_sync    (MMModemVoice        *self,
+                                          GCancellable        *cancellable,
+                                          GError             **error);
+
+void     mm_modem_voice_call_waiting_setup         (MMModemVoice        *self,
+                                                    gboolean             enable,
+                                                    GCancellable        *cancellable,
+                                                    GAsyncReadyCallback  callback,
+                                                    gpointer             user_data);
+gboolean mm_modem_voice_call_waiting_setup_finish  (MMModemVoice        *self,
+                                                    GAsyncResult        *res,
+                                                    GError             **error);
+gboolean mm_modem_voice_call_waiting_setup_sync    (MMModemVoice        *self,
+                                                    gboolean             enable,
+                                                    GCancellable        *cancellable,
+                                                    GError             **error);
+
+void     mm_modem_voice_call_waiting_query         (MMModemVoice        *self,
+                                                    GCancellable        *cancellable,
+                                                    GAsyncReadyCallback  callback,
+                                                    gpointer             user_data);
+gboolean mm_modem_voice_call_waiting_query_finish  (MMModemVoice        *self,
+                                                    GAsyncResult        *res,
+                                                    gboolean            *status,
+                                                    GError             **error);
+gboolean mm_modem_voice_call_waiting_query_sync    (MMModemVoice        *self,
+                                                    GCancellable        *cancellable,
+                                                    gboolean            *status,
+                                                    GError             **error);
+
 G_END_DECLS
 
 #endif /* _MM_MODEM_VOICE_H_ */

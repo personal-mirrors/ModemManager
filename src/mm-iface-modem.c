@@ -372,6 +372,7 @@ internal_load_unlock_required_context_step (GTask *task)
     g_assert (ctx->pin_check_timeout_id == 0);
     MM_IFACE_MODEM_GET_INTERFACE (self)->load_unlock_required (
         self,
+        (ctx->retries == MAX_RETRIES), /* last_attempt? */
         (GAsyncReadyCallback)load_unlock_required_ready,
         task);
 }
@@ -425,7 +426,7 @@ bearer_list_updated (MMBearerList *bearer_list,
 
 /*****************************************************************************/
 
-static MMModemState get_current_consolidated_state (MMIfaceModem *self, MMModemState modem_state);
+static MMModemState get_consolidated_subsystem_state (MMIfaceModem *self);
 
 typedef struct {
     MMBaseBearer *self;
@@ -490,7 +491,7 @@ bearer_status_changed (MMBaseBearer *bearer,
             new_state = MM_MODEM_STATE_DISCONNECTING;
             break;
         case MM_BEARER_STATUS_DISCONNECTED:
-            new_state = get_current_consolidated_state (self, MM_MODEM_STATE_UNKNOWN);
+            new_state = get_consolidated_subsystem_state (self);
             break;
         }
 
@@ -753,6 +754,7 @@ handle_command_auth_ready (MMBaseModem *self,
         return;
     }
 
+#if ! defined WITH_AT_COMMAND_VIA_DBUS
     /* If we are not in Debug mode, report an error */
     if (!mm_context_get_debug ()) {
         g_dbus_method_invocation_return_error (ctx->invocation,
@@ -763,6 +765,7 @@ handle_command_auth_ready (MMBaseModem *self,
         handle_command_context_free (ctx);
         return;
     }
+#endif
 
     /* If command is not implemented, report an error */
     if (!MM_IFACE_MODEM_GET_INTERFACE (self)->command ||
@@ -1518,7 +1521,7 @@ __iface_modem_update_state_internal (MMIfaceModem *self,
 
     /* Enabled may really be searching or registered */
     if (new_state == MM_MODEM_STATE_ENABLED)
-        new_state = get_current_consolidated_state (self, new_state);
+        new_state = get_consolidated_subsystem_state (self);
 
     /* Update state only if different */
     if (new_state != old_state) {
@@ -1612,9 +1615,12 @@ subsystem_state_array_free (GArray *array)
 }
 
 static MMModemState
-get_current_consolidated_state (MMIfaceModem *self, MMModemState modem_state)
+get_consolidated_subsystem_state (MMIfaceModem *self)
 {
-    MMModemState consolidated = modem_state;
+    /* Use as initial state ENABLED, which is the minimum one expected. Do not
+     * use the old modem state as initial state, as that would disallow reporting
+     * e.g. ENABLED if the old state was REGISTERED (as ENABLED < REGISTERED). */
+    MMModemState consolidated = MM_MODEM_STATE_ENABLED;
     GArray *subsystem_states;
 
     if (G_UNLIKELY (!state_update_context_quark))
@@ -1698,7 +1704,7 @@ get_updated_consolidated_state (MMIfaceModem *self,
         g_array_append_val (subsystem_states, s);
     }
 
-    return get_current_consolidated_state (self, modem_state);
+    return get_consolidated_subsystem_state (self);
 }
 
 void
@@ -2252,9 +2258,14 @@ handle_set_current_capabilities (MmGdbusModem *skeleton,
 /*****************************************************************************/
 /* Current bands setting */
 
+#define AFTER_SET_LOAD_CURRENT_BANDS_RETRIES      5
+#define AFTER_SET_LOAD_CURRENT_BANDS_TIMEOUT_SECS 1
+
 typedef struct {
     MmGdbusModem *skeleton;
-    GArray *bands_array;
+    GArray       *bands_array;
+    GArray       *supported_bands_array; /* when ANY requested */
+    guint         retries;
 } SetCurrentBandsContext;
 
 static void
@@ -2264,6 +2275,8 @@ set_current_bands_context_free (SetCurrentBandsContext *ctx)
         g_object_unref (ctx->skeleton);
     if (ctx->bands_array)
         g_array_unref (ctx->bands_array);
+    if (ctx->supported_bands_array)
+        g_array_unref (ctx->supported_bands_array);
     g_slice_free (SetCurrentBandsContext, ctx);
 }
 
@@ -2284,48 +2297,116 @@ set_current_bands_complete_with_defaults (GTask *task)
 
     /* Never show just 'any' in the interface */
     if (ctx->bands_array->len == 1 && g_array_index (ctx->bands_array, MMModemBand, 0) == MM_MODEM_BAND_ANY) {
-        GArray *supported_bands;
-
-        supported_bands = (mm_common_bands_variant_to_garray (mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
-        mm_common_bands_garray_sort (supported_bands);
-        mm_gdbus_modem_set_current_bands (ctx->skeleton, mm_common_bands_garray_to_variant (supported_bands));
-        g_array_unref (supported_bands);
-    } else {
-        mm_common_bands_garray_sort (ctx->bands_array);
-        mm_gdbus_modem_set_current_bands (ctx->skeleton, mm_common_bands_garray_to_variant (ctx->bands_array));
+        g_assert (ctx->supported_bands_array);
+        g_array_unref (ctx->bands_array);
+        ctx->bands_array = g_array_ref (ctx->supported_bands_array);
     }
+
+    mm_common_bands_garray_sort (ctx->bands_array);
+    mm_gdbus_modem_set_current_bands (ctx->skeleton, mm_common_bands_garray_to_variant (ctx->bands_array));
 
     g_task_return_boolean (task, TRUE);
     g_object_unref (task);
 }
+
+static void set_current_bands_reload_schedule (GTask *task);
 
 static void
 after_set_load_current_bands_ready (MMIfaceModem *self,
                                     GAsyncResult *res,
                                     GTask        *task)
 {
-    GError                 *error = NULL;
-    GArray                 *current_bands;
     SetCurrentBandsContext *ctx;
+    GArray                 *current_bands;
+    GError                 *error = NULL;
+    GArray                 *requested_bands = NULL;
 
     ctx = g_task_get_task_data (task);
 
     current_bands = MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands_finish (self, res, &error);
     if (!current_bands) {
-        /* Errors when getting bands won't be critical */
+        /* If we can retry, do it */
+        if (ctx->retries > 0) {
+            mm_dbg ("couldn't load current bands: '%s' (will retry)", error->message);
+            g_clear_error (&error);
+            set_current_bands_reload_schedule (task);
+            goto out;
+        }
+
+        /* Errors when reloading bands won't be critical */
         mm_warn ("couldn't load current bands: '%s'", error->message);
-        g_error_free (error);
-        /* Default to the ones we requested */
+        g_clear_error (&error);
         set_current_bands_complete_with_defaults (task);
-        return;
+        goto out;
     }
 
+    if ((ctx->bands_array->len == 1) && (g_array_index (ctx->bands_array, MMModemBand, 0) == MM_MODEM_BAND_ANY))
+        requested_bands = g_array_ref (ctx->supported_bands_array);
+    else
+        requested_bands = g_array_ref (ctx->bands_array);
+
+    /* Compare arrays */
+    if (!mm_common_bands_garray_cmp (current_bands, requested_bands)) {
+        gchar *requested_str;
+        gchar *current_str;
+
+        /* If we can retry, do it */
+        if (ctx->retries > 0) {
+            mm_dbg ("reloaded current bands different to the requested ones (will retry)");
+            set_current_bands_reload_schedule (task);
+            goto out;
+        }
+
+        requested_str = mm_common_build_bands_string ((MMModemBand *)requested_bands->data, requested_bands->len);
+        current_str   = mm_common_build_bands_string ((MMModemBand *)current_bands->data, current_bands->len);
+        error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                             "reloaded current bands (%s) different to the requested ones (%s)",
+                             current_str, requested_str);
+        g_free (requested_str);
+        g_free (current_str);
+    }
+
+    /* Store as current the last loaded ones and set operation result */
     mm_common_bands_garray_sort (current_bands);
     mm_gdbus_modem_set_current_bands (ctx->skeleton, mm_common_bands_garray_to_variant (current_bands));
-    g_array_unref (current_bands);
 
-    g_task_return_boolean (task, TRUE);
+    if (error)
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
     g_object_unref (task);
+
+ out:
+    g_array_unref (requested_bands);
+    g_array_unref (current_bands);
+}
+
+static gboolean
+set_current_bands_reload (GTask *task)
+{
+    MMIfaceModem           *self;
+    SetCurrentBandsContext *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    g_assert (ctx->retries > 0);
+    ctx->retries--;
+
+    MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands (
+        self,
+        (GAsyncReadyCallback)after_set_load_current_bands_ready,
+        task);
+
+    return G_SOURCE_REMOVE;
+}
+
+static void
+set_current_bands_reload_schedule (GTask *task)
+{
+    g_timeout_add_seconds (AFTER_SET_LOAD_CURRENT_BANDS_TIMEOUT_SECS,
+                           (GSourceFunc) set_current_bands_reload,
+                           task);
 }
 
 static void
@@ -2343,10 +2424,7 @@ set_current_bands_ready (MMIfaceModem *self,
 
     if (MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands &&
         MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands_finish) {
-        MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands (
-            self,
-            (GAsyncReadyCallback)after_set_load_current_bands_ready,
-            task);
+        set_current_bands_reload (task);
         return;
     }
 
@@ -2419,7 +2497,6 @@ mm_iface_modem_set_current_bands (MMIfaceModem *self,
                                   gpointer user_data)
 {
     SetCurrentBandsContext *ctx;
-    GArray *supported_bands_array;
     GArray *current_bands_array;
     GError *error = NULL;
     gchar *bands_string;
@@ -2440,6 +2517,7 @@ mm_iface_modem_set_current_bands (MMIfaceModem *self,
 
     /* Setup context */
     ctx = g_slice_new0 (SetCurrentBandsContext);
+    ctx->retries = AFTER_SET_LOAD_CURRENT_BANDS_RETRIES;
 
     task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, (GDestroyNotify)set_current_bands_context_free);
@@ -2460,8 +2538,8 @@ mm_iface_modem_set_current_bands (MMIfaceModem *self,
                                                  bands_array->len);
 
     /* Get list of supported bands */
-    supported_bands_array = (mm_common_bands_variant_to_garray (
-                                 mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
+    ctx->supported_bands_array = (mm_common_bands_variant_to_garray (
+                                      mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
 
     /* Set ctx->bands_array to target list of bands before comparing with current list
      * of bands. If input list of bands contains only ANY, target list of bands is set
@@ -2470,8 +2548,8 @@ mm_iface_modem_set_current_bands (MMIfaceModem *self,
         g_array_index (bands_array, MMModemBand, 0) == MM_MODEM_BAND_ANY) {
         guint i;
 
-        for (i = 0; i < supported_bands_array->len; i++) {
-            MMModemBand band = g_array_index (supported_bands_array, MMModemBand, i);
+        for (i = 0; i < ctx->supported_bands_array->len; i++) {
+            MMModemBand band = g_array_index (ctx->supported_bands_array, MMModemBand, i);
 
             if (band != MM_MODEM_BAND_ANY &&
                 band != MM_MODEM_BAND_UNKNOWN) {
@@ -2479,7 +2557,7 @@ mm_iface_modem_set_current_bands (MMIfaceModem *self,
                     ctx->bands_array = g_array_sized_new (FALSE,
                                                           FALSE,
                                                           sizeof (MMModemBand),
-                                                          supported_bands_array->len);
+                                                          ctx->supported_bands_array->len);
                 g_array_append_val (ctx->bands_array, band);
             }
         }
@@ -2495,7 +2573,6 @@ mm_iface_modem_set_current_bands (MMIfaceModem *self,
         mm_dbg ("Requested list of bands (%s) is equal to the current ones, skipping re-set",
                 bands_string);
         g_free (bands_string);
-        g_array_unref (supported_bands_array);
         g_array_unref (current_bands_array);
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
@@ -2510,13 +2587,12 @@ mm_iface_modem_set_current_bands (MMIfaceModem *self,
     }
 
     /* Validate input list of bands */
-    if (!validate_bands (supported_bands_array,
+    if (!validate_bands (ctx->supported_bands_array,
                          ctx->bands_array,
                          &error)) {
         mm_dbg ("Requested list of bands (%s) cannot be handled",
                 bands_string);
         g_free (bands_string);
-        g_array_unref (supported_bands_array);
         g_array_unref (current_bands_array);
         g_task_return_error (task, error);
         g_object_unref (task);
@@ -2530,7 +2606,6 @@ mm_iface_modem_set_current_bands (MMIfaceModem *self,
         (GAsyncReadyCallback)set_current_bands_ready,
         task);
 
-    g_array_unref (supported_bands_array);
     g_array_unref (current_bands_array);
     g_free (bands_string);
 }
@@ -2622,10 +2697,14 @@ handle_set_current_bands (MmGdbusModem *skeleton,
 /*****************************************************************************/
 /* Set current modes */
 
+#define AFTER_SET_LOAD_CURRENT_MODES_RETRIES      5
+#define AFTER_SET_LOAD_CURRENT_MODES_TIMEOUT_SECS 1
+
 typedef struct {
     MmGdbusModem *skeleton;
-    MMModemMode allowed;
-    MMModemMode preferred;
+    MMModemMode   allowed;
+    MMModemMode   preferred;
+    guint         retries;
 } SetCurrentModesContext;
 
 static void
@@ -2633,7 +2712,7 @@ set_current_modes_context_free (SetCurrentModesContext *ctx)
 {
     if (ctx->skeleton)
         g_object_unref (ctx->skeleton);
-    g_free (ctx);
+    g_slice_free (SetCurrentModesContext, ctx);
 }
 
 gboolean
@@ -2643,6 +2722,8 @@ mm_iface_modem_set_current_modes_finish (MMIfaceModem *self,
 {
     return g_task_propagate_boolean (G_TASK (res), error);
 }
+
+static void set_current_modes_reload_schedule (GTask *task);
 
 static void
 after_set_load_current_modes_ready (MMIfaceModem *self,
@@ -2661,18 +2742,92 @@ after_set_load_current_modes_ready (MMIfaceModem *self,
                                                                          &allowed,
                                                                          &preferred,
                                                                          &error)) {
+        /* If we can retry, do it */
+        if (ctx->retries > 0) {
+            mm_dbg ("couldn't load current allowed/preferred modes: '%s'", error->message);
+            g_error_free (error);
+            set_current_modes_reload_schedule (task);
+            return;
+        }
+
         /* Errors when getting allowed/preferred won't be critical */
         mm_warn ("couldn't load current allowed/preferred modes: '%s'", error->message);
-        g_error_free (error);
+        g_clear_error (&error);
 
         /* If errors getting allowed modes, default to the ones we asked for */
         mm_gdbus_modem_set_current_modes (ctx->skeleton, g_variant_new ("(uu)", ctx->allowed, ctx->preferred));
-    } else
-        mm_gdbus_modem_set_current_modes (ctx->skeleton, g_variant_new ("(uu)", allowed, preferred));
+        goto out;
+    }
 
-    /* Done */
-    g_task_return_boolean (task, TRUE);
+    /* Store as current the last loaded ones and set operation result */
+    mm_gdbus_modem_set_current_modes (ctx->skeleton, g_variant_new ("(uu)", allowed, preferred));
+
+    /* Compare modes. If the requested one was ANY, we won't consider an error if the
+     * result differs. */
+    if (((allowed != ctx->allowed) || (preferred != ctx->preferred)) && (ctx->allowed != MM_MODEM_MODE_ANY)) {
+        gchar *requested_allowed_str;
+        gchar *requested_preferred_str;
+        gchar *current_allowed_str;
+        gchar *current_preferred_str;
+
+        /* If we can retry, do it */
+        if (ctx->retries > 0) {
+            mm_dbg ("reloaded current modes different to the requested ones (will retry)");
+            set_current_modes_reload_schedule (task);
+            return;
+        }
+
+        requested_allowed_str = mm_modem_mode_build_string_from_mask (ctx->allowed);
+        requested_preferred_str = mm_modem_mode_build_string_from_mask (ctx->preferred);
+        current_allowed_str = mm_modem_mode_build_string_from_mask (allowed);
+        current_preferred_str = mm_modem_mode_build_string_from_mask (preferred);
+
+        error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                             "reloaded modes (allowed '%s' and preferred '%s') different "
+                             "to the requested ones (allowed '%s' and preferred '%s')",
+                             requested_allowed_str, requested_preferred_str,
+                             current_allowed_str, current_preferred_str);
+
+        g_free (requested_allowed_str);
+        g_free (requested_preferred_str);
+        g_free (current_allowed_str);
+        g_free (current_preferred_str);
+    }
+
+out:
+    if (error)
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
     g_object_unref (task);
+}
+
+static gboolean
+set_current_modes_reload (GTask *task)
+{
+    MMIfaceModem           *self;
+    SetCurrentModesContext *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    g_assert (ctx->retries > 0);
+    ctx->retries--;
+
+    MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_modes (
+        self,
+        (GAsyncReadyCallback)after_set_load_current_modes_ready,
+        task);
+
+    return G_SOURCE_REMOVE;
+}
+
+static void
+set_current_modes_reload_schedule (GTask *task)
+{
+    g_timeout_add_seconds (AFTER_SET_LOAD_CURRENT_MODES_TIMEOUT_SECS,
+                           (GSourceFunc) set_current_modes_reload,
+                           task);
 }
 
 static void
@@ -2691,10 +2846,7 @@ set_current_modes_ready (MMIfaceModem *self,
 
     if (MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_modes &&
         MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_modes_finish) {
-        MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_modes (
-            self,
-            (GAsyncReadyCallback)after_set_load_current_modes_ready,
-            task);
+        set_current_modes_reload (task);
         return;
     }
 
@@ -2738,7 +2890,8 @@ mm_iface_modem_set_current_modes (MMIfaceModem *self,
     }
 
     /* Setup context */
-    ctx = g_new0 (SetCurrentModesContext, 1);
+    ctx = g_slice_new0 (SetCurrentModesContext);
+    ctx->retries = AFTER_SET_LOAD_CURRENT_MODES_RETRIES;
     ctx->allowed = allowed;
     ctx->preferred = preferred;
 

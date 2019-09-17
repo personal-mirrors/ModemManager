@@ -11,6 +11,8 @@
  * GNU General Public License for more details:
  *
  * Copyright (C) 2015 Riccardo Vangelisti <riccardo.vangelisti@sadel.it>
+ * Copyright (C) 2019 Aleksander Morgado <aleksander@aleksander.es>
+ * Copyright (C) 2019 Purism SPC
  */
 
 #include <config.h>
@@ -40,6 +42,7 @@ enum {
     PROP_PATH,
     PROP_CONNECTION,
     PROP_MODEM,
+    PROP_SKIP_INCOMING_TIMEOUT,
     PROP_SUPPORTS_DIALING_TO_RINGING,
     PROP_SUPPORTS_RINGING_TO_ACTIVE,
     PROP_LAST
@@ -55,88 +58,18 @@ struct _MMBaseCallPrivate {
     /* The path where the call object is exported */
     gchar *path;
     /* Features */
+    gboolean skip_incoming_timeout;
     gboolean supports_dialing_to_ringing;
     gboolean supports_ringing_to_active;
 
     guint incoming_timeout;
-    GRegex *in_call_events;
 
     /* The port used for audio while call is ongoing, if known */
     MMPort *audio_port;
+
+    /* Ongoing call index */
+    guint index;
 };
-
-/*****************************************************************************/
-/* In-call unsolicited events
- * Once a call is started, we may need to detect special URCs to trigger call
- * state changes, e.g. "NO CARRIER" when the remote party hangs up. */
-
-static void
-in_call_event_received (MMPortSerialAt *port,
-                        GMatchInfo     *info,
-                        MMBaseCall     *self)
-{
-    gchar *str;
-
-    str = g_match_info_fetch (info, 1);
-    if (!str)
-        return;
-
-    if (!strcmp (str, "NO DIALTONE"))
-        mm_base_call_change_state (self, MM_CALL_STATE_TERMINATED, MM_CALL_STATE_REASON_ERROR);
-    else if (!strcmp (str, "NO CARRIER") || !strcmp (str, "BUSY") || !strcmp (str, "NO ANSWER"))
-        mm_base_call_change_state (self, MM_CALL_STATE_TERMINATED, MM_CALL_STATE_REASON_REFUSED_OR_BUSY);
-
-    g_free (str);
-}
-
-static gboolean
-common_setup_cleanup_unsolicited_events (MMBaseCall  *self,
-                                         gboolean     enable,
-                                         GError     **error)
-{
-    MMBaseModem    *modem = NULL;
-    MMPortSerialAt *ports[2];
-    gint            i;
-
-    if (G_UNLIKELY (!self->priv->in_call_events))
-        self->priv->in_call_events = g_regex_new ("\\r\\n(NO CARRIER|BUSY|NO ANSWER|NO DIALTONE)\\r\\n$",
-                                                  G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
-
-    g_object_get (self,
-                  MM_BASE_CALL_MODEM, &modem,
-                  NULL);
-
-    ports[0] = mm_base_modem_peek_port_primary   (modem);
-    ports[1] = mm_base_modem_peek_port_secondary (modem);
-
-    for (i = 0; i < G_N_ELEMENTS (ports); i++) {
-        if (!ports[i])
-            continue;
-
-        mm_port_serial_at_add_unsolicited_msg_handler (ports[i],
-                                                       self->priv->in_call_events,
-                                                       enable ? (MMPortSerialAtUnsolicitedMsgFn) in_call_event_received : NULL,
-                                                       enable ? self : NULL,
-                                                       NULL);
-    }
-
-    g_object_unref (modem);
-    return TRUE;
-}
-
-static gboolean
-setup_unsolicited_events (MMBaseCall  *self,
-                          GError     **error)
-{
-    return common_setup_cleanup_unsolicited_events (self, TRUE, error);
-}
-
-static gboolean
-cleanup_unsolicited_events (MMBaseCall  *self,
-                            GError     **error)
-{
-    return common_setup_cleanup_unsolicited_events (self, FALSE, error);
-}
 
 /*****************************************************************************/
 /* Incoming calls are reported via RING URCs. If the caller stops the call
@@ -161,6 +94,9 @@ incoming_timeout_cb (MMBaseCall *self)
 void
 mm_base_call_incoming_refresh (MMBaseCall *self)
 {
+    if (self->priv->skip_incoming_timeout)
+        return;
+
     if (self->priv->incoming_timeout)
         g_source_remove (self->priv->incoming_timeout);
     self->priv->incoming_timeout = g_timeout_add_seconds (INCOMING_TIMEOUT_SECS, (GSourceFunc)incoming_timeout_cb, self);
@@ -169,10 +105,10 @@ mm_base_call_incoming_refresh (MMBaseCall *self)
 /*****************************************************************************/
 /* Update audio settings */
 
-static void
-update_audio_settings (MMBaseCall        *self,
-                       MMPort            *audio_port,
-                       MMCallAudioFormat *audio_format)
+void
+mm_base_call_change_audio_settings (MMBaseCall        *self,
+                                    MMPort            *audio_port,
+                                    MMCallAudioFormat *audio_format)
 {
     if (!audio_port && self->priv->audio_port && mm_port_get_connected (self->priv->audio_port))
         mm_port_set_connected (self->priv->audio_port, FALSE);
@@ -206,50 +142,6 @@ handle_start_context_free (HandleStartContext *ctx)
 }
 
 static void
-call_started (HandleStartContext *ctx)
-{
-    mm_info ("call is started");
-
-    /* If dialing to ringing supported, leave it dialing */
-    if (!ctx->self->priv->supports_dialing_to_ringing) {
-        /* If ringing to active supported, set it ringing */
-        if (ctx->self->priv->supports_ringing_to_active)
-            mm_base_call_change_state (ctx->self, MM_CALL_STATE_RINGING_OUT, MM_CALL_STATE_REASON_OUTGOING_STARTED);
-        else
-            /* Otherwise, active right away */
-            mm_base_call_change_state (ctx->self, MM_CALL_STATE_ACTIVE, MM_CALL_STATE_REASON_OUTGOING_STARTED);
-    }
-    mm_gdbus_call_complete_start (MM_GDBUS_CALL (ctx->self), ctx->invocation);
-    handle_start_context_free (ctx);
-}
-
-static void
-start_setup_audio_channel_ready (MMBaseCall         *self,
-                                 GAsyncResult       *res,
-                                 HandleStartContext *ctx)
-{
-    MMPort            *audio_port = NULL;
-    MMCallAudioFormat *audio_format = NULL;
-    GError            *error = NULL;
-
-    if (!MM_BASE_CALL_GET_CLASS (self)->setup_audio_channel_finish (self, res, &audio_port, &audio_format, &error)) {
-        mm_warn ("Couldn't setup audio channel: '%s'", error->message);
-        mm_base_call_change_state (self, MM_CALL_STATE_TERMINATED, MM_CALL_STATE_REASON_AUDIO_SETUP_FAILED);
-        g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_start_context_free (ctx);
-        return;
-    }
-
-    if (audio_port || audio_format) {
-        update_audio_settings (self, audio_port, audio_format);
-        g_clear_object (&audio_port);
-        g_clear_object (&audio_format);
-    }
-
-    call_started (ctx);
-}
-
-static void
 handle_start_ready (MMBaseCall         *self,
                     GAsyncResult       *res,
                     HandleStartContext *ctx)
@@ -272,17 +164,19 @@ handle_start_ready (MMBaseCall         *self,
         return;
     }
 
-    /* If there is an audio setup method, run it now */
-    if (MM_BASE_CALL_GET_CLASS (self)->setup_audio_channel) {
-        mm_info ("setting up audio channel...");
-        MM_BASE_CALL_GET_CLASS (self)->setup_audio_channel (self,
-                                                            (GAsyncReadyCallback) start_setup_audio_channel_ready,
-                                                            ctx);
-        return;
-    }
+    mm_info ("call is started");
 
-    /* Otherwise, we're done */
-    call_started (ctx);
+    /* If dialing to ringing supported, leave it dialing */
+    if (!ctx->self->priv->supports_dialing_to_ringing) {
+        /* If ringing to active supported, set it ringing */
+        if (ctx->self->priv->supports_ringing_to_active)
+            mm_base_call_change_state (ctx->self, MM_CALL_STATE_RINGING_OUT, MM_CALL_STATE_REASON_OUTGOING_STARTED);
+        else
+            /* Otherwise, active right away */
+            mm_base_call_change_state (ctx->self, MM_CALL_STATE_ACTIVE, MM_CALL_STATE_REASON_OUTGOING_STARTED);
+    }
+    mm_gdbus_call_complete_start (MM_GDBUS_CALL (ctx->self), ctx->invocation);
+    handle_start_context_free (ctx);
 }
 
 static void
@@ -371,46 +265,6 @@ handle_accept_context_free (HandleAcceptContext *ctx)
 }
 
 static void
-call_accepted (HandleAcceptContext *ctx)
-{
-    mm_info ("call is accepted");
-
-    if (ctx->self->priv->incoming_timeout) {
-        g_source_remove (ctx->self->priv->incoming_timeout);
-        ctx->self->priv->incoming_timeout = 0;
-    }
-    mm_base_call_change_state (ctx->self, MM_CALL_STATE_ACTIVE, MM_CALL_STATE_REASON_ACCEPTED);
-    mm_gdbus_call_complete_accept (MM_GDBUS_CALL (ctx->self), ctx->invocation);
-    handle_accept_context_free (ctx);
-}
-
-static void
-accept_setup_audio_channel_ready (MMBaseCall          *self,
-                                  GAsyncResult        *res,
-                                  HandleAcceptContext *ctx)
-{
-    MMPort            *audio_port = NULL;
-    MMCallAudioFormat *audio_format = NULL;
-    GError            *error = NULL;
-
-    if (!MM_BASE_CALL_GET_CLASS (self)->setup_audio_channel_finish (self, res, &audio_port, &audio_format, &error)) {
-        mm_warn ("Couldn't setup audio channel: '%s'", error->message);
-        mm_base_call_change_state (self, MM_CALL_STATE_TERMINATED, MM_CALL_STATE_REASON_AUDIO_SETUP_FAILED);
-        g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_accept_context_free (ctx);
-        return;
-    }
-
-    if (audio_port || audio_format) {
-        update_audio_settings (self, audio_port, audio_format);
-        g_clear_object (&audio_port);
-        g_clear_object (&audio_format);
-    }
-
-    call_accepted (ctx);
-}
-
-static void
 handle_accept_ready (MMBaseCall *self,
                      GAsyncResult *res,
                      HandleAcceptContext *ctx)
@@ -424,17 +278,15 @@ handle_accept_ready (MMBaseCall *self,
         return;
     }
 
-    /* If there is an audio setup method, run it now */
-    if (MM_BASE_CALL_GET_CLASS (self)->setup_audio_channel) {
-        mm_info ("setting up audio channel...");
-        MM_BASE_CALL_GET_CLASS (self)->setup_audio_channel (self,
-                                                            (GAsyncReadyCallback) accept_setup_audio_channel_ready,
-                                                            ctx);
-        return;
-    }
+    mm_info ("call is accepted");
 
-    /* Otherwise, we're done */
-    call_accepted (ctx);
+    if (ctx->self->priv->incoming_timeout) {
+        g_source_remove (ctx->self->priv->incoming_timeout);
+        ctx->self->priv->incoming_timeout = 0;
+    }
+    mm_base_call_change_state (ctx->self, MM_CALL_STATE_ACTIVE, MM_CALL_STATE_REASON_ACCEPTED);
+    mm_gdbus_call_complete_accept (MM_GDBUS_CALL (ctx->self), ctx->invocation);
+    handle_accept_context_free (ctx);
 }
 
 static void
@@ -503,7 +355,265 @@ handle_accept (MMBaseCall *self,
 }
 
 /*****************************************************************************/
+/* Deflect call (DBus call handling) */
 
+typedef struct {
+    MMBaseCall            *self;
+    MMBaseModem           *modem;
+    GDBusMethodInvocation *invocation;
+    gchar                 *number;
+} HandleDeflectContext;
+
+static void
+handle_deflect_context_free (HandleDeflectContext *ctx)
+{
+    g_free (ctx->number);
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->modem);
+    g_object_unref (ctx->self);
+    g_slice_free (HandleDeflectContext, ctx);
+}
+
+static void
+handle_deflect_ready (MMBaseCall           *self,
+                      GAsyncResult         *res,
+                      HandleDeflectContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!MM_BASE_CALL_GET_CLASS (self)->deflect_finish (self, res, &error)) {
+        mm_base_call_change_state (self, MM_CALL_STATE_TERMINATED, MM_CALL_STATE_REASON_ERROR);
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_deflect_context_free (ctx);
+        return;
+    }
+
+    mm_info ("call is deflected to '%s'", ctx->number);
+    mm_base_call_change_state (ctx->self, MM_CALL_STATE_TERMINATED, MM_CALL_STATE_REASON_DEFLECTED);
+    mm_gdbus_call_complete_deflect (MM_GDBUS_CALL (ctx->self), ctx->invocation);
+    handle_deflect_context_free (ctx);
+}
+
+static void
+handle_deflect_auth_ready (MMBaseModem          *modem,
+                           GAsyncResult         *res,
+                           HandleDeflectContext *ctx)
+{
+    MMCallState state;
+    GError *error = NULL;
+
+    if (!mm_base_modem_authorize_finish (modem, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_deflect_context_free (ctx);
+        return;
+    }
+
+    state = mm_gdbus_call_get_state (MM_GDBUS_CALL (ctx->self));
+
+    /* We can only deflect incoming call in ringing or waiting state */
+    if (state != MM_CALL_STATE_RINGING_IN && state != MM_CALL_STATE_WAITING) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_FAILED,
+                                               "This call was not ringing/waiting, cannot deflect");
+        handle_deflect_context_free (ctx);
+        return;
+    }
+
+    mm_info ("user request to deflect call");
+
+    /* Check if we do support doing it */
+    if (!MM_BASE_CALL_GET_CLASS (ctx->self)->deflect ||
+        !MM_BASE_CALL_GET_CLASS (ctx->self)->deflect_finish) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Deflecting call is not supported by this modem");
+        handle_deflect_context_free (ctx);
+        return;
+    }
+
+    MM_BASE_CALL_GET_CLASS (ctx->self)->deflect (ctx->self,
+                                                 ctx->number,
+                                                 (GAsyncReadyCallback)handle_deflect_ready,
+                                                 ctx);
+}
+
+static gboolean
+handle_deflect (MMBaseCall            *self,
+                GDBusMethodInvocation *invocation,
+                const gchar           *number)
+{
+    HandleDeflectContext *ctx;
+
+    ctx = g_slice_new0 (HandleDeflectContext);
+    ctx->self       = g_object_ref (self);
+    ctx->invocation = g_object_ref (invocation);
+    ctx->number     = g_strdup (number);
+    g_object_get (self,
+                  MM_BASE_CALL_MODEM, &ctx->modem,
+                  NULL);
+
+    mm_base_modem_authorize (ctx->modem,
+                             invocation,
+                             MM_AUTHORIZATION_VOICE,
+                             (GAsyncReadyCallback)handle_deflect_auth_ready,
+                             ctx);
+    return TRUE;
+}
+
+/*****************************************************************************/
+/* Join multiparty call (DBus call handling) */
+
+typedef struct {
+    MMBaseCall            *self;
+    MMBaseModem           *modem;
+    GDBusMethodInvocation *invocation;
+} HandleJoinMultipartyContext;
+
+static void
+handle_join_multiparty_context_free (HandleJoinMultipartyContext *ctx)
+{
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->modem);
+    g_object_unref (ctx->self);
+    g_free (ctx);
+}
+
+static void
+modem_voice_join_multiparty_ready (MMIfaceModemVoice           *modem,
+                                   GAsyncResult                *res,
+                                   HandleJoinMultipartyContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_iface_modem_voice_join_multiparty_finish (modem, res, &error))
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+    else
+        mm_gdbus_call_complete_join_multiparty (MM_GDBUS_CALL (ctx->self), ctx->invocation);
+    handle_join_multiparty_context_free (ctx);
+}
+
+static void
+handle_join_multiparty_auth_ready (MMBaseModem                  *modem,
+                                   GAsyncResult                 *res,
+                                   HandleJoinMultipartyContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_authorize_finish (modem, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_join_multiparty_context_free (ctx);
+        return;
+    }
+
+    /* This action is provided in the Call API, but implemented in the Modem.Voice interface
+     * logic, because the action affects not only one call object, but all call objects that
+     * are part of the multiparty call. */
+    mm_iface_modem_voice_join_multiparty (MM_IFACE_MODEM_VOICE (ctx->modem),
+                                          ctx->self,
+                                          (GAsyncReadyCallback)modem_voice_join_multiparty_ready,
+                                          ctx);
+}
+
+static gboolean
+handle_join_multiparty (MMBaseCall            *self,
+                        GDBusMethodInvocation *invocation)
+{
+    HandleJoinMultipartyContext *ctx;
+
+    ctx = g_new0 (HandleJoinMultipartyContext, 1);
+    ctx->self = g_object_ref (self);
+    ctx->invocation = g_object_ref (invocation);
+    g_object_get (self,
+                  MM_BASE_CALL_MODEM, &ctx->modem,
+                  NULL);
+
+    mm_base_modem_authorize (ctx->modem,
+                             invocation,
+                             MM_AUTHORIZATION_VOICE,
+                             (GAsyncReadyCallback)handle_join_multiparty_auth_ready,
+                             ctx);
+    return TRUE;
+}
+
+/*****************************************************************************/
+/* Leave multiparty call (DBus call handling) */
+
+typedef struct {
+    MMBaseCall            *self;
+    MMBaseModem           *modem;
+    GDBusMethodInvocation *invocation;
+} HandleLeaveMultipartyContext;
+
+static void
+handle_leave_multiparty_context_free (HandleLeaveMultipartyContext *ctx)
+{
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->modem);
+    g_object_unref (ctx->self);
+    g_free (ctx);
+}
+
+static void
+modem_voice_leave_multiparty_ready (MMIfaceModemVoice            *modem,
+                                    GAsyncResult                 *res,
+                                    HandleLeaveMultipartyContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_iface_modem_voice_leave_multiparty_finish (modem, res, &error))
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+    else
+        mm_gdbus_call_complete_leave_multiparty (MM_GDBUS_CALL (ctx->self), ctx->invocation);
+
+    handle_leave_multiparty_context_free (ctx);
+}
+
+static void
+handle_leave_multiparty_auth_ready (MMBaseModem                  *modem,
+                                    GAsyncResult                 *res,
+                                    HandleLeaveMultipartyContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_authorize_finish (modem, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_leave_multiparty_context_free (ctx);
+        return;
+    }
+
+    /* This action is provided in the Call API, but implemented in the Modem.Voice interface
+     * logic, because the action affects not only one call object, but all call objects that
+     * are part of the multiparty call. */
+    mm_iface_modem_voice_leave_multiparty (MM_IFACE_MODEM_VOICE (ctx->modem),
+                                           ctx->self,
+                                           (GAsyncReadyCallback)modem_voice_leave_multiparty_ready,
+                                           ctx);
+}
+
+static gboolean
+handle_leave_multiparty (MMBaseCall            *self,
+                         GDBusMethodInvocation *invocation)
+{
+    HandleLeaveMultipartyContext *ctx;
+
+    ctx = g_new0 (HandleLeaveMultipartyContext, 1);
+    ctx->self = g_object_ref (self);
+    ctx->invocation = g_object_ref (invocation);
+    g_object_get (self,
+                  MM_BASE_CALL_MODEM, &ctx->modem,
+                  NULL);
+
+    mm_base_modem_authorize (ctx->modem,
+                             invocation,
+                             MM_AUTHORIZATION_VOICE,
+                             (GAsyncReadyCallback)handle_leave_multiparty_auth_ready,
+                             ctx);
+    return TRUE;
+}
+
+/*****************************************************************************/
 /* Hangup call (DBus call handling) */
 
 typedef struct {
@@ -534,10 +644,7 @@ handle_hangup_ready (MMBaseCall *self,
     if (!MM_BASE_CALL_GET_CLASS (self)->hangup_finish (self, res, &error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
     else {
-        if (ctx->self->priv->incoming_timeout) {
-            g_source_remove (ctx->self->priv->incoming_timeout);
-            ctx->self->priv->incoming_timeout = 0;
-        }
+        /* note: timeouts are already removed when setting state as TERMINATED */
         mm_gdbus_call_complete_hangup (MM_GDBUS_CALL (ctx->self), ctx->invocation);
     }
 
@@ -742,21 +849,14 @@ call_dbus_export (MMBaseCall *self)
     GError *error = NULL;
 
     /* Handle method invocations */
-    g_signal_connect (self,
-                      "handle-start",
-                      G_CALLBACK (handle_start),
-                      NULL);
-    g_signal_connect (self,
-                      "handle-accept",
-                      G_CALLBACK (handle_accept),
-                      NULL);
-    g_signal_connect (self,
-                      "handle-hangup",
-                      G_CALLBACK (handle_hangup),
-                      NULL);
-    g_signal_connect (self,
-                      "handle-send-dtmf",
-                      G_CALLBACK (handle_send_dtmf),
+    g_object_connect (self,
+                      "signal::handle-start",            G_CALLBACK (handle_start),            NULL,
+                      "signal::handle-accept",           G_CALLBACK (handle_accept),           NULL,
+                      "signal::handle-deflect",          G_CALLBACK (handle_deflect),          NULL,
+                      "signal::handle-join-multiparty",  G_CALLBACK (handle_join_multiparty),  NULL,
+                      "signal::handle-leave-multiparty", G_CALLBACK (handle_leave_multiparty), NULL,
+                      "signal::handle-hangup",           G_CALLBACK (handle_hangup),           NULL,
+                      "signal::handle-send-dtmf",        G_CALLBACK (handle_send_dtmf),        NULL,
                       NULL);
 
     if (!g_dbus_interface_skeleton_export (G_DBUS_INTERFACE_SKELETON (self),
@@ -786,32 +886,70 @@ mm_base_call_get_path (MMBaseCall *self)
     return self->priv->path;
 }
 
-/* Define the states in which we want to handle in-call events */
-#define MM_CALL_STATE_IS_IN_CALL(state)         \
-    (state == MM_CALL_STATE_DIALING ||          \
-     state == MM_CALL_STATE_RINGING_IN  ||      \
-     state == MM_CALL_STATE_RINGING_OUT ||      \
-     state == MM_CALL_STATE_ACTIVE)
-
-static void
-cleanup_audio_channel_ready (MMBaseCall   *self,
-                             GAsyncResult *res)
+const gchar *
+mm_base_call_get_number (MMBaseCall *self)
 {
-    GError *error = NULL;
-
-    if (!MM_BASE_CALL_GET_CLASS (self)->cleanup_audio_channel_finish (self, res, &error)) {
-        mm_warn ("audio channel cleanup failed: %s", error->message);
-        g_error_free (error);
-    }
+    return mm_gdbus_call_get_number (MM_GDBUS_CALL (self));
 }
+
+void
+mm_base_call_set_number (MMBaseCall  *self,
+                         const gchar *number)
+{
+    return mm_gdbus_call_set_number (MM_GDBUS_CALL (self), number);
+}
+
+MMCallDirection
+mm_base_call_get_direction (MMBaseCall *self)
+{
+    return (MMCallDirection) mm_gdbus_call_get_direction (MM_GDBUS_CALL (self));
+}
+
+MMCallState
+mm_base_call_get_state (MMBaseCall *self)
+{
+    return (MMCallState) mm_gdbus_call_get_state (MM_GDBUS_CALL (self));
+}
+
+gboolean
+mm_base_call_get_multiparty (MMBaseCall *self)
+{
+    return mm_gdbus_call_get_multiparty (MM_GDBUS_CALL (self));
+}
+
+void
+mm_base_call_set_multiparty (MMBaseCall *self,
+                             gboolean    multiparty)
+{
+    return mm_gdbus_call_set_multiparty (MM_GDBUS_CALL (self), multiparty);
+}
+
+/*****************************************************************************/
+/* Current call index, only applicable while the call is ongoing
+ * See 3GPP TS 22.030 [27], subclause 6.5.5.1.
+ */
+
+guint
+mm_base_call_get_index (MMBaseCall *self)
+{
+    return self->priv->index;
+}
+
+void
+mm_base_call_set_index (MMBaseCall *self,
+                        guint       index)
+{
+    self->priv->index = index;
+}
+
+/*****************************************************************************/
 
 void
 mm_base_call_change_state (MMBaseCall        *self,
                            MMCallState        new_state,
                            MMCallStateReason  reason)
 {
-    MMCallState  old_state;
-    GError      *error = NULL;
+    MMCallState old_state;
 
     old_state = mm_gdbus_call_get_state (MM_GDBUS_CALL (self));
 
@@ -824,26 +962,13 @@ mm_base_call_change_state (MMBaseCall        *self,
              mm_call_state_reason_get_string (reason));
 
     /* Setup/cleanup unsolicited events  based on state transitions to/from ACTIVE */
-    if (!MM_CALL_STATE_IS_IN_CALL (old_state) && MM_CALL_STATE_IS_IN_CALL (new_state)) {
-        mm_dbg ("Setting up in-call unsolicited events...");
-        if (MM_BASE_CALL_GET_CLASS (self)->setup_unsolicited_events &&
-            !MM_BASE_CALL_GET_CLASS (self)->setup_unsolicited_events (self, &error)) {
-            mm_warn ("Couldn't setup in-call unsolicited events: %s", error->message);
-            g_error_free (error);
-        }
-    } else if (MM_CALL_STATE_IS_IN_CALL (old_state) && !MM_CALL_STATE_IS_IN_CALL (new_state)) {
-        mm_dbg ("Cleaning up in-call unsolicited events...");
-        if (MM_BASE_CALL_GET_CLASS (self)->cleanup_unsolicited_events &&
-            !MM_BASE_CALL_GET_CLASS (self)->cleanup_unsolicited_events (self, &error)) {
-            mm_warn ("Couldn't cleanup in-call unsolicited events: %s", error->message);
-            g_error_free (error);
-        }
-        if (MM_BASE_CALL_GET_CLASS (self)->cleanup_audio_channel) {
-            mm_info ("cleaning up audio channel...");
-            update_audio_settings (self, NULL, NULL);
-            MM_BASE_CALL_GET_CLASS (self)->cleanup_audio_channel (self,
-                                                                  (GAsyncReadyCallback) cleanup_audio_channel_ready,
-                                                                  NULL);
+    if (new_state == MM_CALL_STATE_TERMINATED) {
+        /* reset index */
+        self->priv->index = 0;
+        /* cleanup incoming timeout, if any */
+        if (self->priv->incoming_timeout) {
+            g_source_remove (self->priv->incoming_timeout);
+            self->priv->incoming_timeout = 0;
         }
     }
 
@@ -851,6 +976,8 @@ mm_base_call_change_state (MMBaseCall        *self,
     mm_gdbus_call_set_state_reason (MM_GDBUS_CALL (self), reason);
     mm_gdbus_call_emit_state_changed (MM_GDBUS_CALL (self), old_state, new_state, reason);
 }
+
+/*****************************************************************************/
 
 void
 mm_base_call_received_dtmf (MMBaseCall *self,
@@ -962,6 +1089,53 @@ call_accept (MMBaseCall          *self,
 }
 
 /*****************************************************************************/
+/* Deflect the call */
+
+static gboolean
+call_deflect_finish (MMBaseCall    *self,
+                     GAsyncResult  *res,
+                     GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+call_deflect_ready (MMBaseModem  *modem,
+                    GAsyncResult *res,
+                    GTask        *task)
+{
+    GError *error = NULL;
+
+    mm_base_modem_at_command_finish (modem, res, &error);
+    if (error)
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+call_deflect (MMBaseCall          *self,
+              const gchar         *number,
+              GAsyncReadyCallback  callback,
+              gpointer             user_data)
+{
+    GTask *task;
+    gchar *cmd;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    cmd = g_strdup_printf ("+CTFR=%s", number);
+    mm_base_modem_at_command (self->priv->modem,
+                              cmd,
+                              20,
+                              FALSE,
+                              (GAsyncReadyCallback)call_deflect_ready,
+                              task);
+    g_free (cmd);
+}
+
+/*****************************************************************************/
 /* Hangup the call */
 
 static gboolean
@@ -973,18 +1147,54 @@ call_hangup_finish (MMBaseCall    *self,
 }
 
 static void
-call_hangup_ready (MMBaseModem  *modem,
-                   GAsyncResult *res,
-                   GTask        *task)
+chup_ready (MMBaseModem  *modem,
+            GAsyncResult *res,
+            GTask        *task)
 {
     GError *error = NULL;
 
     mm_base_modem_at_command_finish (modem, res, &error);
-
     if (error)
         g_task_return_error (task, error);
     else
         g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+chup_fallback (GTask *task)
+{
+    MMBaseCall *self;
+
+    self = g_task_get_source_object (task);
+    mm_base_modem_at_command (self->priv->modem,
+                              "+CHUP",
+                              2,
+                              FALSE,
+                              (GAsyncReadyCallback)chup_ready,
+                              task);
+}
+
+static void
+chld_hangup_ready (MMBaseModem  *modem,
+                   GAsyncResult *res,
+                   GTask        *task)
+{
+    MMBaseCall *self;
+    GError     *error = NULL;
+
+    self = g_task_get_source_object (task);
+
+    mm_base_modem_at_command_finish (modem, res, &error);
+    if (error) {
+        mm_warn ("couldn't hangup single call with call id '%u': %s",
+                 self->priv->index, error->message);
+        g_error_free (error);
+        chup_fallback (task);
+        return;
+    }
+
+    g_task_return_boolean (task, TRUE);
     g_object_unref (task);
 }
 
@@ -996,12 +1206,24 @@ call_hangup (MMBaseCall          *self,
     GTask *task;
 
     task = g_task_new (self, NULL, callback, user_data);
-    mm_base_modem_at_command (self->priv->modem,
-                              "+CHUP",
-                              2,
-                              FALSE,
-                              (GAsyncReadyCallback)call_hangup_ready,
-                              task);
+
+    /* Try to hangup the single call id */
+    if (self->priv->index) {
+        gchar *cmd;
+
+        cmd = g_strdup_printf ("+CHLD=1%u", self->priv->index);
+        mm_base_modem_at_command (self->priv->modem,
+                                  cmd,
+                                  2,
+                                  FALSE,
+                                  (GAsyncReadyCallback)chld_hangup_ready,
+                                  task);
+        g_free (cmd);
+        return;
+    }
+
+    /* otherwise terminate all */
+    chup_fallback (task);
 }
 
 /*****************************************************************************/
@@ -1061,12 +1283,18 @@ call_send_dtmf (MMBaseCall *self,
 MMBaseCall *
 mm_base_call_new (MMBaseModem     *modem,
                   MMCallDirection  direction,
-                  const gchar     *number)
+                  const gchar     *number,
+                  gboolean         skip_incoming_timeout,
+                  gboolean         supports_dialing_to_ringing,
+                  gboolean         supports_ringing_to_active)
 {
     return MM_BASE_CALL (g_object_new (MM_TYPE_BASE_CALL,
                                        MM_BASE_CALL_MODEM, modem,
                                        "direction",        direction,
                                        "number",           number,
+                                       MM_BASE_CALL_SKIP_INCOMING_TIMEOUT,       skip_incoming_timeout,
+                                       MM_BASE_CALL_SUPPORTS_DIALING_TO_RINGING, supports_dialing_to_ringing,
+                                       MM_BASE_CALL_SUPPORTS_RINGING_TO_ACTIVE,  supports_ringing_to_active,
                                        NULL));
 }
 
@@ -1112,6 +1340,9 @@ set_property (GObject *object,
                                     G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
         }
         break;
+    case PROP_SKIP_INCOMING_TIMEOUT:
+        self->priv->skip_incoming_timeout = g_value_get_boolean (value);
+        break;
     case PROP_SUPPORTS_DIALING_TO_RINGING:
         self->priv->supports_dialing_to_ringing = g_value_get_boolean (value);
         break;
@@ -1142,6 +1373,9 @@ get_property (GObject *object,
     case PROP_MODEM:
         g_value_set_object (value, self->priv->modem);
         break;
+    case PROP_SKIP_INCOMING_TIMEOUT:
+        g_value_set_boolean (value, self->priv->skip_incoming_timeout);
+        break;
     case PROP_SUPPORTS_DIALING_TO_RINGING:
         g_value_set_boolean (value, self->priv->supports_dialing_to_ringing);
         break;
@@ -1166,8 +1400,6 @@ finalize (GObject *object)
 {
     MMBaseCall *self = MM_BASE_CALL (object);
 
-    if (self->priv->in_call_events)
-        g_regex_unref (self->priv->in_call_events);
     g_free (self->priv->path);
 
     G_OBJECT_CLASS (mm_base_call_parent_class)->finalize (object);
@@ -1214,13 +1446,12 @@ mm_base_call_class_init (MMBaseCallClass *klass)
     klass->start_finish               = call_start_finish;
     klass->accept                     = call_accept;
     klass->accept_finish              = call_accept_finish;
+    klass->deflect                    = call_deflect;
+    klass->deflect_finish             = call_deflect_finish;
     klass->hangup                     = call_hangup;
     klass->hangup_finish              = call_hangup_finish;
     klass->send_dtmf                  = call_send_dtmf;
     klass->send_dtmf_finish           = call_send_dtmf_finish;
-    klass->setup_unsolicited_events   = setup_unsolicited_events;
-    klass->cleanup_unsolicited_events = cleanup_unsolicited_events;
-
 
     properties[PROP_CONNECTION] =
         g_param_spec_object (MM_BASE_CALL_CONNECTION,
@@ -1245,6 +1476,14 @@ mm_base_call_class_init (MMBaseCallClass *klass)
                              MM_TYPE_BASE_MODEM,
                              G_PARAM_READWRITE);
     g_object_class_install_property (object_class, PROP_MODEM, properties[PROP_MODEM]);
+
+    properties[PROP_SKIP_INCOMING_TIMEOUT] =
+        g_param_spec_boolean (MM_BASE_CALL_SKIP_INCOMING_TIMEOUT,
+                              "Skip incoming timeout",
+                              "There is no need to setup a timeout for incoming calls",
+                              FALSE,
+                              G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+    g_object_class_install_property (object_class, PROP_SKIP_INCOMING_TIMEOUT, properties[PROP_SKIP_INCOMING_TIMEOUT]);
 
     properties[PROP_SUPPORTS_DIALING_TO_RINGING] =
         g_param_spec_boolean (MM_BASE_CALL_SUPPORTS_DIALING_TO_RINGING,

@@ -928,7 +928,8 @@ typedef enum { /*< underscore_name=mm_sms_cdma_service_category >*/
  * @MM_MODEM_LOCATION_SOURCE_GPS_NMEA: GPS location given as NMEA traces.
  * @MM_MODEM_LOCATION_SOURCE_CDMA_BS: CDMA base station position.
  * @MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED: No location given, just GPS module setup.
- * @MM_MODEM_LOCATION_SOURCE_AGPS: A-GPS location requested.
+ * @MM_MODEM_LOCATION_SOURCE_AGPS_MSA: Mobile Station Assisted A-GPS location requested. Since 1.12.
+ * @MM_MODEM_LOCATION_SOURCE_AGPS_MSB: Mobile Station Based A-GPS location requested. Since 1.12.
  *
  * Sources of location information supported by the modem.
  */
@@ -939,7 +940,13 @@ typedef enum { /*< underscore_name=mm_modem_location_source >*/
     MM_MODEM_LOCATION_SOURCE_GPS_NMEA      = 1 << 2,
     MM_MODEM_LOCATION_SOURCE_CDMA_BS       = 1 << 3,
     MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED = 1 << 4,
-    MM_MODEM_LOCATION_SOURCE_AGPS          = 1 << 5,
+    MM_MODEM_LOCATION_SOURCE_AGPS_MSA      = 1 << 5,
+    MM_MODEM_LOCATION_SOURCE_AGPS_MSB      = 1 << 6,
+#if defined (MM_COMPILATION)
+    /* MM internal methods, not part of the API */
+    MM_MODEM_LOCATION_SOURCE_FIRST = MM_MODEM_LOCATION_SOURCE_3GPP_LAC_CI, /*< skip >*/
+    MM_MODEM_LOCATION_SOURCE_LAST  = MM_MODEM_LOCATION_SOURCE_AGPS_MSB,    /*< skip >*/
+#endif
 } MMModemLocationSource;
 
 /**
@@ -1379,6 +1386,10 @@ typedef enum { /*< underscore_name=mm_call_state >*/
  * @MM_CALL_STATE_REASON_REFUSED_OR_BUSY: Remote peer is busy or refused call.
  * @MM_CALL_STATE_REASON_ERROR: Wrong number or generic network error.
  * @MM_CALL_STATE_REASON_AUDIO_SETUP_FAILED: Error setting up audio channel.
+ * @MM_CALL_STATE_REASON_TRANSFERRED: Call has been transferred. Since 1.12.
+ * @MM_CALL_STATE_REASON_DEFLECTED: Call has been deflected to a new number. Since 1.12.
+ *
+ * Reason for the state change in the call.
  */
 typedef enum { /*< underscore_name=mm_call_state_reason >*/
     MM_CALL_STATE_REASON_UNKNOWN            = 0,
@@ -1388,7 +1399,9 @@ typedef enum { /*< underscore_name=mm_call_state_reason >*/
     MM_CALL_STATE_REASON_TERMINATED         = 4,
     MM_CALL_STATE_REASON_REFUSED_OR_BUSY    = 5,
     MM_CALL_STATE_REASON_ERROR              = 6,
-    MM_CALL_STATE_REASON_AUDIO_SETUP_FAILED = 7
+    MM_CALL_STATE_REASON_AUDIO_SETUP_FAILED = 7,
+    MM_CALL_STATE_REASON_TRANSFERRED        = 8,
+    MM_CALL_STATE_REASON_DEFLECTED          = 9,
 } MMCallStateReason;
 
 /**
@@ -1396,6 +1409,8 @@ typedef enum { /*< underscore_name=mm_call_state_reason >*/
  * @MM_CALL_DIRECTION_UNKNOWN: unknown.
  * @MM_CALL_DIRECTION_INCOMING: call from network.
  * @MM_CALL_DIRECTION_OUTGOING: call to network.
+ *
+ * Direction of the call.
  */
 typedef enum { /*< underscore_name=mm_call_direction >*/
     MM_CALL_DIRECTION_UNKNOWN   = 0,
