@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <math.h>
 
+#define _LIBMM_INSIDE_MM
 #include <libmm-glib.h>
 #include "mm-modem-helpers.h"
 #include "mm-log.h"
@@ -2681,6 +2682,171 @@ test_cgact_read_response_multiple (void)
 }
 
 /*****************************************************************************/
+/* CID selection logic */
+
+typedef struct {
+    const gchar      *apn;
+    MMBearerIpFamily  ip_family;
+    const gchar      *cgdcont_test;
+    const gchar      *cgdcont_query;
+    guint             expected_cid;
+    gboolean          expected_cid_reused;
+    gboolean          expected_cid_overwritten;
+} CidSelectionTest;
+
+static const CidSelectionTest cid_selection_tests[] = {
+    /* Test: exact APN match */
+    {
+        .apn           = "ac.vodafone.es",
+        .ip_family     = MM_BEARER_IP_FAMILY_IPV4,
+        .cgdcont_test  = "+CGDCONT: (1-10),\"IP\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV6\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV4V6\",,,(0,1),(0,1)\r\n",
+        .cgdcont_query = "+CGDCONT: 1,\"IP\",\"telefonica.es\",\"\",0,0\r\n"
+                         "+CGDCONT: 2,\"IP\",\"ac.vodafone.es\",\"\",0,0\r\n"
+                         "+CGDCONT: 3,\"IP\",\"inet.es\",\"\",0,0\r\n",
+        .expected_cid             = 2,
+        .expected_cid_reused      = TRUE,
+        .expected_cid_overwritten = FALSE
+    },
+    /* Test: exact APN match reported as activated */
+    {
+        .apn           = "ac.vodafone.es",
+        .ip_family     = MM_BEARER_IP_FAMILY_IPV4,
+        .cgdcont_test  = "+CGDCONT: (1-10),\"IP\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV6\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV4V6\",,,(0,1),(0,1)\r\n",
+        .cgdcont_query = "+CGDCONT: 1,\"IP\",\"telefonica.es\",\"\",0,0\r\n"
+                         "+CGDCONT: 2,\"IP\",\"ac.vodafone.es.MNC001.MCC214.GPRS\",\"\",0,0\r\n"
+                         "+CGDCONT: 3,\"IP\",\"inet.es\",\"\",0,0\r\n",
+        .expected_cid             = 2,
+        .expected_cid_reused      = TRUE,
+        .expected_cid_overwritten = FALSE
+    },
+    /* Test: first empty slot in between defined contexts */
+    {
+        .apn           = "ac.vodafone.es",
+        .ip_family     = MM_BEARER_IP_FAMILY_IPV4,
+        .cgdcont_test  = "+CGDCONT: (1-10),\"IP\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV6\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV4V6\",,,(0,1),(0,1)\r\n",
+        .cgdcont_query = "+CGDCONT: 1,\"IP\",\"telefonica.es\",\"\",0,0\r\n"
+                         "+CGDCONT: 10,\"IP\",\"inet.es\",\"\",0,0\r\n",
+        .expected_cid             = 2,
+        .expected_cid_reused      = FALSE,
+        .expected_cid_overwritten = FALSE
+    },
+    /* Test: first empty slot in between defined contexts, different PDP types */
+    {
+        .apn           = "ac.vodafone.es",
+        .ip_family     = MM_BEARER_IP_FAMILY_IPV4,
+        .cgdcont_test  = "+CGDCONT: (1-10),\"IP\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV6\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV4V6\",,,(0,1),(0,1)\r\n",
+        .cgdcont_query = "+CGDCONT: 1,\"IPV6\",\"telefonica.es\",\"\",0,0\r\n"
+                         "+CGDCONT: 10,\"IP\",\"inet.es\",\"\",0,0\r\n",
+        .expected_cid             = 2,
+        .expected_cid_reused      = FALSE,
+        .expected_cid_overwritten = FALSE
+    },
+    /* Test: first empty slot after last context found */
+    {
+        .apn           = "ac.vodafone.es",
+        .ip_family     = MM_BEARER_IP_FAMILY_IPV4,
+        .cgdcont_test  = "+CGDCONT: (1-10),\"IP\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV6\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV4V6\",,,(0,1),(0,1)\r\n",
+        .cgdcont_query = "+CGDCONT: 1,\"IP\",\"telefonica.es\",\"\",0,0\r\n"
+                         "+CGDCONT: 2,\"IP\",\"inet.es\",\"\",0,0\r\n",
+        .expected_cid             = 3,
+        .expected_cid_reused      = FALSE,
+        .expected_cid_overwritten = FALSE
+    },
+    /* Test: first empty slot after last context found, different PDP types */
+    {
+        .apn           = "ac.vodafone.es",
+        .ip_family     = MM_BEARER_IP_FAMILY_IPV4,
+        .cgdcont_test  = "+CGDCONT: (1-10),\"IP\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV6\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-10),\"IPV4V6\",,,(0,1),(0,1)\r\n",
+        .cgdcont_query = "+CGDCONT: 1,\"IP\",\"telefonica.es\",\"\",0,0\r\n"
+                         "+CGDCONT: 2,\"IPV6\",\"inet.es\",\"\",0,0\r\n",
+        .expected_cid             = 3,
+        .expected_cid_reused      = FALSE,
+        .expected_cid_overwritten = FALSE
+    },
+    /* Test: no empty slot, rewrite context with empty APN */
+    {
+        .apn           = "ac.vodafone.es",
+        .ip_family     = MM_BEARER_IP_FAMILY_IPV4,
+        .cgdcont_test  = "+CGDCONT: (1-3),\"IP\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-3),\"IPV6\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-3),\"IPV4V6\",,,(0,1),(0,1)\r\n",
+        .cgdcont_query = "+CGDCONT: 1,\"IP\",\"telefonica.es\",\"\",0,0\r\n"
+                         "+CGDCONT: 2,\"IP\",\"\",\"\",0,0\r\n"
+                         "+CGDCONT: 3,\"IP\",\"inet.es\",\"\",0,0\r\n",
+        .expected_cid             = 2,
+        .expected_cid_reused      = FALSE,
+        .expected_cid_overwritten = TRUE
+    },
+    /* Test: no empty slot, rewrite last context found */
+    {
+        .apn           = "ac.vodafone.es",
+        .ip_family     = MM_BEARER_IP_FAMILY_IPV4,
+        .cgdcont_test  = "+CGDCONT: (1-3),\"IP\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-3),\"IPV6\",,,(0,1),(0,1)\r\n"
+                         "+CGDCONT: (1-3),\"IPV4V6\",,,(0,1),(0,1)\r\n",
+        .cgdcont_query = "+CGDCONT: 1,\"IP\",\"telefonica.es\",\"\",0,0\r\n"
+                         "+CGDCONT: 2,\"IP\",\"vzwinternet\",\"\",0,0\r\n"
+                         "+CGDCONT: 3,\"IP\",\"inet.es\",\"\",0,0\r\n",
+        .expected_cid             = 3,
+        .expected_cid_reused      = FALSE,
+        .expected_cid_overwritten = TRUE
+    },
+    /* Test: CGDCONT? and CGDCONT=? failures, fallback to CID=1 (a.g. some Android phones) */
+    {
+        .apn           = "ac.vodafone.es",
+        .ip_family     = MM_BEARER_IP_FAMILY_IPV4,
+        .cgdcont_test  = NULL,
+        .cgdcont_query = NULL,
+        .expected_cid             = 1,
+        .expected_cid_reused      = FALSE,
+        .expected_cid_overwritten = TRUE
+    },
+};
+
+static void
+test_cid_selection (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (cid_selection_tests); i++) {
+        const CidSelectionTest *test;
+        GList                  *context_list;
+        GList                  *context_format_list;
+        guint                   cid;
+        gboolean                cid_reused;
+        gboolean                cid_overwritten;
+
+        test = &cid_selection_tests[i];
+
+        context_format_list = test->cgdcont_test ? mm_3gpp_parse_cgdcont_test_response (test->cgdcont_test, NULL) : NULL;
+        context_list = test->cgdcont_query ? mm_3gpp_parse_cgdcont_read_response (test->cgdcont_query, NULL) : NULL;
+
+        cid = mm_3gpp_select_best_cid (test->apn, test->ip_family,
+                                       context_list, context_format_list,
+                                       &cid_reused, &cid_overwritten);
+
+        g_assert_cmpuint (cid, ==, test->expected_cid);
+        g_assert_cmpuint (cid_reused, ==, test->expected_cid_reused);
+        g_assert_cmpuint (cid_overwritten, ==, test->expected_cid_overwritten);
+
+        mm_3gpp_pdp_context_format_list_free (context_format_list);
+        mm_3gpp_pdp_context_list_free (context_list);
+    }
+}
+
+/*****************************************************************************/
 /* Test CPMS responses */
 
 static gboolean
@@ -3926,6 +4092,259 @@ test_csim_response (void)
 }
 
 /*****************************************************************************/
+/* +CLIP URC */
+
+typedef struct {
+    const gchar *str;
+    const gchar *number;
+    guint        type;
+} ClipUrcTest;
+
+static const ClipUrcTest clip_urc_tests[] = {
+    { "\r\n+CLIP: \"123456789\",129\r\n",      "123456789", 129 },
+    { "\r\n+CLIP: \"123456789\",129,,,,0\r\n", "123456789", 129 },
+};
+
+static void
+test_clip_indication (void)
+{
+    GRegex *r;
+    guint   i;
+
+    r = mm_voice_clip_regex_get ();
+
+    for (i = 0; i < G_N_ELEMENTS (clip_urc_tests); i++) {
+        GMatchInfo *match_info = NULL;
+        gchar      *number;
+        guint       type;
+
+        g_assert (g_regex_match (r, clip_urc_tests[i].str, 0, &match_info));
+        g_assert (g_match_info_matches (match_info));
+
+        number = mm_get_string_unquoted_from_match_info (match_info, 1);
+        g_assert_cmpstr (number, ==, clip_urc_tests[i].number);
+
+        g_assert (mm_get_uint_from_match_info (match_info, 2, &type));
+        g_assert_cmpuint (type, ==, clip_urc_tests[i].type);
+
+        g_free (number);
+        g_match_info_free (match_info);
+    }
+
+    g_regex_unref (r);
+}
+
+/*****************************************************************************/
+/* +CCWA URC */
+
+typedef struct {
+    const gchar *str;
+    const gchar *number;
+    guint        type;
+    guint        class;
+} CcwaUrcTest;
+
+static const CcwaUrcTest ccwa_urc_tests[] = {
+    { "\r\n+CCWA: \"123456789\",129,1\r\n",       "123456789", 129, 1 },
+    { "\r\n+CCWA: \"123456789\",129,1,,0\r\n",    "123456789", 129, 1 },
+    { "\r\n+CCWA: \"123456789\",129,1,,0,,,\r\n", "123456789", 129, 1 },
+};
+
+static void
+test_ccwa_indication (void)
+{
+    GRegex *r;
+    guint   i;
+
+    r = mm_voice_ccwa_regex_get ();
+
+    for (i = 0; i < G_N_ELEMENTS (ccwa_urc_tests); i++) {
+        GMatchInfo *match_info = NULL;
+        gchar      *number;
+        guint       type;
+        guint       class;
+
+        g_assert (g_regex_match (r, ccwa_urc_tests[i].str, 0, &match_info));
+        g_assert (g_match_info_matches (match_info));
+
+        number = mm_get_string_unquoted_from_match_info (match_info, 1);
+        g_assert_cmpstr (number, ==, ccwa_urc_tests[i].number);
+
+        g_assert (mm_get_uint_from_match_info (match_info, 2, &type));
+        g_assert_cmpuint (type, ==, ccwa_urc_tests[i].type);
+
+        g_assert (mm_get_uint_from_match_info (match_info, 3, &class));
+        g_assert_cmpuint (class, ==, ccwa_urc_tests[i].class);
+
+        g_free (number);
+        g_match_info_free (match_info);
+    }
+
+    g_regex_unref (r);
+}
+
+/*****************************************************************************/
+/* +CCWA service query response testing */
+
+static void
+common_test_ccwa_response (const gchar *response,
+                           gboolean     expected_status,
+                           gboolean     expected_error)
+{
+    gboolean  status = FALSE;
+    GError   *error = NULL;
+    gboolean  result;
+
+    result = mm_3gpp_parse_ccwa_service_query_response (response, &status, &error);
+
+    if (expected_error) {
+        g_assert (!result);
+        g_assert (error);
+        g_error_free (error);
+    } else {
+        g_assert (result);
+        g_assert_no_error (error);
+        g_assert_cmpuint (status, ==, expected_status);
+    }
+}
+
+typedef struct {
+    const gchar *response;
+    gboolean     expected_status;
+    gboolean     expected_error;
+} TestCcwa;
+
+static TestCcwa test_ccwa[] = {
+    { "+CCWA: 0,255", FALSE, FALSE }, /* all disabled */
+    { "+CCWA: 1,255", TRUE,  FALSE }, /* all enabled */
+    { "+CCWA: 0,1\r\n"
+      "+CCWA: 0,4\r\n", FALSE,  FALSE }, /* voice and fax disabled */
+    { "+CCWA: 1,1\r\n"
+      "+CCWA: 1,4\r\n", TRUE,  FALSE }, /* voice and fax enabled */
+    { "+CCWA: 0,2\r\n"
+      "+CCWA: 0,4\r\n"
+      "+CCWA: 0,8\r\n", FALSE,  TRUE }, /* data, fax, sms disabled, voice not given */
+    { "+CCWA: 1,2\r\n"
+      "+CCWA: 1,4\r\n"
+      "+CCWA: 1,8\r\n", FALSE,  TRUE }, /* data, fax, sms enabled, voice not given */
+    { "+CCWA: 2,1\r\n"
+      "+CCWA: 2,4\r\n", FALSE,  TRUE }, /* voice and fax enabled but unexpected state */
+};
+
+static void
+test_ccwa_response (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (test_ccwa); i++)
+        common_test_ccwa_response (test_ccwa[i].response, test_ccwa[i].expected_status, test_ccwa[i].expected_error);
+}
+
+/*****************************************************************************/
+/* Test +CLCC URCs */
+
+static void
+common_test_clcc_response (const gchar      *str,
+                           const MMCallInfo *expected_call_info_list,
+                           guint             expected_call_info_list_size)
+{
+    GError     *error = NULL;
+    gboolean    result;
+    GList      *call_info_list = NULL;
+    GList      *l;
+
+    result = mm_3gpp_parse_clcc_response (str, &call_info_list, &error);
+    g_assert_no_error (error);
+    g_assert (result);
+
+    g_print ("found %u calls\n", g_list_length (call_info_list));
+
+    if (expected_call_info_list) {
+        g_assert (call_info_list);
+        g_assert_cmpuint (g_list_length (call_info_list), ==, expected_call_info_list_size);
+    } else
+        g_assert (!call_info_list);
+
+    for (l = call_info_list; l; l = g_list_next (l)) {
+        const MMCallInfo *call_info = (const MMCallInfo *)(l->data);
+        gboolean                   found = FALSE;
+        guint                      i;
+
+        g_print ("call at index %u: direction %s, state %s, number %s\n",
+                 call_info->index,
+                 mm_call_direction_get_string (call_info->direction),
+                 mm_call_state_get_string (call_info->state),
+                 call_info->number ? call_info->number : "n/a");
+
+        for (i = 0; !found && i < expected_call_info_list_size; i++)
+            found = ((call_info->index == expected_call_info_list[i].index) &&
+                     (call_info->direction  == expected_call_info_list[i].direction) &&
+                     (call_info->state  == expected_call_info_list[i].state) &&
+                     (g_strcmp0 (call_info->number, expected_call_info_list[i].number) == 0));
+
+        g_assert (found);
+    }
+
+    mm_3gpp_call_info_list_free (call_info_list);
+}
+
+static void
+test_clcc_response_empty (void)
+{
+    const gchar *response = "";
+
+    common_test_clcc_response (response, NULL, 0);
+}
+
+static void
+test_clcc_response_single (void)
+{
+    static const MMCallInfo expected_call_info_list[] = {
+        { 1, MM_CALL_DIRECTION_INCOMING, MM_CALL_STATE_ACTIVE, "123456789" }
+    };
+
+    const gchar *response =
+        "+CLCC: 1,1,0,0,0,\"123456789\",161";
+
+    common_test_clcc_response (response, expected_call_info_list, G_N_ELEMENTS (expected_call_info_list));
+}
+
+static void
+test_clcc_response_single_long (void)
+{
+    static const MMCallInfo expected_call_info_list[] = {
+        { 1, MM_CALL_DIRECTION_INCOMING, MM_CALL_STATE_RINGING_IN, "123456789" }
+    };
+
+    /* NOTE: priority field is EMPTY */
+    const gchar *response =
+        "+CLCC: 1,1,4,0,0,\"123456789\",129,\"\",,0";
+
+    common_test_clcc_response (response, expected_call_info_list, G_N_ELEMENTS (expected_call_info_list));
+}
+
+static void
+test_clcc_response_multiple (void)
+{
+    static const MMCallInfo expected_call_info_list[] = {
+        { 1, MM_CALL_DIRECTION_INCOMING, MM_CALL_STATE_ACTIVE,  NULL        },
+        { 2, MM_CALL_DIRECTION_INCOMING, MM_CALL_STATE_ACTIVE,  "123456789" },
+        { 3, MM_CALL_DIRECTION_INCOMING, MM_CALL_STATE_ACTIVE,  "987654321" },
+        { 4, MM_CALL_DIRECTION_INCOMING, MM_CALL_STATE_ACTIVE,  "000000000" },
+        { 5, MM_CALL_DIRECTION_INCOMING, MM_CALL_STATE_WAITING, "555555555" },
+    };
+
+    const gchar *response =
+        "+CLCC: 1,1,0,0,1\r\n" /* number unknown */
+        "+CLCC: 2,1,0,0,1,\"123456789\",161\r\n"
+        "+CLCC: 3,1,0,0,1,\"987654321\",161,\"Alice\"\r\n"
+        "+CLCC: 4,1,0,0,1,\"000000000\",161,\"Bob\",1\r\n"
+        "+CLCC: 5,1,5,0,0,\"555555555\",161,\"Mallory\",2,0\r\n";
+
+    common_test_clcc_response (response, expected_call_info_list, G_N_ELEMENTS (expected_call_info_list));
+}
+
+/*****************************************************************************/
 
 typedef struct {
     gchar *str;
@@ -4193,6 +4612,8 @@ int main (int argc, char **argv)
     g_test_suite_add (suite, TESTCASE (test_cgdcont_read_response_nokia, NULL));
     g_test_suite_add (suite, TESTCASE (test_cgdcont_read_response_samsung, NULL));
 
+    g_test_suite_add (suite, TESTCASE (test_cid_selection, NULL));
+
     g_test_suite_add (suite, TESTCASE (test_cgact_read_response_none, NULL));
     g_test_suite_add (suite, TESTCASE (test_cgact_read_response_single_inactive, NULL));
     g_test_suite_add (suite, TESTCASE (test_cgact_read_response_single_active, NULL));
@@ -4235,6 +4656,15 @@ int main (int argc, char **argv)
 
     g_test_suite_add (suite, TESTCASE (test_cesq_response, NULL));
     g_test_suite_add (suite, TESTCASE (test_cesq_response_to_signal, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_clip_indication, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ccwa_indication, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ccwa_response, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_clcc_response_empty, NULL));
+    g_test_suite_add (suite, TESTCASE (test_clcc_response_single, NULL));
+    g_test_suite_add (suite, TESTCASE (test_clcc_response_single_long, NULL));
+    g_test_suite_add (suite, TESTCASE (test_clcc_response_multiple, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_parse_uint_list, NULL));
 

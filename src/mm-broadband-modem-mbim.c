@@ -884,8 +884,8 @@ modem_load_supported_ip_families (MMIfaceModem *self,
 /* Unlock required loading (Modem interface) */
 
 typedef struct {
-    guint n_ready_status_checks;
     MbimDevice *device;
+    gboolean    last_attempt;
 } LoadUnlockRequiredContext;
 
 static void
@@ -1008,29 +1008,28 @@ unlock_required_subscriber_ready_state_ready (MbimDevice *device,
     if (error) {
         g_task_return_error (task, error);
         g_object_unref (task);
+        goto out;
     }
+
     /* Need to retry? */
-    else if (ready_state == MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED ||
-             ready_state == MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED) {
-        if (--ctx->n_ready_status_checks == 0) {
-            /* All retries consumed, issue error */
+    if (ready_state == MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED ||
+        ready_state == MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED) {
+        /* All retries consumed? issue error */
+        if (ctx->last_attempt) {
             if (ready_state == MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED)
-                g_task_return_error (
-                    task,
-                    mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED));
+                g_task_return_error (task, mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED));
             else
-                g_task_return_new_error (task,
-                                         MM_CORE_ERROR,
-                                         MM_CORE_ERROR_FAILED,
+                g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                                          "Error waiting for SIM to get initialized");
-            g_object_unref (task);
-        } else {
-            /* Retry */
-            g_timeout_add_seconds (1, (GSourceFunc)wait_for_sim_ready, task);
-        }
+        } else
+            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_RETRY,
+                                     "SIM not ready yet (retry)");
+        g_object_unref (task);
+        goto out;
     }
+
     /* Initialized but locked? */
-    else if (ready_state == MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED) {
+    if (ready_state == MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED) {
         MbimMessage *message;
 
         /* Query which lock is to unlock */
@@ -1042,14 +1041,19 @@ unlock_required_subscriber_ready_state_ready (MbimDevice *device,
                              (GAsyncReadyCallback)pin_query_ready,
                              task);
         mbim_message_unref (message);
+        goto out;
     }
-    /* Initialized but locked? */
-    else if (ready_state == MBIM_SUBSCRIBER_READY_STATE_INITIALIZED) {
+
+    /* Initialized! */
+    if (ready_state == MBIM_SUBSCRIBER_READY_STATE_INITIALIZED) {
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
-    } else
-        g_assert_not_reached ();
+        goto out;
+    }
 
+    g_assert_not_reached ();
+
+out:
     if (response)
         mbim_message_unref (response);
 }
@@ -1074,6 +1078,7 @@ wait_for_sim_ready (GTask *task)
 
 static void
 modem_load_unlock_required (MMIfaceModem *self,
+                            gboolean last_attempt,
                             GAsyncReadyCallback callback,
                             gpointer user_data)
 {
@@ -1086,7 +1091,7 @@ modem_load_unlock_required (MMIfaceModem *self,
 
     ctx = g_slice_new (LoadUnlockRequiredContext);
     ctx->device = g_object_ref (device);
-    ctx->n_ready_status_checks = 10;
+    ctx->last_attempt = last_attempt;
 
     task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, (GDestroyNotify)load_unlock_required_context_free);
@@ -3938,24 +3943,41 @@ register_state_set_ready (MbimDevice *device,
 {
     MbimMessage *response;
     GError *error = NULL;
-    MbimNwError nw_error;
 
     response = mbim_device_command_finish (device, res, &error);
+    /* According to Mobile Broadband Interface Model specification 1.0,
+     * Errata 1, table 10.5.9.8: Status codes for MBIM_CID_REGISTER_STATE,
+     * NwError field of MBIM_REGISTRATION_STATE_INFO structure is valid
+     * if and only if MBIM_SET_REGISTRATION_STATE response status code equals
+     * MBIM_STATUS_FAILURE.
+     * Therefore it only makes sense to parse this value if MBIM_STATUS_FAILURE
+     * result is returned in response, contrary to usual "success" code.
+     * However, some modems do not set this value to 0 when registered,
+     * causing ModemManager to drop to idle state, while modem itself is
+     * registered.
+     * Also NwError "0" is defined in 3GPP TS 24.008 as "Unknown error",
+     * not "No error", making it unsuitable as condition for registration check.
+     */
     if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_register_state_response_parse (
-            response,
-            &nw_error,
-            NULL, /* &register_state */
-            NULL, /* register_mode */
-            NULL, /* available_data_classes */
-            NULL, /* current_cellular_class */
-            NULL, /* provider_id */
-            NULL, /* provider_name */
-            NULL, /* roaming_text */
-            NULL, /* registration_flag */
-            NULL)) {
-        if (nw_error)
+        !mbim_message_response_get_result (response,
+                                           MBIM_MESSAGE_TYPE_COMMAND_DONE,
+                                           &error) &&
+        g_error_matches (error, MBIM_STATUS_ERROR, MBIM_STATUS_ERROR_FAILURE)) {
+        MbimNwError nw_error;
+
+        g_clear_error (&error);
+        if (mbim_message_register_state_response_parse (
+                response,
+                &nw_error,
+                NULL, /* &register_state */
+                NULL, /* register_mode */
+                NULL, /* available_data_classes */
+                NULL, /* current_cellular_class */
+                NULL, /* provider_id */
+                NULL, /* provider_name */
+                NULL, /* roaming_text */
+                NULL, /* registration_flag */
+                &error))
             error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error);
     }
 
@@ -4452,7 +4474,7 @@ process_ussd_message (MMBroadbandModemMbim *self,
 {
     GTask                       *task = NULL;
     MMModem3gppUssdSessionState  ussd_state = MM_MODEM_3GPP_USSD_SESSION_STATE_IDLE;
-    GByteArray                  *bytearray = NULL;
+    GByteArray                  *bytearray;
     gchar                       *converted = NULL;
     GError                      *error = NULL;
 
@@ -4462,8 +4484,9 @@ process_ussd_message (MMBroadbandModemMbim *self,
         self->priv->pending_ussd_action = NULL;
     }
 
-    if (data_size)
-        bytearray = g_byte_array_append (g_byte_array_new (), data, data_size);
+    bytearray = g_byte_array_new ();
+    if (data && data_size)
+        bytearray = g_byte_array_append (bytearray, data, data_size);
 
     switch (ussd_response) {
     case MBIM_USSD_RESPONSE_NO_ACTION_REQUIRED:
@@ -4520,8 +4543,7 @@ process_ussd_message (MMBroadbandModemMbim *self,
 
     mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self), ussd_state);
 
-    if (bytearray)
-        g_byte_array_unref (bytearray);
+    g_byte_array_unref (bytearray);
 
     /* Complete the pending action */
     if (task) {

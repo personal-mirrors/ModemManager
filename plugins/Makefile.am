@@ -78,6 +78,8 @@ libmm_test_common_la_SOURCES = \
 	tests/test-fixture.c \
 	tests/test-port-context.h \
 	tests/test-port-context.c \
+	tests/test-helpers.h \
+	tests/test-helpers.c \
 	$(NULL)
 libmm_test_common_la_CPPFLAGS = \
 	-I$(top_builddir)/libmm-glib/generated/tests \
@@ -98,11 +100,12 @@ TEST_COMMON_COMPILER_FLAGS = \
 	-I$(top_srcdir)/libmm-glib/generated \
 	-I$(top_builddir)/libmm-glib/generated \
 	-I$(top_builddir)/libmm-glib/generated/tests \
-	-DCOMMON_GSM_PORT_CONF=\""$(abs_top_srcdir)/plugins/tests/gsm-port.conf"\"
+	-DCOMMON_GSM_PORT_CONF=\""$(abs_top_srcdir)/plugins/tests/gsm-port.conf"\" \
+	$(NULL)
 
 TEST_COMMON_LIBADD_FLAGS = \
 	$(builddir)/libmm-test-common.la \
-	$(top_builddir)/libmm-glib/libmm-glib.la
+	$(NULL)
 
 ################################################################################
 # common icera support
@@ -310,7 +313,10 @@ libmm_plugin_generic_la_LDFLAGS  = $(PLUGIN_COMMON_LINKER_FLAGS)
 noinst_PROGRAMS += test-service-generic
 test_service_generic_SOURCES  = generic/tests/test-service-generic.c
 test_service_generic_CPPFLAGS = $(TEST_COMMON_COMPILER_FLAGS)
-test_service_generic_LDADD    = $(TEST_COMMON_LIBADD_FLAGS)
+test_service_generic_LDADD    = \
+	$(top_builddir)/libmm-glib/libmm-glib.la \
+	$(TEST_COMMON_LIBADD_FLAGS) \
+	$(NULL)
 
 ################################################################################
 # plugin: motorola
@@ -355,8 +361,6 @@ libmm_plugin_huawei_la_SOURCES = \
 	huawei/mm-plugin-huawei.h \
 	huawei/mm-sim-huawei.c \
 	huawei/mm-sim-huawei.h \
-	huawei/mm-call-huawei.c \
-	huawei/mm-call-huawei.h \
 	huawei/mm-broadband-modem-huawei.c \
 	huawei/mm-broadband-modem-huawei.h \
 	huawei/mm-broadband-bearer-huawei.c \
@@ -897,8 +901,12 @@ noinst_PROGRAMS += test-modem-helpers-telit
 test_modem_helpers_telit_SOURCES = \
 	telit/tests/test-mm-modem-helpers-telit.c \
 	$(NULL)
-test_modem_helpers_telit_CPPFLAGS = $(PLUGIN_TELIT_COMPILER_FLAGS)
+test_modem_helpers_telit_CPPFLAGS = \
+	$(PLUGIN_TELIT_COMPILER_FLAGS) \
+	$(TEST_COMMON_COMPILER_FLAGS) \
+	$(NULL)
 test_modem_helpers_telit_LDADD = \
+	$(TEST_COMMON_LIBADD_FLAGS) \
 	$(builddir)/libhelpers-telit.la \
 	$(top_builddir)/src/libhelpers.la \
 	$(top_builddir)/libmm-glib/libmm-glib.la \
@@ -1018,8 +1026,12 @@ noinst_PROGRAMS += test-modem-helpers-ublox
 test_modem_helpers_ublox_SOURCES = \
 	ublox/tests/test-modem-helpers-ublox.c \
 	$(NULL)
-test_modem_helpers_ublox_CPPFLAGS = $(PLUGIN_UBLOX_COMPILER_FLAGS)
+test_modem_helpers_ublox_CPPFLAGS = \
+	$(PLUGIN_UBLOX_COMPILER_FLAGS) \
+	$(TEST_COMMON_COMPILER_FLAGS) \
+	$(NULL)
 test_modem_helpers_ublox_LDADD = \
+	$(TEST_COMMON_LIBADD_FLAGS) \
 	$(builddir)/libhelpers-ublox.la \
 	$(top_builddir)/src/libhelpers.la \
 	$(top_builddir)/libmm-glib/libmm-glib.la \
@@ -1029,8 +1041,6 @@ pkglib_LTLIBRARIES += libmm-plugin-ublox.la
 libmm_plugin_ublox_la_SOURCES = \
 	ublox/mm-plugin-ublox.c \
 	ublox/mm-plugin-ublox.h \
-	ublox/mm-call-ublox.c \
-	ublox/mm-call-ublox.h \
 	ublox/mm-broadband-bearer-ublox.h \
 	ublox/mm-broadband-bearer-ublox.c \
 	ublox/mm-broadband-modem-ublox.h \
@@ -1089,6 +1099,8 @@ AM_CFLAGS += \
 # plugin: quectel
 ################################################################################
 
+dist_udevrules_DATA += quectel/77-mm-quectel-port-types.rules
+
 pkglib_LTLIBRARIES += libmm-plugin-quectel.la
 libmm_plugin_quectel_la_SOURCES = \
 	quectel/mm-plugin-quectel.c \
@@ -1123,6 +1135,38 @@ libmm_plugin_fibocom_la_LIBADD   = $(XMM_COMMON_LIBADD_FLAGS)
 dist_udevrules_DATA += fibocom/77-mm-fibocom-port-types.rules
 
 AM_CFLAGS += -DTESTUDEVRULESDIR_FIBOCOM=\"${srcdir}/fibocom\"
+
+################################################################################
+# plugin: dlink
+################################################################################
+
+pkglib_LTLIBRARIES += libmm-plugin-dlink.la
+libmm_plugin_dlink_la_SOURCES = \
+	dlink/mm-plugin-dlink.c \
+	dlink/mm-plugin-dlink.h \
+	$(NULL)
+libmm_plugin_dlink_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+libmm_plugin_dlink_la_LDFLAGS  = $(PLUGIN_COMMON_LINKER_FLAGS)
+
+dist_udevrules_DATA += dlink/77-mm-dlink-port-types.rules
+
+AM_CFLAGS += -DTESTUDEVRULESDIR_DLINK=\"${srcdir}/dlink\"
+
+################################################################################
+# plugin: tplink
+################################################################################
+
+pkglib_LTLIBRARIES += libmm-plugin-tplink.la
+libmm_plugin_tplink_la_SOURCES = \
+	tplink/mm-plugin-tplink.c \
+	tplink/mm-plugin-tplink.h \
+	$(NULL)
+libmm_plugin_tplink_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+libmm_plugin_tplink_la_LDFLAGS  = $(PLUGIN_COMMON_LINKER_FLAGS)
+
+dist_udevrules_DATA += tplink/77-mm-tplink-port-types.rules
+
+AM_CFLAGS += -DTESTUDEVRULESDIR_TPLINK=\"${srcdir}/tplink\"
 
 ################################################################################
 # udev rules tester

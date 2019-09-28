@@ -844,8 +844,8 @@ response_processor_service_ignore_at_errors (MMBaseModem *self,
 }
 
 static const MMBaseModemAtCommand access_tech_commands[] = {
-    { "#PSNT?",  3, TRUE, response_processor_psnt_ignore_at_errors },
-    { "+SERVICE?", 3, TRUE, response_processor_service_ignore_at_errors },
+    { "#PSNT?",    3, FALSE, response_processor_psnt_ignore_at_errors },
+    { "+SERVICE?", 3, FALSE, response_processor_service_ignore_at_errors },
     { NULL }
 };
 
@@ -1031,9 +1031,9 @@ iface_modem_init (MMIfaceModem *iface)
     iface->set_current_bands = mm_shared_telit_modem_set_current_bands;
     iface->set_current_bands_finish = mm_shared_telit_modem_set_current_bands_finish;
     iface->load_current_bands = mm_shared_telit_modem_load_current_bands;
-    iface->load_current_bands_finish = mm_shared_telit_modem_load_bands_finish;
+    iface->load_current_bands_finish = mm_shared_telit_modem_load_current_bands_finish;
     iface->load_supported_bands = mm_shared_telit_modem_load_supported_bands;
-    iface->load_supported_bands_finish = mm_shared_telit_modem_load_bands_finish;
+    iface->load_supported_bands_finish = mm_shared_telit_modem_load_supported_bands_finish;
     iface->load_unlock_retries_finish = modem_load_unlock_retries_finish;
     iface->load_unlock_retries = modem_load_unlock_retries;
     iface->reset = modem_reset;

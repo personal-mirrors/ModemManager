@@ -163,6 +163,7 @@ mm_port_serial_command (MMPortSerial *self,
                         GByteArray *command,
                         guint32 timeout_seconds,
                         gboolean allow_cached,
+                        gboolean run_next,
                         GCancellable *cancellable,
                         GAsyncReadyCallback callback,
                         gpointer user_data)
@@ -203,7 +204,12 @@ mm_port_serial_command (MMPortSerial *self,
     if (!allow_cached)
         port_serial_set_cached_reply (self, ctx->command, NULL);
 
-    g_queue_push_tail (self->priv->queue, ctx);
+    /* If requested to run next, push to the head of the queue so that it really is
+     * the next one sent */
+    if (run_next)
+        g_queue_push_head (self->priv->queue, ctx);
+    else
+        g_queue_push_tail (self->priv->queue, ctx);
 
     if (g_queue_get_length (self->priv->queue) == 1)
         port_serial_schedule_queue_process (self, 0);
@@ -1381,7 +1387,10 @@ _close_internal (MMPortSerial *self, gboolean force)
         return;
 
     if (self->priv->connected_id) {
-        g_signal_handler_disconnect (self, self->priv->connected_id);
+        /* Don't assume it's always connected, because it may be automatically connected during
+         * object disposal, and this method is also called in finalize() */
+        if (g_signal_handler_is_connected (self, self->priv->connected_id))
+            g_signal_handler_disconnect (self, self->priv->connected_id);
         self->priv->connected_id = 0;
     }
 
@@ -1587,9 +1596,18 @@ reopen_do (MMPortSerial *self)
         }
     }
 
-    if (error)
+    if (error) {
+        /* An error during port reopening may mean that the device is
+         * already gone. Note that we won't get a HUP in the TTY when
+         * the port is gone during the reopen wait time, because there's
+         * no channel I/O monitoring in place.
+         *
+         * If we ever see this, we'll flag the port as forced close right
+         * away, because the open count would anyway be broken afterwards.
+         */
+        port_serial_close_force (self);
         g_task_return_error (task, error);
-    else
+    } else
         g_task_return_boolean (task, TRUE);
     g_object_unref (task);
 
@@ -1719,23 +1737,30 @@ mm_port_serial_flash_finish (MMPortSerial *port,
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
+static gboolean
+flash_cancel_cb (GTask *task)
+{
+    g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_CANCELLED, "Flash cancelled");
+    g_object_unref (task);
+    return G_SOURCE_REMOVE;
+}
+
 void
 mm_port_serial_flash_cancel (MMPortSerial *self)
 {
     GTask *task;
 
+    /* Do nothing if there is no flash task */
     if (!self->priv->flash_task)
         return;
 
-    /* Recover task */
+    /* Recover task and schedule it to be cancelled in an idle.
+     * We do NOT want this cancellation to happen right away,
+     * because the object reference in the flashing task may
+     * be the last one valid. */
     task = self->priv->flash_task;
     self->priv->flash_task = NULL;
-
-    g_task_return_new_error (task,
-                             MM_CORE_ERROR,
-                             MM_CORE_ERROR_CANCELLED,
-                             "Flash cancelled");
-    g_object_unref (task);
+    g_idle_add ((GSourceFunc)flash_cancel_cb, task);
 }
 
 static gboolean

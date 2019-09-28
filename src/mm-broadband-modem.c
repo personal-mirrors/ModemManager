@@ -13,7 +13,8 @@
  * Copyright (C) 2008 - 2009 Novell, Inc.
  * Copyright (C) 2009 - 2012 Red Hat, Inc.
  * Copyright (C) 2011 - 2012 Google, Inc.
- * Copyright (C) 2015 - Marco Bascetta <marco.bascetta@sadel.it>
+ * Copyright (C) 2015 Marco Bascetta <marco.bascetta@sadel.it>
+ * Copyright (C) 2019 Purism SPC
  */
 
 #include <config.h>
@@ -120,6 +121,7 @@ enum {
     PROP_MODEM_SIM_HOT_SWAP_SUPPORTED,
     PROP_MODEM_SIM_HOT_SWAP_CONFIGURED,
     PROP_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED,
+    PROP_MODEM_PERIODIC_CALL_LIST_CHECK_DISABLED,
     PROP_MODEM_CARRIER_CONFIG_MAPPING,
     PROP_FLOW_CONTROL,
     PROP_LAST
@@ -223,8 +225,10 @@ struct _MMBroadbandModemPrivate {
 
     /*<--- Modem Voice interface --->*/
     /* Properties */
-    GObject *modem_voice_dbus_skeleton;
+    GObject    *modem_voice_dbus_skeleton;
     MMCallList *modem_voice_call_list;
+    gboolean    periodic_call_list_check_disabled;
+    gboolean    clcc_supported;
 
     /*<--- Modem Time interface --->*/
     /* Properties */
@@ -1316,6 +1320,7 @@ cpin_query_ready (MMIfaceModem *self,
 
 static void
 modem_load_unlock_required (MMIfaceModem *self,
+                            gboolean last_attempt,
                             GAsyncReadyCallback callback,
                             gpointer user_data)
 {
@@ -1334,7 +1339,7 @@ modem_load_unlock_required (MMIfaceModem *self,
     mm_dbg ("checking if unlock required...");
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               "+CPIN?",
-                              3,
+                              10,
                               FALSE,
                               (GAsyncReadyCallback)cpin_query_ready,
                               task);
@@ -1957,8 +1962,8 @@ signal_quality_csq_ready (MMBroadbandModem *self,
  * try the other command if the first one fails.
  */
 static const MMBaseModemAtCommand signal_quality_csq_sequence[] = {
-    { "+CSQ",  3, TRUE, response_processor_string_ignore_at_errors },
-    { "+CSQ?", 3, TRUE, response_processor_string_ignore_at_errors },
+    { "+CSQ",  3, FALSE, response_processor_string_ignore_at_errors },
+    { "+CSQ?", 3, FALSE, response_processor_string_ignore_at_errors },
     { NULL }
 };
 
@@ -3312,28 +3317,28 @@ run_unsolicited_events_setup (GTask *task)
 
     /* CMER on primary port */
     if (!ctx->cmer_primary_done && ctx->cmer_command && ctx->primary) {
-        mm_dbg ("Enabling +CIND event reporting in primary port...");
+        mm_dbg ("%s +CIND event reporting in primary port...", ctx->enable ? "Enabling" : "Disabling");
         ctx->cmer_primary_done = TRUE;
         command = ctx->cmer_command;
         port = ctx->primary;
     }
     /* CMER on secondary port */
     else if (!ctx->cmer_secondary_done && ctx->cmer_command && ctx->secondary) {
-        mm_dbg ("Enabling +CIND event reporting in secondary port...");
+        mm_dbg ("%s +CIND event reporting in secondary port...", ctx->enable ? "Enabling" : "Disabling");
         ctx->cmer_secondary_done = TRUE;
         command = ctx->cmer_command;
         port = ctx->secondary;
     }
     /* CGEREP on primary port */
     else if (!ctx->cgerep_primary_done && ctx->cgerep_command && ctx->primary) {
-        mm_dbg ("Enabling +CGEV event reporting in primary port...");
+        mm_dbg ("%s +CGEV event reporting in primary port...", ctx->enable ? "Enabling" : "Disabling");
         ctx->cgerep_primary_done = TRUE;
         command = ctx->cgerep_command;
         port = ctx->primary;
     }
     /* CGEREP on secondary port */
     else if (!ctx->cgerep_secondary_done && ctx->cgerep_command && ctx->secondary) {
-        mm_dbg ("Enabling +CGEV event reporting in secondary port...");
+        mm_dbg ("%s +CGEV event reporting in secondary port...", ctx->enable ? "Enabling" : "Disabling");
         ctx->cgerep_secondary_done = TRUE;
         port = ctx->secondary;
         command = ctx->cgerep_command;
@@ -6959,7 +6964,7 @@ sms_text_part_list_ready (MMBroadbandModem *self,
                      0, 0, NULL);
     g_assert (r);
 
-    if (!g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, NULL)) {
+    if (!g_regex_match (r, response, 0, &match_info)) {
         g_task_return_new_error (task,
                                  MM_CORE_ERROR,
                                  MM_CORE_ERROR_INVALID_ARGS,
@@ -7200,6 +7205,24 @@ modem_voice_check_support_finish (MMIfaceModemVoice *self,
 }
 
 static void
+clcc_format_check_ready (MMBroadbandModem *self,
+                         GAsyncResult     *res,
+                         GTask            *task)
+{
+    /* +CLCC supported unless we got any error response */
+    self->priv->clcc_supported = !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, NULL);
+
+    /* If +CLCC unsupported we disable polling in the parent directly */
+    g_object_set (self,
+                  MM_IFACE_MODEM_VOICE_PERIODIC_CALL_LIST_CHECK_DISABLED, !self->priv->clcc_supported,
+                  NULL);
+
+    /* ATH command is supported; assume we have full voice capabilities */
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
 ath_format_check_ready (MMBroadbandModem *self,
                         GAsyncResult *res,
                         GTask *task)
@@ -7213,9 +7236,13 @@ ath_format_check_ready (MMBroadbandModem *self,
         return;
     }
 
-    /* ATH command is supported; assume we have full voice capabilities */
-    g_task_return_boolean (task, TRUE);
-    g_object_unref (task);
+    /* Also check if +CLCC is supported */
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CLCC=?",
+                              3,
+                              TRUE,
+                              (GAsyncReadyCallback)clcc_format_check_ready,
+                              task);
 }
 
 static void
@@ -7239,6 +7266,149 @@ modem_voice_check_support (MMIfaceModemVoice *self,
 }
 
 /*****************************************************************************/
+/* Load full list of calls (Voice interface) */
+
+static gboolean
+modem_voice_load_call_list_finish (MMIfaceModemVoice  *self,
+                                   GAsyncResult       *res,
+                                   GList             **out_call_info_list,
+                                   GError            **error)
+{
+    GList  *call_info_list;
+    GError *inner_error = NULL;
+
+    call_info_list = g_task_propagate_pointer (G_TASK (res), &inner_error);
+    if (inner_error) {
+        g_assert (!call_info_list);
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    *out_call_info_list = call_info_list;
+    return TRUE;
+}
+
+static void
+clcc_ready (MMBaseModem  *modem,
+            GAsyncResult *res,
+            GTask        *task)
+{
+    const gchar *response;
+    GError      *error = NULL;
+    GList       *call_info_list = NULL;
+
+    response = mm_base_modem_at_command_finish (modem, res, &error);
+    if (!response || !mm_3gpp_parse_clcc_response (response, &call_info_list, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_pointer (task, call_info_list, (GDestroyNotify)mm_3gpp_call_info_list_free);
+    g_object_unref (task);
+}
+
+static void
+modem_voice_load_call_list (MMIfaceModemVoice   *self,
+                            GAsyncReadyCallback  callback,
+                            gpointer             user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CLCC",
+                              5,
+                              FALSE,
+                              (GAsyncReadyCallback)clcc_ready,
+                              task);
+}
+
+/*****************************************************************************/
+/* Setup/cleanup voice related in-call unsolicited events (Voice interface) */
+
+static gboolean
+modem_voice_setup_cleanup_in_call_unsolicited_events_finish (MMIfaceModemVoice  *self,
+                                                             GAsyncResult       *res,
+                                                             GError            **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+in_call_event_received (MMPortSerialAt   *port,
+                        GMatchInfo       *info,
+                        MMBroadbandModem *self)
+{
+    MMCallInfo  call_info;
+    gchar      *str;
+
+    call_info.index     = 0;
+    call_info.direction = MM_CALL_DIRECTION_UNKNOWN;
+    call_info.state     = MM_CALL_STATE_TERMINATED;
+    call_info.number    = NULL;
+
+    str = g_match_info_fetch (info, 1);
+    mm_dbg ("Call terminated: %s", str);
+    g_free (str);
+
+    mm_iface_modem_voice_report_call (MM_IFACE_MODEM_VOICE (self), &call_info);
+}
+
+static void
+set_voice_in_call_unsolicited_events_handlers (MMIfaceModemVoice   *self,
+                                               gboolean             enable,
+                                               GAsyncReadyCallback  callback,
+                                               gpointer             user_data)
+{
+    MMPortSerialAt *ports[2];
+    GRegex         *in_call_event_regex;
+    guint           i;
+    GTask          *task;
+
+    in_call_event_regex = g_regex_new ("\\r\\n(NO CARRIER|BUSY|NO ANSWER|NO DIALTONE)\\r\\n$",
+                                        G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+
+    ports[0] = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
+    ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
+
+    /* Enable unsolicited events in given port */
+    for (i = 0; i < 2; i++) {
+        if (!ports[i])
+            continue;
+
+        mm_dbg ("(%s) %s voice in-call unsolicited events handlers",
+                mm_port_get_device (MM_PORT (ports[i])),
+                enable ? "Setting" : "Removing");
+        mm_port_serial_at_add_unsolicited_msg_handler (
+            ports[i],
+            in_call_event_regex,
+            enable ? (MMPortSerialAtUnsolicitedMsgFn) in_call_event_received : NULL,
+            enable ? self : NULL,
+            NULL);
+    }
+
+    g_regex_unref (in_call_event_regex);
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_voice_setup_in_call_unsolicited_events (MMIfaceModemVoice   *self,
+                                              GAsyncReadyCallback  callback,
+                                              gpointer             user_data)
+{
+    set_voice_in_call_unsolicited_events_handlers (self, TRUE, callback, user_data);
+}
+
+static void
+modem_voice_cleanup_in_call_unsolicited_events (MMIfaceModemVoice   *self,
+                                                GAsyncReadyCallback  callback,
+                                                gpointer             user_data)
+{
+    set_voice_in_call_unsolicited_events_handlers (self, FALSE, callback, user_data);
+}
+
+/*****************************************************************************/
 /* Setup/cleanup voice related unsolicited events (Voice interface) */
 
 static gboolean
@@ -7250,40 +7420,76 @@ modem_voice_setup_cleanup_unsolicited_events_finish (MMIfaceModemVoice *self,
 }
 
 static void
-ring_received (MMPortSerialAt *port,
-               GMatchInfo *info,
+ccwa_received (MMPortSerialAt   *port,
+               GMatchInfo       *info,
                MMBroadbandModem *self)
 {
-    mm_dbg ("Ringing");
-    mm_iface_modem_voice_report_incoming_call (MM_IFACE_MODEM_VOICE (self), NULL);
+    MMCallInfo call_info;
+
+    call_info.index     = 0;
+    call_info.direction = MM_CALL_DIRECTION_INCOMING;
+    call_info.state     = MM_CALL_STATE_WAITING;
+    call_info.number    = mm_get_string_unquoted_from_match_info (info, 1);
+
+    mm_dbg ("Call waiting (%s)", call_info.number);
+    mm_iface_modem_voice_report_call (MM_IFACE_MODEM_VOICE (self), &call_info);
+
+    g_free (call_info.number);
 }
 
 static void
-cring_received (MMPortSerialAt *port,
-                GMatchInfo *info,
+ring_received (MMPortSerialAt   *port,
+               GMatchInfo       *info,
+               MMBroadbandModem *self)
+{
+    MMCallInfo call_info;
+
+    call_info.index     = 0;
+    call_info.direction = MM_CALL_DIRECTION_INCOMING;
+    call_info.state     = MM_CALL_STATE_RINGING_IN;
+    call_info.number    = NULL;
+
+    mm_dbg ("Ringing");
+    mm_iface_modem_voice_report_call (MM_IFACE_MODEM_VOICE (self), &call_info);
+}
+
+static void
+cring_received (MMPortSerialAt   *port,
+                GMatchInfo       *info,
                 MMBroadbandModem *self)
 {
-    gchar *str;
+    MMCallInfo  call_info;
+    gchar      *str;
 
     /* We could have "VOICE" or "DATA". Now consider only "VOICE" */
-
     str = mm_get_string_unquoted_from_match_info (info, 1);
     mm_dbg ("Ringing (%s)", str);
     g_free (str);
 
-    mm_iface_modem_voice_report_incoming_call (MM_IFACE_MODEM_VOICE (self), NULL);
+    call_info.index     = 0;
+    call_info.direction = MM_CALL_DIRECTION_INCOMING;
+    call_info.state     = MM_CALL_STATE_RINGING_IN;
+    call_info.number    = NULL;
+
+    mm_iface_modem_voice_report_call (MM_IFACE_MODEM_VOICE (self), &call_info);
 }
 
 static void
-clip_received (MMPortSerialAt *port,
-               GMatchInfo *info,
+clip_received (MMPortSerialAt   *port,
+               GMatchInfo       *info,
                MMBroadbandModem *self)
 {
-    gchar *str;
+    MMCallInfo call_info;
 
-    str = mm_get_string_unquoted_from_match_info (info, 1);
-    mm_iface_modem_voice_report_incoming_call (MM_IFACE_MODEM_VOICE (self), str);
-    g_free (str);
+    call_info.index     = 0;
+    call_info.direction = MM_CALL_DIRECTION_INCOMING;
+    call_info.state     = MM_CALL_STATE_RINGING_IN;
+    call_info.number    = mm_get_string_unquoted_from_match_info (info, 1);
+
+    mm_dbg ("Ringing (%s)", call_info.number);
+    mm_iface_modem_voice_report_call (MM_IFACE_MODEM_VOICE (self), &call_info);
+
+    g_free (call_info.number);
 }
 
 static void
@@ -7296,12 +7502,14 @@ set_voice_unsolicited_events_handlers (MMIfaceModemVoice *self,
     GRegex *cring_regex;
     GRegex *ring_regex;
     GRegex *clip_regex;
+    GRegex *ccwa_regex;
     guint i;
     GTask *task;
 
     cring_regex = mm_voice_cring_regex_get ();
     ring_regex  = mm_voice_ring_regex_get ();
     clip_regex  = mm_voice_clip_regex_get ();
+    ccwa_regex  = mm_voice_ccwa_regex_get ();
     ports[0] = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
     ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
 
@@ -7332,8 +7540,15 @@ set_voice_unsolicited_events_handlers (MMIfaceModemVoice *self,
             enable ? (MMPortSerialAtUnsolicitedMsgFn) clip_received : NULL,
             enable ? self : NULL,
             NULL);
+        mm_port_serial_at_add_unsolicited_msg_handler (
+            ports[i],
+            ccwa_regex,
+            enable ? (MMPortSerialAtUnsolicitedMsgFn) ccwa_received : NULL,
+            enable ? self : NULL,
+            NULL);
     }
 
+    g_regex_unref (ccwa_regex);
     g_regex_unref (clip_regex);
     g_regex_unref (cring_regex);
     g_regex_unref (ring_regex);
@@ -7362,77 +7577,452 @@ modem_voice_cleanup_unsolicited_events (MMIfaceModemVoice *self,
 /*****************************************************************************/
 /* Enable unsolicited events (CALL indications) (Voice interface) */
 
-static gboolean
-modem_voice_enable_unsolicited_events_finish (MMIfaceModemVoice *self,
-                                              GAsyncResult *res,
-                                              GError **error)
-{
-    GError *inner_error = NULL;
-
-    mm_base_modem_at_sequence_finish (MM_BASE_MODEM (self), res, NULL, &inner_error);
-    if (inner_error) {
-        g_propagate_error (error, inner_error);
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-static gboolean
-ring_response_processor (MMBaseModem *self,
-                         gpointer none,
-                         const gchar *command,
-                         const gchar *response,
-                         gboolean last_command,
-                         const GError *error,
-                         GVariant **result,
-                         GError **result_error)
-{
-    if (error) {
-        /* If we get a not-supported error and we're not in the last command, we
-         * won't set 'result_error', so we'll keep on the sequence */
-        if (!g_error_matches (error, MM_MESSAGE_ERROR, MM_MESSAGE_ERROR_NOT_SUPPORTED) ||
-            last_command)
-            *result_error = g_error_copy (error);
-
-        return TRUE;
-    }
-
-    *result = NULL;
-    return FALSE;
-}
-
-static const MMBaseModemAtCommand ring_sequence[] = {
-    /* Show caller number on RING. */
-    { "+CLIP=1", 3, FALSE, ring_response_processor },
-    /* Show difference between data call and voice call */
-    { "+CRC=1", 3, FALSE, ring_response_processor },
-    { NULL }
-};
+typedef struct {
+    gboolean        enable;
+    MMPortSerialAt *primary;
+    MMPortSerialAt *secondary;
+    gchar          *clip_command;
+    gboolean        clip_primary_done;
+    gboolean        clip_secondary_done;
+    gchar          *crc_command;
+    gboolean        crc_primary_done;
+    gboolean        crc_secondary_done;
+    gchar          *ccwa_command;
+    gboolean        ccwa_primary_done;
+    gboolean        ccwa_secondary_done;
+} VoiceUnsolicitedEventsContext;
 
 static void
-modem_voice_enable_unsolicited_events (MMIfaceModemVoice *self,
-                                       GAsyncReadyCallback callback,
-                                       gpointer user_data)
+voice_unsolicited_events_context_free (VoiceUnsolicitedEventsContext *ctx)
 {
-    mm_base_modem_at_sequence (
-        MM_BASE_MODEM (self),
-        ring_sequence,
-        NULL, /* response_processor_context */
-        NULL, /* response_processor_context_free */
-        callback,
-        user_data);
+    g_clear_object (&ctx->secondary);
+    g_clear_object (&ctx->primary);
+    g_free (ctx->clip_command);
+    g_free (ctx->crc_command);
+    g_free (ctx->ccwa_command);
+    g_slice_free (VoiceUnsolicitedEventsContext, ctx);
+}
+
+static gboolean
+modem_voice_enable_disable_unsolicited_events_finish (MMIfaceModemVoice  *self,
+                                                      GAsyncResult       *res,
+                                                      GError            **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void run_voice_unsolicited_events_setup (GTask *task);
+
+static void
+voice_unsolicited_events_setup_ready (MMBroadbandModem *self,
+                                      GAsyncResult     *res,
+                                      GTask            *task)
+{
+    VoiceUnsolicitedEventsContext *ctx;
+    GError                        *error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    if (!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error)) {
+        mm_dbg ("Couldn't %s voice event reporting: '%s'",
+                ctx->enable ? "enable" : "disable",
+                error->message);
+        g_error_free (error);
+    }
+
+    /* Continue on next port/command */
+    run_voice_unsolicited_events_setup (task);
+}
+
+static void
+run_voice_unsolicited_events_setup (GTask *task)
+{
+    MMBroadbandModem              *self;
+    VoiceUnsolicitedEventsContext *ctx;
+    MMPortSerialAt                *port = NULL;
+    const gchar                   *command = NULL;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    /* CLIP on primary port */
+    if (!ctx->clip_primary_done && ctx->clip_command && ctx->primary) {
+        mm_dbg ("%s +CLIP calling line reporting in primary port...", ctx->enable ? "Enabling" : "Disabling");
+        ctx->clip_primary_done = TRUE;
+        command = ctx->clip_command;
+        port = ctx->primary;
+    }
+    /* CLIP on secondary port */
+    else if (!ctx->clip_secondary_done && ctx->clip_command && ctx->secondary) {
+        mm_dbg ("%s +CLIP calling line reporting in primary port...", ctx->enable ? "Enabling" : "Disabling");
+        ctx->clip_secondary_done = TRUE;
+        command = ctx->clip_command;
+        port = ctx->secondary;
+    }
+    /* CRC on primary port */
+    else if (!ctx->crc_primary_done && ctx->crc_command && ctx->primary) {
+        mm_dbg ("%s +CRC extended format of incoming call indications in primary port...", ctx->enable ? "Enabling" : "Disabling");
+        ctx->crc_primary_done = TRUE;
+        command = ctx->crc_command;
+        port = ctx->primary;
+    }
+    /* CRC on secondary port */
+    else if (!ctx->crc_secondary_done && ctx->crc_command && ctx->secondary) {
+        mm_dbg ("%s +CRC extended format of incoming call indications in secondary port...", ctx->enable ? "Enabling" : "Disabling");
+        ctx->crc_secondary_done = TRUE;
+        command = ctx->crc_command;
+        port = ctx->secondary;
+    }
+    /* CCWA on primary port */
+    else if (!ctx->ccwa_primary_done && ctx->ccwa_command && ctx->primary) {
+        mm_dbg ("%s +CCWA call waiting indications in primary port...", ctx->enable ? "Enabling" : "Disabling");
+        ctx->ccwa_primary_done = TRUE;
+        command = ctx->ccwa_command;
+        port = ctx->primary;
+    }
+    /* CCWA on secondary port */
+    else if (!ctx->ccwa_secondary_done && ctx->ccwa_command && ctx->secondary) {
+        mm_dbg ("%s +CCWA call waiting indications in secondary port...", ctx->enable ? "Enabling" : "Disabling");
+        ctx->ccwa_secondary_done = TRUE;
+        command = ctx->ccwa_command;
+        port = ctx->secondary;
+    }
+
+    /* Enable/Disable unsolicited events in given port */
+    if (port && command) {
+        mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                       port,
+                                       command,
+                                       3,
+                                       FALSE,
+                                       FALSE, /* raw */
+                                       NULL, /* cancellable */
+                                       (GAsyncReadyCallback)voice_unsolicited_events_setup_ready,
+                                       task);
+        return;
+    }
+
+    /* Fully done now */
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+
+}
+
+static void
+modem_voice_enable_unsolicited_events (MMIfaceModemVoice   *self,
+                                       GAsyncReadyCallback  callback,
+                                       gpointer             user_data)
+{
+    VoiceUnsolicitedEventsContext *ctx;
+    GTask                         *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    ctx = g_slice_new0 (VoiceUnsolicitedEventsContext);
+    ctx->enable = TRUE;
+    ctx->primary = mm_base_modem_get_port_primary (MM_BASE_MODEM (self));
+    ctx->secondary = mm_base_modem_get_port_secondary (MM_BASE_MODEM (self));
+
+    /* enable +CLIP URCs with calling line identity */
+    ctx->clip_command = g_strdup ("+CLIP=1");
+    /* enable +CRING URCs instead of plain RING */
+    ctx->crc_command = g_strdup ("+CRC=1");
+    /* enable +CCWA call waiting indications */
+    ctx->ccwa_command = g_strdup ("+CCWA=1");
+
+    g_task_set_task_data (task, ctx, (GDestroyNotify) voice_unsolicited_events_context_free);
+
+    run_voice_unsolicited_events_setup (task);
+}
+
+static void
+modem_voice_disable_unsolicited_events (MMIfaceModemVoice   *self,
+                                        GAsyncReadyCallback  callback,
+                                        gpointer             user_data)
+{
+    VoiceUnsolicitedEventsContext *ctx;
+    GTask                         *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    ctx = g_slice_new0 (VoiceUnsolicitedEventsContext);
+    ctx->primary = mm_base_modem_get_port_primary (MM_BASE_MODEM (self));
+    ctx->secondary = mm_base_modem_get_port_secondary (MM_BASE_MODEM (self));
+
+    /* disable +CLIP URCs with calling line identity */
+    ctx->clip_command = g_strdup ("+CLIP=0");
+    /* disable +CRING URCs instead of plain RING */
+    ctx->crc_command = g_strdup ("+CRC=0");
+    /* disable +CCWA call waiting indications */
+    ctx->ccwa_command = g_strdup ("+CCWA=0");
+
+    g_task_set_task_data (task, ctx, (GDestroyNotify) voice_unsolicited_events_context_free);
+
+    run_voice_unsolicited_events_setup (task);
 }
 
 /*****************************************************************************/
 /* Create CALL (Voice interface) */
 
 static MMBaseCall *
-modem_voice_create_call (MMIfaceModemVoice *self,
+modem_voice_create_call (MMIfaceModemVoice *_self,
                          MMCallDirection    direction,
                          const gchar       *number)
 {
-    return mm_base_call_new (MM_BASE_MODEM (self), direction, number);
+    MMBroadbandModem *self = MM_BROADBAND_MODEM (_self);
+
+    return mm_base_call_new (MM_BASE_MODEM (self),
+                             direction,
+                             number,
+                             /* If +CLCC is supported, we want no incoming timeout.
+                              * Also, we're able to support detailed call state updates without
+                              * additional vendor-specific commands. */
+                             self->priv->clcc_supported,   /* skip incoming timeout */
+                             self->priv->clcc_supported,   /* dialing->ringing supported */
+                             self->priv->clcc_supported);  /* ringing->active supported */
+}
+
+/*****************************************************************************/
+/* Hold and accept (Voice interface) */
+
+static gboolean
+modem_voice_hold_and_accept_finish (MMIfaceModemVoice  *self,
+                                    GAsyncResult       *res,
+                                    GError            **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_voice_hold_and_accept (MMIfaceModemVoice   *self,
+                             GAsyncReadyCallback  callback,
+                             gpointer             user_data)
+{
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CHLD=2",
+                              20,
+                              FALSE,
+                              callback,
+                              user_data);
+}
+
+/*****************************************************************************/
+/* Hangup and accept (Voice interface) */
+
+static gboolean
+modem_voice_hangup_and_accept_finish (MMIfaceModemVoice  *self,
+                                      GAsyncResult       *res,
+                                      GError            **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_voice_hangup_and_accept (MMIfaceModemVoice   *self,
+                               GAsyncReadyCallback  callback,
+                               gpointer             user_data)
+{
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CHLD=1",
+                              20,
+                              FALSE,
+                              callback,
+                              user_data);
+}
+
+/*****************************************************************************/
+/* Hangup all (Voice interface) */
+
+static gboolean
+modem_voice_hangup_all_finish (MMIfaceModemVoice  *self,
+                               GAsyncResult       *res,
+                               GError            **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_voice_hangup_all (MMIfaceModemVoice   *self,
+                        GAsyncReadyCallback  callback,
+                        gpointer             user_data)
+{
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CHUP",
+                              3,
+                              FALSE,
+                              callback,
+                              user_data);
+}
+
+/*****************************************************************************/
+/* Join multiparty (Voice interface) */
+
+static gboolean
+modem_voice_join_multiparty_finish (MMIfaceModemVoice  *self,
+                                    GAsyncResult       *res,
+                                    GError            **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_voice_join_multiparty (MMIfaceModemVoice   *self,
+                             GAsyncReadyCallback  callback,
+                             gpointer             user_data)
+{
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CHLD=3",
+                              20,
+                              FALSE,
+                              callback,
+                              user_data);
+}
+
+/*****************************************************************************/
+/* Leave multiparty (Voice interface) */
+
+static gboolean
+modem_voice_leave_multiparty_finish (MMIfaceModemVoice  *self,
+                                     GAsyncResult       *res,
+                                     GError            **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+chld_leave_multiparty_ready (MMBaseModem  *self,
+                             GAsyncResult *res,
+                             GTask        *task)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_at_command_finish (self, res, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_voice_leave_multiparty (MMIfaceModemVoice   *self,
+                              MMBaseCall          *call,
+                              GAsyncReadyCallback  callback,
+                              gpointer             user_data)
+{
+    GTask *task;
+    guint  idx;
+    gchar *cmd;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    idx = mm_base_call_get_index (call);
+    if (!idx) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_WRONG_STATE,
+                                 "unknown call index");
+        g_object_unref (task);
+        return;
+    }
+
+    cmd = g_strdup_printf ("+CHLD=2%u", idx);
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              cmd,
+                              20,
+                              FALSE,
+                              (GAsyncReadyCallback) chld_leave_multiparty_ready,
+                              task);
+    g_free (cmd);
+}
+
+/*****************************************************************************/
+/* Transfer (Voice interface) */
+
+static gboolean
+modem_voice_transfer_finish (MMIfaceModemVoice  *self,
+                             GAsyncResult       *res,
+                             GError            **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_voice_transfer (MMIfaceModemVoice   *self,
+                      GAsyncReadyCallback  callback,
+                      gpointer             user_data)
+{
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CHLD=4",
+                              20,
+                              FALSE,
+                              callback,
+                              user_data);
+}
+
+/*****************************************************************************/
+/* Call waiting setup (Voice interface) */
+
+static gboolean
+modem_voice_call_waiting_setup_finish (MMIfaceModemVoice  *self,
+                                       GAsyncResult       *res,
+                                       GError            **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_voice_call_waiting_setup (MMIfaceModemVoice   *self,
+                                gboolean             enable,
+                                GAsyncReadyCallback  callback,
+                                gpointer             user_data)
+{
+    gchar *cmd;
+
+    /* Enabling or disabling the call waiting service will only be allowed when
+     * the modem is registered in the network, and so, CCWA URC handling will
+     * always be setup at this point (as it's part of the modem enabling phase).
+     * So, just enable or disable the service (second field) but leaving URCs
+     * (first field) always enabled. */
+    cmd = g_strdup_printf ("+CCWA=1,%u", enable);
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              cmd,
+                              60,
+                              FALSE,
+                              callback,
+                              user_data);
+    g_free (cmd);
+}
+
+/*****************************************************************************/
+/* Call waiting query (Voice interface) */
+
+static gboolean
+modem_voice_call_waiting_query_finish (MMIfaceModemVoice  *self,
+                                       GAsyncResult       *res,
+                                       gboolean           *status,
+                                       GError            **error)
+{
+    const gchar *response;
+
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+    if (!response)
+        return FALSE;
+
+    return mm_3gpp_parse_ccwa_service_query_response (response, status, error);
+}
+
+static void
+modem_voice_call_waiting_query (MMIfaceModemVoice   *self,
+                                GAsyncReadyCallback  callback,
+                                gpointer             user_data)
+{
+    /* This operation will only be allowed while enabled, and so, CCWA URC
+     * handling would always be enabled at this point. So, just perform the
+     * query, but leaving URCs enabled either way. */
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CCWA=1,2",
+                              60,
+                              FALSE,
+                              callback,
+                              user_data);
 }
 
 /*****************************************************************************/
@@ -7805,12 +8395,6 @@ typedef struct {
     guint system_mode;
     guint operating_mode;
 } CallManagerStateResults;
-
-typedef struct {
-    MMBroadbandModem *self;
-    GSimpleAsyncResult *result;
-    MMPortSerialQcdm *qcdm;
-} CallManagerStateContext;
 
 static void
 cm_state_cleanup_port (MMPortSerial *port)
@@ -8235,7 +8819,7 @@ modem_cdma_get_service_status_finish (MMIfaceModemCdma *self,
     GError *inner_error = NULL;
     gboolean value;
 
-    value = g_task_propagate_boolean (G_TASK (res), error);
+    value = g_task_propagate_boolean (G_TASK (res), &inner_error);
     if (inner_error) {
         g_propagate_error (error, inner_error);
         return FALSE;
@@ -9641,7 +10225,6 @@ typedef enum {
     DISABLING_STEP_IFACE_MESSAGING,
     DISABLING_STEP_IFACE_VOICE,
     DISABLING_STEP_IFACE_LOCATION,
-    DISABLING_STEP_IFACE_CONTACTS,
     DISABLING_STEP_IFACE_CDMA,
     DISABLING_STEP_IFACE_3GPP_USSD,
     DISABLING_STEP_IFACE_3GPP,
@@ -9912,10 +10495,6 @@ disabling_step (GTask *task)
         /* Fall down to next step */
         ctx->step++;
 
-    case DISABLING_STEP_IFACE_CONTACTS:
-        /* Fall down to next step */
-        ctx->step++;
-
     case DISABLING_STEP_IFACE_CDMA:
         if (ctx->self->priv->modem_cdma_dbus_skeleton) {
             mm_dbg ("Modem has CDMA capabilities, disabling the Modem CDMA interface...");
@@ -10005,7 +10584,6 @@ typedef enum {
     ENABLING_STEP_IFACE_3GPP,
     ENABLING_STEP_IFACE_3GPP_USSD,
     ENABLING_STEP_IFACE_CDMA,
-    ENABLING_STEP_IFACE_CONTACTS,
     ENABLING_STEP_IFACE_LOCATION,
     ENABLING_STEP_IFACE_MESSAGING,
     ENABLING_STEP_IFACE_VOICE,
@@ -10229,10 +10807,6 @@ enabling_step (GTask *task)
         /* Fall down to next step */
         ctx->step++;
 
-    case ENABLING_STEP_IFACE_CONTACTS:
-        /* Fall down to next step */
-        ctx->step++;
-
     case ENABLING_STEP_IFACE_LOCATION:
         if (ctx->self->priv->modem_location_dbus_skeleton) {
             mm_dbg ("Modem has location capabilities, enabling the Location interface...");
@@ -10415,7 +10989,6 @@ typedef enum {
     INITIALIZE_STEP_IFACE_3GPP,
     INITIALIZE_STEP_IFACE_3GPP_USSD,
     INITIALIZE_STEP_IFACE_CDMA,
-    INITIALIZE_STEP_IFACE_CONTACTS,
     INITIALIZE_STEP_IFACE_LOCATION,
     INITIALIZE_STEP_IFACE_MESSAGING,
     INITIALIZE_STEP_IFACE_VOICE,
@@ -10694,10 +11267,6 @@ initialize_step (GTask *task)
                                             task);
             return;
         }
-        /* Fall down to next step */
-        ctx->step++;
-
-    case INITIALIZE_STEP_IFACE_CONTACTS:
         /* Fall down to next step */
         ctx->step++;
 
@@ -11191,6 +11760,9 @@ set_property (GObject *object,
     case PROP_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED:
         self->priv->periodic_signal_check_disabled = g_value_get_boolean (value);
         break;
+    case PROP_MODEM_PERIODIC_CALL_LIST_CHECK_DISABLED:
+        self->priv->periodic_call_list_check_disabled = g_value_get_boolean (value);
+        break;
     case PROP_MODEM_CARRIER_CONFIG_MAPPING:
         self->priv->carrier_config_mapping = g_value_dup_string (value);
         break;
@@ -11314,6 +11886,9 @@ get_property (GObject *object,
     case PROP_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED:
         g_value_set_boolean (value, self->priv->periodic_signal_check_disabled);
         break;
+    case PROP_MODEM_PERIODIC_CALL_LIST_CHECK_DISABLED:
+        g_value_set_boolean (value, self->priv->periodic_call_list_check_disabled);
+        break;
     case PROP_MODEM_CARRIER_CONFIG_MAPPING:
         g_value_set_string (value, self->priv->carrier_config_mapping);
         break;
@@ -11350,6 +11925,7 @@ mm_broadband_modem_init (MMBroadbandModem *self)
     self->priv->current_sms_mem2_storage = MM_SMS_STORAGE_UNKNOWN;
     self->priv->sim_hot_swap_supported = FALSE;
     self->priv->periodic_signal_check_disabled = FALSE;
+    self->priv->periodic_call_list_check_disabled = FALSE;
     self->priv->modem_cmer_enable_mode = MM_3GPP_CMER_MODE_NONE;
     self->priv->modem_cmer_disable_mode = MM_3GPP_CMER_MODE_NONE;
     self->priv->modem_cmer_ind = MM_3GPP_CMER_IND_NONE;
@@ -11648,10 +12224,36 @@ iface_modem_voice_init (MMIfaceModemVoice *iface)
     iface->setup_unsolicited_events = modem_voice_setup_unsolicited_events;
     iface->setup_unsolicited_events_finish = modem_voice_setup_cleanup_unsolicited_events_finish;
     iface->enable_unsolicited_events = modem_voice_enable_unsolicited_events;
-    iface->enable_unsolicited_events_finish = modem_voice_enable_unsolicited_events_finish;
+    iface->enable_unsolicited_events_finish = modem_voice_enable_disable_unsolicited_events_finish;
+    iface->disable_unsolicited_events = modem_voice_disable_unsolicited_events;
+    iface->disable_unsolicited_events_finish = modem_voice_enable_disable_unsolicited_events_finish;
     iface->cleanup_unsolicited_events = modem_voice_cleanup_unsolicited_events;
     iface->cleanup_unsolicited_events_finish = modem_voice_setup_cleanup_unsolicited_events_finish;
+
+    iface->setup_in_call_unsolicited_events = modem_voice_setup_in_call_unsolicited_events;
+    iface->setup_in_call_unsolicited_events_finish = modem_voice_setup_cleanup_in_call_unsolicited_events_finish;
+    iface->cleanup_in_call_unsolicited_events = modem_voice_cleanup_in_call_unsolicited_events;
+    iface->cleanup_in_call_unsolicited_events_finish = modem_voice_setup_cleanup_in_call_unsolicited_events_finish;
+
     iface->create_call = modem_voice_create_call;
+    iface->load_call_list = modem_voice_load_call_list;
+    iface->load_call_list_finish = modem_voice_load_call_list_finish;
+    iface->hold_and_accept = modem_voice_hold_and_accept;
+    iface->hold_and_accept_finish = modem_voice_hold_and_accept_finish;
+    iface->hangup_and_accept = modem_voice_hangup_and_accept;
+    iface->hangup_and_accept_finish = modem_voice_hangup_and_accept_finish;
+    iface->hangup_all = modem_voice_hangup_all;
+    iface->hangup_all_finish = modem_voice_hangup_all_finish;
+    iface->join_multiparty = modem_voice_join_multiparty;
+    iface->join_multiparty_finish = modem_voice_join_multiparty_finish;
+    iface->leave_multiparty = modem_voice_leave_multiparty;
+    iface->leave_multiparty_finish = modem_voice_leave_multiparty_finish;
+    iface->transfer = modem_voice_transfer;
+    iface->transfer_finish = modem_voice_transfer_finish;
+    iface->call_waiting_setup = modem_voice_call_waiting_setup;
+    iface->call_waiting_setup_finish = modem_voice_call_waiting_setup_finish;
+    iface->call_waiting_query = modem_voice_call_waiting_query;
+    iface->call_waiting_query_finish = modem_voice_call_waiting_query_finish;
 }
 
 static void
@@ -11850,6 +12452,10 @@ mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
     g_object_class_override_property (object_class,
                                       PROP_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED,
                                       MM_IFACE_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED);
+
+    g_object_class_override_property (object_class,
+                                      PROP_MODEM_PERIODIC_CALL_LIST_CHECK_DISABLED,
+                                      MM_IFACE_MODEM_VOICE_PERIODIC_CALL_LIST_CHECK_DISABLED);
 
     g_object_class_override_property (object_class,
                                       PROP_MODEM_CARRIER_CONFIG_MAPPING,
