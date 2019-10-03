@@ -198,6 +198,33 @@ mm_3gpp_network_info_list_from_mbim_providers (const MbimProvider *const *provid
 
 /*****************************************************************************/
 
+GList *
+mm_3gpp_profile_list_from_mbim_provisioned_contexts (
+    const MbimProvisionedContextElement *const *contexts,
+    guint n_contexts)
+{
+    GList *profiles = NULL;
+    guint i;
+
+    for (i = 0; i < n_contexts; i++) {
+        MM3gppProfile *profile;
+
+        profile = g_slice_new0 (MM3gppProfile);
+        profile->profile_id = contexts[i]->context_id;
+        profile->apn = g_strdup (contexts[i]->access_string);
+        profile->username = g_strdup (contexts[i]->user_name);
+        profile->password = g_strdup (contexts[i]->password);
+        profile->auth_type =
+            mm_bearer_allowed_auth_from_mbim_auth_protocol (contexts[i]->auth_protocol);
+
+        profiles = g_list_prepend (profiles, profile);
+    }
+
+    return profiles;
+}
+
+/*****************************************************************************/
+
 GError *
 mm_mobile_equipment_error_from_mbim_nw_error (MbimNwError nw_error)
 {
