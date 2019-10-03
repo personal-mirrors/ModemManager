@@ -247,5 +247,28 @@
     -->
     <property name="InitialEpsBearerSettings" type="a{sv}" access="read" />
 
+    <!--
+        Profiles:
+
+        Profiles or contexts provisioned on the modem.
+
+        A list of dictionaries whose entries are:
+        <variablelist>
+        <varlistentry><term><literal>"profile-id"</literal></term>
+          <listitem><para>Unique identifier for this profile (signature <literal>"u"</literal>).</para></listitem></varlistentry>
+        <varlistentry><term><literal>"apn"</literal></term>
+          <listitem><para>Access Point Name, given as a string value (signature <literal>"s"</literal>).</para></listitem></varlistentry>
+        <varlistentry><term><literal>"auth-type"</literal></term>
+          <listitem><para>The authentication method to use, given as a <link linkend="MMBearerAllowedAuth">MMBearerAllowedAuth</link> value (signature <literal>"u"</literal>). Optional.</para></listitem></varlistentry>
+        <varlistentry><term><literal>"user"</literal></term>
+          <listitem><para>User name (if any) required by the network, given as a string value (signature <literal>"s"</literal>). Optional.</para></listitem></varlistentry>
+        <varlistentry><term><literal>"password"</literal></term>
+          <listitem><para>Password (if any) required by the network, given as a string value (signature <literal>"s"</literal>). Optional.</para></listitem></varlistentry>
+        </variablelist>
+
+        This is a read-only property.
+    -->
+    <property name="Profiles" type="aa{sv}" access="read" />
+
   </interface>
 </node>

@@ -234,6 +234,15 @@ struct _MMIfaceModem3gpp {
     gboolean (* set_initial_eps_bearer_settings_finish) (MMIfaceModem3gpp     *self,
                                                          GAsyncResult         *res,
                                                          GError              **error);
+
+    /* Get profiles or provisioned contexts from the modem as a list of MM3gppProfile */
+    void     (* load_profiles) (MMIfaceModem3gpp         *self,
+                                GAsyncReadyCallback       callback,
+                                gpointer                  user_data);
+    gboolean (* load_profiles_finish) (MMIfaceModem3gpp  *self,
+                                       GAsyncResult      *res,
+                                       GList            **out_list,
+                                       GError           **error);
 };
 
 GType mm_iface_modem_3gpp_get_type (void);
@@ -293,6 +302,8 @@ void mm_iface_modem_3gpp_update_pco_list            (MMIfaceModem3gpp *self,
 void mm_iface_modem_3gpp_update_initial_eps_bearer  (MMIfaceModem3gpp *self,
                                                      MMBearerProperties *properties);
 void mm_iface_modem_3gpp_reload_initial_eps_bearer  (MMIfaceModem3gpp *self);
+void mm_iface_modem_3gpp_update_profiles            (MMIfaceModem3gpp *self,
+                                                     const GList *profiles);
 
 /* Run all registration checks */
 void mm_iface_modem_3gpp_run_registration_checks (MMIfaceModem3gpp *self,
