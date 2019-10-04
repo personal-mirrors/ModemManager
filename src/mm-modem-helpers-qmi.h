@@ -120,6 +120,9 @@ MMBearerIpFamily     mm_bearer_ip_family_from_qmi_pdp_type          (QmiWdsPdpTy
 gboolean             mm_bearer_ip_family_to_qmi_pdp_type            (MMBearerIpFamily  ip_family,
                                                                      QmiWdsPdpType    *out_pdp_type);
 
+/* Input is a GList of QmiMessageWdsGetProfileSettingsOutput */
+GList *mm_3gpp_profile_list_from_qmi_profile_settings (GList *profile_list);
+
 /*****************************************************************************/
 /* QMI/OMA to MM translations */
 
