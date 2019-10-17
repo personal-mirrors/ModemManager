@@ -514,6 +514,7 @@ typedef enum { /*< underscore_name=mm_modem_band >*/
  * @MM_MODEM_PORT_TYPE_GPS: GPS port.
  * @MM_MODEM_PORT_TYPE_QMI: QMI port.
  * @MM_MODEM_PORT_TYPE_MBIM: MBIM port.
+ * @MM_MODEM_PORT_TYPE_AUDIO: Audio port.
  *
  * Type of modem port.
  */
@@ -524,7 +525,8 @@ typedef enum { /*< underscore_name=mm_modem_port_type >*/
     MM_MODEM_PORT_TYPE_QCDM    = 4,
     MM_MODEM_PORT_TYPE_GPS     = 5,
     MM_MODEM_PORT_TYPE_QMI     = 6,
-    MM_MODEM_PORT_TYPE_MBIM    = 7
+    MM_MODEM_PORT_TYPE_MBIM    = 7,
+    MM_MODEM_PORT_TYPE_AUDIO   = 8,
 } MMModemPortType;
 
 /**
@@ -942,8 +944,7 @@ typedef enum { /*< underscore_name=mm_modem_location_source >*/
     MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED = 1 << 4,
     MM_MODEM_LOCATION_SOURCE_AGPS_MSA      = 1 << 5,
     MM_MODEM_LOCATION_SOURCE_AGPS_MSB      = 1 << 6,
-#if defined (MM_COMPILATION)
-    /* MM internal methods, not part of the API */
+#if defined (MM_COMPILATION) /*< private >*/
     MM_MODEM_LOCATION_SOURCE_FIRST = MM_MODEM_LOCATION_SOURCE_3GPP_LAC_CI, /*< skip >*/
     MM_MODEM_LOCATION_SOURCE_LAST  = MM_MODEM_LOCATION_SOURCE_AGPS_MSB,    /*< skip >*/
 #endif

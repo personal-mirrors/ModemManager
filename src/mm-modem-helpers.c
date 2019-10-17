@@ -606,6 +606,15 @@ mm_3gpp_parse_clcc_response (const gchar  *str,
         [3] = MM_CALL_STATE_RINGING_OUT, /* Alerting (MOC) */
         [4] = MM_CALL_STATE_RINGING_IN,  /* Incoming (MTC) */
         [5] = MM_CALL_STATE_WAITING,     /* Waiting  (MTC) */
+
+        /* This next call state number isn't defined by 3GPP, because it
+         * doesn't make sense to have it when reporting a full list of calls
+         * via +CLCC (i.e. the absence of the call would mean it's terminated).
+         * But, this value may be used by other implementations (e.g. SimTech
+         * plugin) to report that a call is terminated even when the full
+         * call list isn't being reported. So, let's support it in the generic,
+         * parser, even if not strictly standard. */
+        [6] = MM_CALL_STATE_TERMINATED,
     };
 
     g_assert (out_list);
@@ -4341,6 +4350,70 @@ mm_3gpp_parse_operator_id (const gchar *operator_id,
     }
 
     return TRUE;
+}
+
+/*************************************************************************/
+/* Emergency numbers (+CRSM output) */
+
+GStrv
+mm_3gpp_parse_emergency_numbers (const char *raw, GError **error)
+{
+    gsize      rawlen;
+    guint8    *bin;
+    gsize      binlen;
+    gsize      max_items;
+    GPtrArray *out;
+    guint      i;
+
+    /* The emergency call code is of a variable length with a maximum length of
+     * 6 digits. Each emergency call code is coded on three bytes, with each
+     * digit within the code being coded on four bits. If a code of less that 6
+     * digits is chosen, then the unused nibbles shall be set to 'F'. */
+
+    rawlen = strlen (raw);
+    if (!rawlen) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                     "empty emergency numbers list");
+        return NULL;
+    }
+
+    if (rawlen % 6 != 0) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                     "invalid raw emergency numbers list length: %" G_GSIZE_FORMAT, rawlen);
+        return NULL;
+    }
+
+    bin = (guint8 *) mm_utils_hexstr2bin (raw, &binlen);
+    if (!bin) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                     "invalid raw emergency numbers list contents: %s", raw);
+        return NULL;
+    }
+
+    max_items = binlen / 3;
+    out = g_ptr_array_sized_new (max_items + 1);
+
+    for (i = 0; i < max_items; i++) {
+        gchar *number;
+
+        number = mm_bcd_to_string (&bin[i*3], 3);
+        if (number && number[0])
+            g_ptr_array_add (out, number);
+        else
+            g_free (number);
+    }
+
+    g_free (bin);
+
+    if (!out->len) {
+        g_ptr_array_unref (out);
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                     "uninitialized emergency numbers list");
+        return NULL;
+    }
+
+    g_ptr_array_add (out, NULL);
+    return (GStrv) g_ptr_array_free (out, FALSE);
 }
 
 /*************************************************************************/

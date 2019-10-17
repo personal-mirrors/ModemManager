@@ -1228,8 +1228,8 @@ parent_voice_setup_unsolicited_events_ready (MMIfaceModemVoice *self,
 
     priv = get_private (MM_SHARED_CINTERION (self));
 
-    if (!priv->iface_modem_voice_parent->cleanup_unsolicited_events_finish (self, res, &error)) {
-        mm_warn ("Couldn't cleanup parent voice unsolicited events: %s", error->message);
+    if (!priv->iface_modem_voice_parent->setup_unsolicited_events_finish (self, res, &error)) {
+        mm_warn ("Couldn't setup parent voice unsolicited events: %s", error->message);
         g_error_free (error);
     }
 
@@ -1315,7 +1315,10 @@ parent_voice_check_support_ready (MMIfaceModemVoice *self,
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               "^SLCC=?",
                               3,
-                              TRUE,
+                              /* Do NOT cache as the reply may be different if PIN locked
+                               * or unlocked. E.g. we may not support ^SLCC for emergency
+                               * voice calls. */
+                              FALSE,
                               (GAsyncReadyCallback) slcc_format_check_ready,
                               task);
 }

@@ -66,6 +66,7 @@ static SectionInfo section_infos[] = {
     [MMC_S_MODEM_LOCATION_CDMABS]   = { "CDMA BS"            },
     [MMC_S_MODEM_FIRMWARE]          = { "Firmware"           },
     [MMC_S_MODEM_FIRMWARE_FASTBOOT] = { "Fastboot settings"  },
+    [MMC_S_MODEM_VOICE]             = { "Voice"              },
     [MMC_S_BEARER_GENERAL]          = { "General"            },
     [MMC_S_BEARER_STATUS]           = { "Status"             },
     [MMC_S_BEARER_PROPERTIES]       = { "Properties"         },
@@ -196,6 +197,7 @@ static FieldInfo field_infos[] = {
     [MMC_F_FIRMWARE_DEVICE_IDS]               = { "modem.firmware.device-ids",                       "device ids",               MMC_S_MODEM_FIRMWARE,          },
     [MMC_F_FIRMWARE_VERSION]                  = { "modem.firmware.version",                          "version",                  MMC_S_MODEM_FIRMWARE,          },
     [MMC_F_FIRMWARE_FASTBOOT_AT]              = { "modem.firmware.fastboot.at",                      "at command",               MMC_S_MODEM_FIRMWARE_FASTBOOT, },
+    [MMC_F_VOICE_EMERGENCY_ONLY]              = { "modem.voice.emergency-only",                      "emergency only",           MMC_S_MODEM_VOICE,             },
     [MMC_F_BEARER_GENERAL_DBUS_PATH]          = { "bearer.dbus-path",                                "dbus path",                MMC_S_BEARER_GENERAL,          },
     [MMC_F_BEARER_GENERAL_TYPE]               = { "bearer.type",                                     "type",                     MMC_S_BEARER_GENERAL,          },
     [MMC_F_BEARER_STATUS_CONNECTED]           = { "bearer.status.connected",                         "connected",                MMC_S_BEARER_STATUS,           },
@@ -256,6 +258,7 @@ static FieldInfo field_infos[] = {
     [MMC_F_SIM_PROPERTIES_ICCID]              = { "sim.properties.iccid",                            "iccid",                    MMC_S_SIM_PROPERTIES,          },
     [MMC_F_SIM_PROPERTIES_OPERATOR_ID]        = { "sim.properties.operator-code",                    "operator id",              MMC_S_SIM_PROPERTIES,          },
     [MMC_F_SIM_PROPERTIES_OPERATOR_NAME]      = { "sim.properties.operator-name",                    "operator name",            MMC_S_SIM_PROPERTIES,          },
+    [MMC_F_SIM_PROPERTIES_EMERGENCY_NUMBERS]  = { "sim.properties.emergency-numbers",                "emergency numbers",        MMC_S_SIM_PROPERTIES,          },
     [MMC_F_MODEM_LIST_DBUS_PATH]              = { "modem-list",                                      "modems",                   MMC_S_UNKNOWN,                 },
     [MMC_F_SMS_LIST_DBUS_PATH]                = { "modem.messaging.sms",                             "sms messages",             MMC_S_UNKNOWN,                 },
     [MMC_F_CALL_LIST_DBUS_PATH]               = { "modem.voice.call",                                "calls",                    MMC_S_UNKNOWN,                 },
@@ -622,21 +625,21 @@ build_firmware_info_human (GPtrArray            *array,
                            gboolean              selected)
 {
     g_ptr_array_add (array, g_strdup (mm_firmware_properties_get_unique_id (props)));
-    g_ptr_array_add (array, g_strdup_printf ("\tcurrent: %s", selected ? "yes" : "no"));
+    g_ptr_array_add (array, g_strdup_printf ("    current: %s", selected ? "yes" : "no"));
 
     if (mm_firmware_properties_get_image_type (props) == MM_FIRMWARE_IMAGE_TYPE_GOBI) {
         const gchar *aux;
 
         if ((aux = mm_firmware_properties_get_gobi_pri_version (props)) != NULL)
-            g_ptr_array_add (array, g_strdup_printf ("\tgobi pri version: %s", aux));
+            g_ptr_array_add (array, g_strdup_printf ("    gobi pri version: %s", aux));
         if ((aux = mm_firmware_properties_get_gobi_pri_info (props)) != NULL)
-            g_ptr_array_add (array, g_strdup_printf ("\tgobi pri info: %s", aux));
+            g_ptr_array_add (array, g_strdup_printf ("    gobi pri info: %s", aux));
         if ((aux = mm_firmware_properties_get_gobi_boot_version (props)) != NULL)
-            g_ptr_array_add (array, g_strdup_printf ("\tgobi boot version: %s", aux));
+            g_ptr_array_add (array, g_strdup_printf ("    gobi boot version: %s", aux));
         if ((aux = mm_firmware_properties_get_gobi_pri_unique_id (props)) != NULL)
-            g_ptr_array_add (array, g_strdup_printf ("\tgobi pri unique id: %s", aux));
+            g_ptr_array_add (array, g_strdup_printf ("    gobi pri unique id: %s", aux));
         if ((aux = mm_firmware_properties_get_gobi_modem_unique_id (props)) != NULL)
-            g_ptr_array_add (array, g_strdup_printf ("\tgobi modem unique id: %s", aux));
+            g_ptr_array_add (array, g_strdup_printf ("    gobi modem unique id: %s", aux));
     }
 }
 

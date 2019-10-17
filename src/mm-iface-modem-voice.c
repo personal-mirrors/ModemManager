@@ -23,13 +23,9 @@
 #include "mm-call-list.h"
 #include "mm-log.h"
 
-#define SUPPORT_CHECKED_TAG           "voice-support-checked-tag"
-#define SUPPORTED_TAG                 "voice-supported-tag"
 #define CALL_LIST_POLLING_CONTEXT_TAG "voice-call-list-polling-context-tag"
 #define IN_CALL_EVENT_CONTEXT_TAG     "voice-in-call-event-context-tag"
 
-static GQuark support_checked_quark;
-static GQuark supported_quark;
 static GQuark call_list_polling_context_quark;
 static GQuark in_call_event_context_quark;
 
@@ -39,6 +35,109 @@ void
 mm_iface_modem_voice_bind_simple_status (MMIfaceModemVoice *self,
                                          MMSimpleStatus *status)
 {
+}
+
+/*****************************************************************************/
+
+gboolean
+mm_iface_modem_voice_authorize_outgoing_call (MMIfaceModemVoice  *self,
+                                              MMBaseCall         *call,
+                                              GError            **error)
+{
+    MmGdbusModemVoice *skeleton = NULL;
+    MMBaseSim         *sim = NULL;
+    gboolean           emergency_only = FALSE;
+    gboolean           call_allowed = FALSE;
+    GError            *inner_error = NULL;
+    guint              i;
+    const gchar       *number;
+
+    static const gchar *always_valid_emergency_numbers[] = { "112", "911" };
+    static const gchar *no_sim_valid_emergency_numbers[] = { "000", "08", "110", "999", "118", "119" };
+
+    g_assert (mm_base_call_get_direction (call) == MM_CALL_DIRECTION_OUTGOING);
+    number = mm_base_call_get_number (call);
+    g_assert (number);
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_VOICE_DBUS_SKELETON, &skeleton,
+                  NULL);
+
+    if (!skeleton) {
+        g_set_error (&inner_error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "voice operations unsupported");
+        goto out;
+    }
+
+    g_object_get (skeleton,
+                  "emergency-only", &emergency_only,
+                  NULL);
+
+    /* Identification of emergency numbers. 3GPP TS 22.101
+     *
+     *   a) 112 and 911 shall always be available.
+     *   b) Any emergency call number stored on a SIM/USIM when the SIM/USIM is
+     *      present.
+     *   c) 000, 08, 110, 999, 118 and 119 when a SIM/USIM is not present.
+     *   d) Additional emergency call numbers that may have been downloaded by
+     *      the serving network when the SIM/USIM is present.
+     *
+     * In ModemManager we're not flagging any call as being "emergency" or
+     * "normal", but we can right away limit non-emergency calls if we're in
+     * "emergency-only" mode.
+     */
+
+    /* If we're not in emergency mode, the call (emergency or normal) is always allowed */
+    if (!emergency_only) {
+        mm_dbg ("voice call to %s allowed", number);
+        call_allowed = TRUE;
+        goto out;
+    }
+
+    for (i = 0; i < G_N_ELEMENTS (always_valid_emergency_numbers); i++) {
+        if (g_strcmp0 (number, always_valid_emergency_numbers[i]) == 0) {
+            mm_dbg ("voice call to %s allowed: emergency call number always valid", number);
+            call_allowed = TRUE;
+            goto out;
+        }
+    }
+
+    /* Check if we have a SIM */
+    g_object_get (self,
+                  MM_IFACE_MODEM_SIM, &sim,
+                  NULL);
+    if (!sim) {
+        /* If no SIM available, some additional numbers may be valid emergency numbers */
+        for (i = 0; i < G_N_ELEMENTS (no_sim_valid_emergency_numbers); i++) {
+            if (g_strcmp0 (number, no_sim_valid_emergency_numbers[i]) == 0) {
+                mm_dbg ("voice call to %s allowed: emergency call number valid when no SIM", number);
+                call_allowed = TRUE;
+                goto out;
+            }
+        }
+
+        mm_dbg ("voice call to %s NOT allowed: not a valid emergency call number when no SIM", number);
+        goto out;
+    }
+
+    /* Check if the number is programmed in EF_ECC */
+    if (mm_base_sim_is_emergency_number (sim, number)) {
+        mm_dbg ("voice call to %s allowed: emergency call number programmed in the SIM", number);
+        call_allowed = TRUE;
+    } else
+        mm_dbg ("voice call to %s NOT allowed: not a valid emergency call number programmed in the SIM", number);
+
+ out:
+
+    if (inner_error)
+        g_propagate_error (error, inner_error);
+    else if (!call_allowed)
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNAUTHORIZED,
+                     "only emergency calls allowed");
+
+    g_clear_object (&skeleton);
+    g_clear_object (&sim);
+    return call_allowed;
 }
 
 /*****************************************************************************/
@@ -355,6 +454,11 @@ mm_iface_modem_voice_report_all_calls (MMIfaceModemVoice *self,
     for (l = ctx.call_info_list; l; l = g_list_next (l)) {
         MMCallInfo *call_info = (MMCallInfo *)(l->data);
 
+        /* Ignore unknown terminated calls, because these be due to an already
+         * processed event. */
+        if (call_info->state == MM_CALL_STATE_TERMINATED)
+            continue;
+
         if (call_info->direction == MM_CALL_DIRECTION_OUTGOING) {
             mm_warn ("unexpected outgoing call to number '%s' reported in call list: state %s",
                      call_info->number ? call_info->number : "n/a",
@@ -464,25 +568,11 @@ handle_delete_auth_ready (MMBaseModem *self,
                           GAsyncResult *res,
                           HandleDeleteContext *ctx)
 {
-    MMModemState modem_state = MM_MODEM_STATE_UNKNOWN;
     MMCallList *list = NULL;
     GError *error = NULL;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_delete_context_free (ctx);
-        return;
-    }
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &modem_state,
-                  NULL);
-
-    if (modem_state < MM_MODEM_STATE_ENABLED) {
-        g_dbus_method_invocation_return_error (ctx->invocation,
-                                               MM_CORE_ERROR,
-                                               MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot delete call: device not yet enabled");
         handle_delete_context_free (ctx);
         return;
     }
@@ -554,7 +644,6 @@ handle_create_auth_ready (MMBaseModem *self,
                           GAsyncResult *res,
                           HandleCreateContext *ctx)
 {
-    MMModemState modem_state = MM_MODEM_STATE_UNKNOWN;
     MMCallList *list = NULL;
     GError *error = NULL;
     MMCallProperties *properties;
@@ -562,19 +651,6 @@ handle_create_auth_ready (MMBaseModem *self,
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_create_context_free (ctx);
-        return;
-    }
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &modem_state,
-                  NULL);
-
-    if (modem_state < MM_MODEM_STATE_ENABLED) {
-        g_dbus_method_invocation_return_error (ctx->invocation,
-                                               MM_CORE_ERROR,
-                                               MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot create CALL: device not yet enabled");
         handle_create_context_free (ctx);
         return;
     }
@@ -656,21 +732,6 @@ handle_list (MmGdbusModemVoice *skeleton,
 {
     GStrv paths;
     MMCallList *list = NULL;
-    MMModemState modem_state;
-
-    modem_state = MM_MODEM_STATE_UNKNOWN;
-    g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &modem_state,
-                  NULL);
-
-    if (modem_state < MM_MODEM_STATE_ENABLED) {
-        g_dbus_method_invocation_return_error (invocation,
-                                               MM_CORE_ERROR,
-                                               MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot list CALL messages: "
-                                               "device not yet enabled");
-        return TRUE;
-    }
 
     g_object_get (self,
                   MM_IFACE_MODEM_VOICE_CALL_LIST, &list,
@@ -762,25 +823,11 @@ handle_hold_and_accept_auth_ready (MMBaseModem                *self,
                                    GAsyncResult               *res,
                                    HandleHoldAndAcceptContext *ctx)
 {
-    MMModemState  modem_state = MM_MODEM_STATE_UNKNOWN;
-    GError       *error = NULL;
-    MMCallList   *list = NULL;
+    GError     *error = NULL;
+    MMCallList *list = NULL;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_hold_and_accept_context_free (ctx);
-        return;
-    }
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &modem_state,
-                  NULL);
-
-    if (modem_state < MM_MODEM_STATE_ENABLED) {
-        g_dbus_method_invocation_return_error (ctx->invocation,
-                                               MM_CORE_ERROR,
-                                               MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot hold and accept: device not yet enabled");
         handle_hold_and_accept_context_free (ctx);
         return;
     }
@@ -904,25 +951,11 @@ handle_hangup_and_accept_auth_ready (MMBaseModem                  *self,
                                      GAsyncResult                 *res,
                                      HandleHangupAndAcceptContext *ctx)
 {
-    MMModemState  modem_state = MM_MODEM_STATE_UNKNOWN;
-    GError       *error = NULL;
-    MMCallList   *list = NULL;
+    GError     *error = NULL;
+    MMCallList *list = NULL;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_hangup_and_accept_context_free (ctx);
-        return;
-    }
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &modem_state,
-                  NULL);
-
-    if (modem_state < MM_MODEM_STATE_ENABLED) {
-        g_dbus_method_invocation_return_error (ctx->invocation,
-                                               MM_CORE_ERROR,
-                                               MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot hangup and accept: device not yet enabled");
         handle_hangup_and_accept_context_free (ctx);
         return;
     }
@@ -1059,25 +1092,11 @@ handle_hangup_all_auth_ready (MMBaseModem            *self,
                               GAsyncResult           *res,
                               HandleHangupAllContext *ctx)
 {
-    MMModemState  modem_state = MM_MODEM_STATE_UNKNOWN;
-    GError       *error = NULL;
-    MMCallList   *list = NULL;
+    GError     *error = NULL;
+    MMCallList *list = NULL;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_hangup_all_context_free (ctx);
-        return;
-    }
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &modem_state,
-                  NULL);
-
-    if (modem_state < MM_MODEM_STATE_ENABLED) {
-        g_dbus_method_invocation_return_error (ctx->invocation,
-                                               MM_CORE_ERROR,
-                                               MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot hangup all: device not yet enabled");
         handle_hangup_all_context_free (ctx);
         return;
     }
@@ -1190,25 +1209,11 @@ handle_transfer_auth_ready (MMBaseModem           *self,
                             GAsyncResult          *res,
                             HandleTransferContext *ctx)
 {
-    MMModemState  modem_state = MM_MODEM_STATE_UNKNOWN;
-    GError       *error = NULL;
-    MMCallList   *list = NULL;
+    GError     *error = NULL;
+    MMCallList *list = NULL;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_transfer_context_free (ctx);
-        return;
-    }
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &modem_state,
-                  NULL);
-
-    if (modem_state < MM_MODEM_STATE_ENABLED) {
-        g_dbus_method_invocation_return_error (ctx->invocation,
-                                               MM_CORE_ERROR,
-                                               MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot transfer: device not yet enabled");
         handle_transfer_context_free (ctx);
         return;
     }
@@ -1302,24 +1307,10 @@ handle_call_waiting_setup_auth_ready (MMBaseModem                   *self,
                                       GAsyncResult                  *res,
                                       HandleCallWaitingSetupContext *ctx)
 {
-    MMModemState  modem_state = MM_MODEM_STATE_UNKNOWN;
-    GError       *error = NULL;
+    GError *error = NULL;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_call_waiting_setup_context_free (ctx);
-        return;
-    }
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &modem_state,
-                  NULL);
-
-    if (modem_state < MM_MODEM_STATE_ENABLED) {
-        g_dbus_method_invocation_return_error (ctx->invocation,
-                                               MM_CORE_ERROR,
-                                               MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot setup call waiting: device not yet enabled");
         handle_call_waiting_setup_context_free (ctx);
         return;
     }
@@ -1403,24 +1394,10 @@ handle_call_waiting_query_auth_ready (MMBaseModem                   *self,
                                       GAsyncResult                  *res,
                                       HandleCallWaitingQueryContext *ctx)
 {
-    MMModemState  modem_state = MM_MODEM_STATE_UNKNOWN;
-    GError       *error = NULL;
+    GError *error = NULL;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_call_waiting_query_context_free (ctx);
-        return;
-    }
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &modem_state,
-                  NULL);
-
-    if (modem_state < MM_MODEM_STATE_ENABLED) {
-        g_dbus_method_invocation_return_error (ctx->invocation,
-                                               MM_CORE_ERROR,
-                                               MM_CORE_ERROR_WRONG_STATE,
-                                               "Cannot query call waiting: device not yet enabled");
         handle_call_waiting_query_context_free (ctx);
         return;
     }
@@ -2165,7 +2142,7 @@ in_call_cleanup_ready (MMIfaceModemVoice *self,
 
     if (!in_call_cleanup_finish (self, res, &error)) {
         /* ignore cancelled operations */
-        if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED) && !g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_CANCELLED))
+        if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
             mm_warn ("Cannot cleanup in-call modem state: %s", error->message);
         g_clear_error (&error);
     } else {
@@ -2189,7 +2166,7 @@ in_call_setup_ready (MMIfaceModemVoice *self,
 
     if (!in_call_setup_finish (self, res, &ctx->audio_port, &ctx->audio_format, &error)) {
         /* ignore cancelled operations */
-        if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED) && !g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_CANCELLED))
+        if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
             mm_warn ("Cannot setup in-call modem state: %s", error->message);
         g_clear_error (&error);
     } else {
@@ -2600,11 +2577,6 @@ interface_disabling_step (GTask *task)
         ctx->step++;
 
     case DISABLING_STEP_LAST:
-        /* Clear CALL list */
-        g_object_set (self,
-                      MM_IFACE_MODEM_VOICE_CALL_LIST, NULL,
-                      NULL);
-
         /* We are done without errors! */
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
@@ -2734,55 +2706,12 @@ interface_enabling_step (GTask *task)
     ctx = g_task_get_task_data (task);
 
     switch (ctx->step) {
-    case ENABLING_STEP_FIRST: {
-        MMCallList *list;
-
-        list = mm_call_list_new (MM_BASE_MODEM (self));
-        g_object_set (self,
-                      MM_IFACE_MODEM_VOICE_CALL_LIST, list,
-                      NULL);
-
-        /* Connect to list's signals */
-        g_signal_connect (list,
-                          MM_CALL_ADDED,
-                          G_CALLBACK (call_added),
-                          ctx->skeleton);
-        g_signal_connect (list,
-                          MM_CALL_DELETED,
-                          G_CALLBACK (call_deleted),
-                          ctx->skeleton);
-
-        /* Setup monitoring for in-call event handling */
-        g_signal_connect (list,
-                          MM_CALL_ADDED,
-                          G_CALLBACK (setup_in_call_event_handling),
-                          self);
-
-        /* Unless we're told not to, setup call list polling logic */
-        if (MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->load_call_list &&
-            MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->load_call_list_finish) {
-            gboolean periodic_call_list_check_disabled = FALSE;
-
-            g_object_get (self,
-                          MM_IFACE_MODEM_VOICE_PERIODIC_CALL_LIST_CHECK_DISABLED, &periodic_call_list_check_disabled,
-                          NULL);
-            if (!periodic_call_list_check_disabled) {
-                mm_dbg ("periodic call list polling will be used if supported");
-                g_signal_connect (list,
-                                  MM_CALL_ADDED,
-                                  G_CALLBACK (setup_call_list_polling),
-                                  self);
-            }
-        }
-
-        g_object_unref (list);
-
+    case ENABLING_STEP_FIRST:
         /* Fall down to next step */
         ctx->step++;
-    }
 
     case ENABLING_STEP_SETUP_UNSOLICITED_EVENTS:
-        /* Allow setting up unsolicited events */
+        /* Allow setting up unsolicited events to get notified of incoming calls */
         if (MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->setup_unsolicited_events &&
             MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->setup_unsolicited_events_finish) {
             MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->setup_unsolicited_events (
@@ -2795,7 +2724,7 @@ interface_enabling_step (GTask *task)
         ctx->step++;
 
     case ENABLING_STEP_ENABLE_UNSOLICITED_EVENTS:
-        /* Allow setting up unsolicited events */
+        /* Allow setting up unsolicited events to get notified of incoming calls */
         if (MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->enable_unsolicited_events &&
             MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->enable_unsolicited_events_finish) {
             MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->enable_unsolicited_events (
@@ -2855,7 +2784,7 @@ static void interface_initialization_step (GTask *task);
 typedef enum {
     INITIALIZATION_STEP_FIRST,
     INITIALIZATION_STEP_CHECK_SUPPORT,
-    INITIALIZATION_STEP_FAIL_IF_UNSUPPORTED,
+    INITIALIZATION_STEP_SETUP_CALL_LIST,
     INITIALIZATION_STEP_LAST
 } InitializationStep;
 
@@ -2879,19 +2808,12 @@ check_support_ready (MMIfaceModemVoice *self,
     InitializationContext *ctx;
     GError *error = NULL;
 
-    if (!MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->check_support_finish (self,
-                                                                          res,
-                                                                          &error)) {
-        if (error) {
-            /* This error shouldn't be treated as critical */
-            mm_dbg ("Voice support check failed: '%s'", error->message);
-            g_error_free (error);
-        }
-    } else {
-        /* Voice is supported! */
-        g_object_set_qdata (G_OBJECT (self),
-                            supported_quark,
-                            GUINT_TO_POINTER (TRUE));
+    if (!MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->check_support_finish (self, res, &error)) {
+        mm_dbg ("Voice support check failed: '%s'", error->message);
+        g_error_free (error);
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED, "Voice not supported");
+        g_object_unref (task);
+        return;
     }
 
     /* Go on to next step */
@@ -2917,56 +2839,83 @@ interface_initialization_step (GTask *task)
 
     switch (ctx->step) {
     case INITIALIZATION_STEP_FIRST:
-        /* Setup quarks if we didn't do it before */
-        if (G_UNLIKELY (!support_checked_quark))
-            support_checked_quark = (g_quark_from_static_string (
-                                         SUPPORT_CHECKED_TAG));
-        if (G_UNLIKELY (!supported_quark))
-            supported_quark = (g_quark_from_static_string (
-                                   SUPPORTED_TAG));
-
         /* Fall down to next step */
         ctx->step++;
 
     case INITIALIZATION_STEP_CHECK_SUPPORT:
-        if (!GPOINTER_TO_UINT (g_object_get_qdata (G_OBJECT (self),
-                                                   support_checked_quark))) {
-            /* Set the checked flag so that we don't run it again */
-            g_object_set_qdata (G_OBJECT (self),
-                                support_checked_quark,
-                                GUINT_TO_POINTER (TRUE));
-            /* Initially, assume we don't support it */
-            g_object_set_qdata (G_OBJECT (self),
-                                supported_quark,
-                                GUINT_TO_POINTER (FALSE));
-
-            if (MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->check_support &&
-                MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->check_support_finish) {
-                MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->check_support (
-                    self,
-                    (GAsyncReadyCallback)check_support_ready,
-                    task);
-                return;
-            }
-
-            /* If there is no implementation to check support, assume we DON'T
-             * support it. */
-        }
-        /* Fall down to next step */
-        ctx->step++;
-
-    case INITIALIZATION_STEP_FAIL_IF_UNSUPPORTED:
-        if (!GPOINTER_TO_UINT (g_object_get_qdata (G_OBJECT (self),
-                                                   supported_quark))) {
-            g_task_return_new_error (task,
-                                     MM_CORE_ERROR,
-                                     MM_CORE_ERROR_UNSUPPORTED,
-                                     "Voice not supported");
-            g_object_unref (task);
+        /* Always check voice support when we run initialization, because
+         * the support may be different before and after SIM-PIN unlock. */
+        if (MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->check_support &&
+            MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->check_support_finish) {
+            MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->check_support (
+                self,
+                (GAsyncReadyCallback)check_support_ready,
+                task);
             return;
         }
+
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED, "Voice not supported");
+        g_object_unref (task);
+        return;
+
+    case INITIALIZATION_STEP_SETUP_CALL_LIST: {
+        MMCallList *list = NULL;
+
+        g_object_get (self,
+                      MM_IFACE_MODEM_VOICE_CALL_LIST, &list,
+                      NULL);
+
+        /* Create a new call list if not already available (this initialization
+         * may be called multiple times) */
+        if (!list) {
+            list = mm_call_list_new (MM_BASE_MODEM (self));
+            g_object_set (self,
+                          MM_IFACE_MODEM_VOICE_CALL_LIST, list,
+                          NULL);
+
+            /* Connect to list's signals */
+            g_signal_connect (list,
+                              MM_CALL_ADDED,
+                              G_CALLBACK (call_added),
+                              ctx->skeleton);
+            g_signal_connect (list,
+                              MM_CALL_DELETED,
+                              G_CALLBACK (call_deleted),
+                              ctx->skeleton);
+
+            /* Setup monitoring for in-call event handling */
+            g_signal_connect (list,
+                              MM_CALL_ADDED,
+                              G_CALLBACK (setup_in_call_event_handling),
+                              self);
+        }
+
+        /* Unless we're told not to, setup call list polling logic */
+        if (MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->load_call_list &&
+            MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->load_call_list_finish) {
+            gboolean periodic_call_list_check_disabled = FALSE;
+
+            /* Cleanup any previously configured handler, before checking if we need to
+             * add a new one, because the PERIODIC_CALL_LIST_CHECK_DISABLED flag may
+             * change before and after SIM-PIN unlock */
+            g_signal_handlers_disconnect_by_func (list, G_CALLBACK (setup_call_list_polling), self);
+
+            g_object_get (self,
+                          MM_IFACE_MODEM_VOICE_PERIODIC_CALL_LIST_CHECK_DISABLED, &periodic_call_list_check_disabled,
+                          NULL);
+            if (!periodic_call_list_check_disabled) {
+                mm_dbg ("periodic call list polling will be used if supported");
+                g_signal_connect (list,
+                                  MM_CALL_ADDED,
+                                  G_CALLBACK (setup_call_list_polling),
+                                  self);
+            }
+        }
+        g_object_unref (list);
+
         /* Fall down to next step */
         ctx->step++;
+    }
 
     case INITIALIZATION_STEP_LAST:
         /* Setup all method handlers */
@@ -3002,6 +2951,20 @@ mm_iface_modem_voice_initialize_finish (MMIfaceModemVoice *self,
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
+static gboolean
+modem_state_to_emergency_only (GBinding     *binding,
+                               const GValue *from_value,
+                               GValue       *to_value)
+{
+    MMModemState state;
+
+    /* If the modem is REGISTERED, we allow any kind of call, otherwise
+     * only emergency calls */
+    state = g_value_get_enum (from_value);
+    g_value_set_boolean (to_value, (state < MM_MODEM_STATE_REGISTERED));
+    return TRUE;
+}
+
 void
 mm_iface_modem_voice_initialize (MMIfaceModemVoice *self,
                                  GCancellable *cancellable,
@@ -3022,6 +2985,12 @@ mm_iface_modem_voice_initialize (MMIfaceModemVoice *self,
         g_object_set (self,
                       MM_IFACE_MODEM_VOICE_DBUS_SKELETON, skeleton,
                       NULL);
+
+        g_object_bind_property_full (self, MM_IFACE_MODEM_STATE,
+                                     skeleton, "emergency-only",
+                                     G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE,
+                                     (GBindingTransformFunc) modem_state_to_emergency_only,
+                                     NULL, NULL, NULL);
     }
 
     /* Perform async initialization here */

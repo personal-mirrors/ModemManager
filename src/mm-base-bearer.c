@@ -724,8 +724,7 @@ connect_ready (MMBaseBearer *self,
         mm_dbg ("Couldn't connect bearer '%s': '%s'",
                 self->priv->path,
                 error->message);
-        if (   g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_CANCELLED)
-            || g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
             /* Will launch disconnection */
             launch_disconnect = TRUE;
         } else
@@ -735,10 +734,8 @@ connect_ready (MMBaseBearer *self,
     else if (g_cancellable_is_cancelled (self->priv->connect_cancellable)) {
         mm_dbg ("Connected bearer '%s', but need to disconnect", self->priv->path);
         mm_bearer_connect_result_unref (result);
-        error = g_error_new (
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_CANCELLED,
-            "Bearer got connected, but had to disconnect after cancellation request");
+        error = g_error_new (G_IO_ERROR, G_IO_ERROR_CANCELLED,
+                             "Bearer got connected, but had to disconnect after cancellation request");
         launch_disconnect = TRUE;
     }
     else {
@@ -930,6 +927,8 @@ handle_connect (MMBaseBearer *self,
                   MM_BASE_BEARER_MODEM, &ctx->modem,
                   NULL);
 
+    mm_dbg ("User request to connect bearer '%s'", self->priv->path);
+
     mm_base_modem_authorize (ctx->modem,
                              invocation,
                              MM_AUTHORIZATION_DEVICE_CONTROL,
@@ -1120,6 +1119,8 @@ handle_disconnect (MMBaseBearer *self,
     g_object_get (self,
                   MM_BASE_BEARER_MODEM, &ctx->modem,
                   NULL);
+
+    mm_dbg ("User request to disconnect bearer '%s'", self->priv->path);
 
     mm_base_modem_authorize (ctx->modem,
                              invocation,
