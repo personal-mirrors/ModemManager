@@ -1771,7 +1771,7 @@ mm_3gpp_parse_cgdcont_read_response (const gchar *reply,
     return list;
 }
 
-static void
+void
 mm_3gpp_profile_free (MM3gppProfile *profile)
 {
     g_free (profile->apn);

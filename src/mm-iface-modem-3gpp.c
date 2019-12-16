@@ -95,6 +95,12 @@ get_private (MMIfaceModem3gpp *self)
     return priv;
 }
 
+#define MM_3GPP_PROFILE_ID        "profile-id"
+#define MM_3GPP_PROFILE_APN       "apn"
+#define MM_3GPP_PROFILE_AUTH_TYPE "auth-type"
+#define MM_3GPP_PROFILE_USERNAME  "username"
+#define MM_3GPP_PROFILE_PASSWORD  "password"
+
 /*****************************************************************************/
 
 void
@@ -1160,6 +1166,108 @@ handle_set_initial_eps_bearer_settings (MmGdbusModem3gpp      *skeleton,
 
 /*****************************************************************************/
 
+typedef struct {
+    MmGdbusModem3gpp      *skeleton;
+    GDBusMethodInvocation *invocation;
+    MMIfaceModem3gpp      *self;
+    GVariant              *dictionary;
+} HandleCreateProfileContext;
+
+static void
+handle_create_profile_context_free (HandleCreateProfileContext *ctx)
+{
+    g_variant_unref (ctx->dictionary);
+    g_object_unref (ctx->skeleton);
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->self);
+    g_slice_free (HandleCreateProfileContext, ctx);
+}
+
+static void
+create_profile_ready (MMIfaceModem3gpp           *self,
+                      GAsyncResult               *res,
+                      HandleCreateProfileContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->create_profile_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_create_profile_context_free (ctx);
+        return;
+    }
+
+    mm_gdbus_modem3gpp_complete_create_profile (ctx->skeleton, ctx->invocation);
+    handle_create_profile_context_free (ctx);
+}
+
+static void
+create_profile_auth_ready (MMBaseModem                *self,
+                           GAsyncResult               *res,
+                           HandleCreateProfileContext *ctx)
+{
+    MM3gppProfile *profile;
+    GVariantDict   properties;
+    GError        *error = NULL;
+
+    if (!mm_base_modem_authorize_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_create_profile_context_free (ctx);
+        return;
+    }
+
+    if (!MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->create_profile ||
+        !MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->create_profile_finish) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot create profile: operation not supported");
+        handle_create_profile_context_free (ctx);
+        return;
+    }
+
+    profile = g_slice_new0 (MM3gppProfile);
+
+    g_variant_dict_init (&properties, ctx->dictionary);
+    if (!g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_ID, "u", &profile->profile_id))
+      profile->profile_id = MM_3GPP_PROFILE_DYNAMIC_ID;
+    g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_APN, "s", &profile->apn);
+    g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_AUTH_TYPE, "u", &profile->auth_type);
+    g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_USERNAME, "s", &profile->username);
+    g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_PASSWORD, "s", &profile->password);
+
+    g_variant_dict_clear (&properties);
+
+    MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->create_profile (
+        MM_IFACE_MODEM_3GPP (self),
+        profile,
+        (GAsyncReadyCallback)create_profile_ready,
+        ctx);
+}
+
+static gboolean
+handle_create_profile (MmGdbusModem3gpp      *skeleton,
+                       GDBusMethodInvocation *invocation,
+                       GVariant              *dictionary,
+                       MMIfaceModem3gpp      *self)
+{
+    HandleCreateProfileContext *ctx;
+
+    ctx = g_slice_new0 (HandleCreateProfileContext);
+    ctx->skeleton = skeleton;
+    ctx->invocation = invocation;
+    ctx->self = self;
+    ctx->dictionary = dictionary;
+
+    mm_base_modem_authorize (MM_BASE_MODEM (self),
+                             invocation,
+                             MM_AUTHORIZATION_DEVICE_CONTROL,
+                             (GAsyncReadyCallback)create_profile_auth_ready,
+                             ctx);
+    return TRUE;
+}
+
+/*****************************************************************************/
+
 gboolean
 mm_iface_modem_3gpp_run_registration_checks_finish (MMIfaceModem3gpp *self,
                                                     GAsyncResult *res,
@@ -1843,21 +1951,21 @@ profiles_build_result (const GList *profiles)
         g_variant_builder_open (&builder, G_VARIANT_TYPE ("a{sv}"));
 
         g_variant_builder_add (&builder, "{sv}",
-                               "profile-id", g_variant_new_uint32 (profile->profile_id));
+                               MM_3GPP_PROFILE_ID, g_variant_new_uint32 (profile->profile_id));
         if (profile->apn) {
             g_variant_builder_add (&builder, "{sv}",
-                                   "apn", g_variant_new_string (profile->apn));
+                                   MM_3GPP_PROFILE_APN, g_variant_new_string (profile->apn));
         } else {
-            g_variant_builder_add (&builder, "{sv}", "apn", g_variant_new_string (""));
+            g_variant_builder_add (&builder, "{sv}", MM_3GPP_PROFILE_APN, g_variant_new_string (""));
         }
         g_variant_builder_add (&builder, "{sv}",
-                               "auth-type", g_variant_new_uint32 (profile->auth_type));
+                               MM_3GPP_PROFILE_AUTH_TYPE, g_variant_new_uint32 (profile->auth_type));
         if (profile->username)
             g_variant_builder_add (&builder, "{sv}",
-                                   "username", g_variant_new_string (profile->username));
+                                   MM_3GPP_PROFILE_USERNAME, g_variant_new_string (profile->username));
         if (profile->password)
             g_variant_builder_add (&builder, "{sv}",
-                                   "password", g_variant_new_string (profile->password));
+                                   MM_3GPP_PROFILE_PASSWORD, g_variant_new_string (profile->password));
         g_variant_builder_close (&builder);
     }
 
@@ -2687,6 +2795,10 @@ interface_initialization_step (GTask *task)
         g_signal_connect (ctx->skeleton,
                           "handle-set-initial-eps-bearer-settings",
                           G_CALLBACK (handle_set_initial_eps_bearer_settings),
+                          self);
+        g_signal_connect (ctx->skeleton,
+                          "handle-create-profile",
+                          G_CALLBACK (handle_create_profile),
                           self);
 
         /* Finally, export the new interface */

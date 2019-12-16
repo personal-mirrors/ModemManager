@@ -243,6 +243,15 @@ struct _MMIfaceModem3gpp {
                                        GAsyncResult      *res,
                                        GList            **out_list,
                                        GError           **error);
+
+    /* Create new profile or provisioned context */
+    void     (* create_profile) (MMIfaceModem3gpp    *self,
+                                 MM3gppProfile       *profile,
+                                 GAsyncReadyCallback  callback,
+                                 gpointer             user_data);
+    gboolean (* create_profile_finish) (MMIfaceModem3gpp  *self,
+                                        GAsyncResult      *res,
+                                        GError           **error);
 };
 
 GType mm_iface_modem_3gpp_get_type (void);

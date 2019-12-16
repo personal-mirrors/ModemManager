@@ -125,6 +125,17 @@
     </method>
 
     <!--
+        CreateProfile:
+        @properties: a dictionary (signature <literal>a{sv}</literal>) of profile properties.
+
+        Creates a connection profile on this modem. See #org.freedesktop.ModemManager1.Modem.Modem3gpp.Profiles:Profiles
+        for the list of valid profile properties.
+    -->
+    <method name="CreateProfile">
+      <arg name="properties" type="a{sv}" direction="in" />
+    </method>
+
+    <!--
         Imei:
 
         The <ulink url="http://en.wikipedia.org/wiki/Imei">IMEI</ulink> of the device.
