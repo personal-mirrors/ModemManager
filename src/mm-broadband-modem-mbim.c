@@ -143,6 +143,8 @@ struct _MMBroadbandModemMbimPrivate {
 #endif
 };
 
+#define MBIM_PROVISIONED_CONTEXT_DYNAMIC_ID 0xffffffff
+
 /*****************************************************************************/
 
 static gboolean
@@ -4597,6 +4599,54 @@ modem_3gpp_load_profiles (MMIfaceModem3gpp    *self,
 }
 
 /*****************************************************************************/
+/* Create profile (3GPP interface) */
+
+static gboolean
+modem_3gpp_create_profile_finish (MMIfaceModem3gpp *self,
+                                  GAsyncResult *res,
+                                  GError **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+modem_3gpp_create_profile (MMIfaceModem3gpp *self,
+                           MM3gppProfile *profile,
+                           GAsyncReadyCallback callback,
+                           gpointer user_data)
+{
+    MbimDevice *device;
+    MbimMessage *message;
+    GTask *task;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    mm_obj_dbg (self, "creating provisioned context...");
+    message = mbim_message_provisioned_contexts_set_new (
+        (gint)profile->profile_id == MM_3GPP_PROFILE_DYNAMIC_ID ?
+            MBIM_PROVISIONED_CONTEXT_DYNAMIC_ID :
+            profile->profile_id,
+        mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
+        profile->apn,
+        profile->username,
+        profile->password,
+        MBIM_COMPRESSION_NONE,
+        mm_bearer_allowed_auth_to_mbim_auth_protocol (profile->auth_type, self, NULL),
+        MM_BROADBAND_MODEM_MBIM (self)->priv->current_operator_id,
+        NULL);
+    mbim_device_command (device,
+                         message,
+                         300,
+                         NULL,
+                         (GAsyncReadyCallback)provisioned_contexts_ready,
+                         task);
+    mbim_message_unref (message);
+}
+
+/*****************************************************************************/
 /* Check support (Signal interface) */
 
 static gboolean
@@ -5886,6 +5936,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->scan_networks_finish = modem_3gpp_scan_networks_finish;
     iface->load_profiles = modem_3gpp_load_profiles;
     iface->load_profiles_finish = modem_3gpp_load_profiles_finish;
+    iface->create_profile = modem_3gpp_create_profile;
+    iface->create_profile_finish = modem_3gpp_create_profile_finish;
 }
 
 static void
