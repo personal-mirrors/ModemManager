@@ -5,7 +5,7 @@ dnl Package and library versioning support
 dnl
 
 m4_define([mm_major_version], [1])
-m4_define([mm_minor_version], [11])
+m4_define([mm_minor_version], [13])
 m4_define([mm_micro_version], [0])
 m4_define([mm_version],
           [mm_major_version.mm_minor_version.mm_micro_version])
@@ -18,9 +18,9 @@ dnl        If the interface has grown (that is, the new library is compatible
 dnl            with old code), increment a.
 dnl        If the interface has changed in an incompatible way (that is,
 dnl            functions have changed or been removed), then zero a.
-m4_define([mm_glib_lt_current],  [4])
+m4_define([mm_glib_lt_current],  [5])
 m4_define([mm_glib_lt_revision], [0])
-m4_define([mm_glib_lt_age],      [4])
+m4_define([mm_glib_lt_age],      [5])
 
 dnl-----------------------------------------------------------------------------
 dnl autoconf, automake, libtool initialization
@@ -362,7 +362,7 @@ dnl-----------------------------------------------------------------------------
 dnl QMI support (enabled by default)
 dnl
 
-LIBQMI_VERSION=1.23.1
+LIBQMI_VERSION=1.25.1
 
 AC_ARG_WITH(qmi, AS_HELP_STRING([--without-qmi], [Build without QMI support]), [], [with_qmi=yes])
 AM_CONDITIONAL(WITH_QMI, test "x$with_qmi" = "xyes")

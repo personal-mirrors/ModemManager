@@ -55,9 +55,10 @@
         @properties: Call properties from the <link linkend="gdbus-org.freedesktop.ModemManager1.Call">Call D-Bus interface</link>.
         @path: The object path of the new call object.
 
-        Creates a new call object.
+        Creates a new call object for a new outgoing call.
 
-        The '<link linkend="gdbus-property-org-freedesktop-ModemManager1-Call.Number">Number</link>' is mandatory
+        The '<link linkend="gdbus-property-org-freedesktop-ModemManager1-Call.Number">Number</link>' is the only
+        expected property to set by the user.
     -->
     <method name="CreateCall">
       <arg name="properties" type="a{sv}" direction="in" />
@@ -182,7 +183,7 @@
         A flag indicating whether emergency calls are the only allowed ones.
 
         If this flag is set, users should only attempt voice calls to
-	emergency numbers, as standard voice calls will likely fail.
+        emergency numbers, as standard voice calls will likely fail.
     -->
     <property name="EmergencyOnly" type="b" access="read" />
 
