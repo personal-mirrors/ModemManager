@@ -25,14 +25,41 @@
 #include "mm-modem-helpers.h"
 #include "mm-log.h"
 
-#define REGISTRATION_CHECK_TIMEOUT_SEC 30
-
 #define SUBSYSTEM_CDMA1X "cdma1x"
 #define SUBSYSTEM_EVDO "evdo"
 
-#define REGISTRATION_CHECK_CONTEXT_TAG    "cdma-registration-check-context-tag"
+/*****************************************************************************/
+/* Private data context */
 
-static GQuark registration_check_context_quark;
+#define PRIVATE_TAG "iface-modem-cdma-private-tag"
+static GQuark private_quark;
+
+typedef struct {
+    gboolean activation_ongoing;
+} Private;
+
+static void
+private_free (Private *priv)
+{
+    g_slice_free (Private, priv);
+}
+
+static Private *
+get_private (MMIfaceModemCdma *self)
+{
+    Private *priv;
+
+    if (G_UNLIKELY (!private_quark))
+        private_quark = g_quark_from_static_string (PRIVATE_TAG);
+
+    priv = g_object_get_qdata (G_OBJECT (self), private_quark);
+    if (!priv) {
+        priv = g_slice_new0 (Private);
+        g_object_set_qdata_full (G_OBJECT (self), private_quark, priv, (GDestroyNotify)private_free);
+    }
+
+    return priv;
+}
 
 /*****************************************************************************/
 
@@ -91,7 +118,11 @@ handle_activate_ready (MMIfaceModemCdma *self,
                        GAsyncResult *res,
                        HandleActivateContext *ctx)
 {
-    GError *error = NULL;
+    Private *priv;
+    GError  *error = NULL;
+
+    priv = get_private (self);
+    priv->activation_ongoing = FALSE;
 
     if (!MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate_finish (self, res,&error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
@@ -106,11 +137,24 @@ handle_activate_auth_ready (MMBaseModem *self,
                             GAsyncResult *res,
                             HandleActivateContext *ctx)
 {
-    MMModemState modem_state;
-    GError *error = NULL;
+    Private      *priv;
+    MMModemState  modem_state;
+    GError       *error = NULL;
+
+    priv = get_private (MM_IFACE_MODEM_CDMA (self));
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_activate_context_free (ctx);
+        return;
+    }
+
+    /* Fail if we have already an activation ongoing */
+    if (priv->activation_ongoing) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_IN_PROGRESS,
+                                               "An activation operation is already in progress");
         handle_activate_context_free (ctx);
         return;
     }
@@ -131,6 +175,17 @@ handle_activate_auth_ready (MMBaseModem *self,
                                                MM_CORE_ERROR_UNSUPPORTED,
                                                "Cannot perform OTA activation: "
                                                "operation not supported");
+        handle_activate_context_free (ctx);
+        return;
+    }
+
+    /* Error if carrier code is empty */
+    if (!ctx->carrier || !ctx->carrier[0]) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_INVALID_ARGS,
+                                               "Cannot perform OTA activation: "
+                                               "invalid empty carrier code");
         handle_activate_context_free (ctx);
         return;
     }
@@ -160,6 +215,7 @@ handle_activate_auth_ready (MMBaseModem *self,
     case MM_MODEM_STATE_ENABLED:
     case MM_MODEM_STATE_SEARCHING:
     case MM_MODEM_STATE_REGISTERED:
+        priv->activation_ongoing = TRUE;
         MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate (
             MM_IFACE_MODEM_CDMA (self),
             ctx->carrier,
@@ -193,6 +249,9 @@ handle_activate_auth_ready (MMBaseModem *self,
                                                "Cannot perform OTA activation: "
                                                "modem is connected");
         break;
+
+    default:
+        g_assert_not_reached ();
     }
 
     handle_activate_context_free (ctx);
@@ -245,7 +304,11 @@ handle_activate_manual_ready (MMIfaceModemCdma *self,
                               GAsyncResult *res,
                               HandleActivateManualContext *ctx)
 {
-    GError *error = NULL;
+    Private *priv;
+    GError  *error = NULL;
+
+    priv = get_private (self);
+    priv->activation_ongoing = FALSE;
 
     if (!MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate_manual_finish (self, res,&error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
@@ -261,11 +324,24 @@ handle_activate_manual_auth_ready (MMBaseModem *self,
                                    HandleActivateManualContext *ctx)
 {
     MMCdmaManualActivationProperties *properties;
-    MMModemState modem_state;
-    GError *error = NULL;
+    Private                          *priv;
+    MMModemState                      modem_state;
+    GError                           *error = NULL;
+
+    priv = get_private (MM_IFACE_MODEM_CDMA (self));
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_activate_manual_context_free (ctx);
+        return;
+    }
+
+    /* Fail if we have already an activation ongoing */
+    if (priv->activation_ongoing) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_IN_PROGRESS,
+                                               "An activation operation is already in progress");
         handle_activate_manual_context_free (ctx);
         return;
     }
@@ -322,6 +398,7 @@ handle_activate_manual_auth_ready (MMBaseModem *self,
     case MM_MODEM_STATE_ENABLED:
     case MM_MODEM_STATE_SEARCHING:
     case MM_MODEM_STATE_REGISTERED:
+        priv->activation_ongoing = TRUE;
         MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->activate_manual (
             MM_IFACE_MODEM_CDMA (self),
             properties,
@@ -356,6 +433,9 @@ handle_activate_manual_auth_ready (MMBaseModem *self,
                                                "Cannot perform manual activation: "
                                                "modem is connected");
         break;
+
+    default:
+        g_assert_not_reached ();
     }
 
     g_object_unref (properties);
@@ -431,6 +511,11 @@ mm_iface_modem_cdma_register_in_network (MMIfaceModemCdma *self,
 }
 
 /*****************************************************************************/
+
+#define REGISTRATION_CHECK_TIMEOUT_SEC 30
+#define REGISTRATION_CHECK_CONTEXT_TAG "cdma-registration-check-context-tag"
+
+static GQuark registration_check_context_quark;
 
 typedef struct _RunRegistrationChecksContext RunRegistrationChecksContext;
 static void registration_check_step (GTask *task);
@@ -763,8 +848,8 @@ registration_check_step (GTask *task)
 
     switch (ctx->step) {
     case REGISTRATION_CHECK_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case REGISTRATION_CHECK_STEP_SETUP_REGISTRATION_CHECKS:
         /* Allow implementations to run an initial setup check. This setup allows
@@ -779,8 +864,8 @@ registration_check_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case REGISTRATION_CHECK_STEP_QCDM_CALL_MANAGER_STATE:
         mm_dbg ("Starting QCDM-based registration checks");
@@ -813,8 +898,8 @@ registration_check_step (GTask *task)
             return;
         }
         mm_dbg ("  Skipping HDR check");
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case REGISTRATION_CHECK_STEP_QCDM_CDMA1X_SERVING_SYSTEM:
         /* We only care about SID/NID here; nothing to do with registration
@@ -829,8 +914,8 @@ registration_check_step (GTask *task)
             return;
         }
         mm_dbg ("  Skipping CDMA1x Serving System check");
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case REGISTRATION_CHECK_STEP_QCDM_LAST:
         /* When we get all QCDM results, parse them */
@@ -852,8 +937,8 @@ registration_check_step (GTask *task)
             return;
         }
         mm_dbg ("  Skipping CDMA service status check, assuming with service");
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case REGISTRATION_CHECK_STEP_AT_CDMA1X_SERVING_SYSTEM:
         /* Now that we have some sort of service, check if the the device is
@@ -876,8 +961,8 @@ registration_check_step (GTask *task)
             return;
         }
         mm_dbg ("  Skipping CDMA1x Serving System check");
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case REGISTRATION_CHECK_STEP_AT_LAST:
         /* When we get all AT results, parse them */
@@ -904,8 +989,8 @@ registration_check_step (GTask *task)
             return;
         }
         mm_dbg ("  Skipping detailed registration state check");
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case REGISTRATION_CHECK_STEP_LAST:
         /* We are done without errors! */
@@ -920,6 +1005,9 @@ registration_check_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -1069,6 +1157,9 @@ mm_iface_modem_cdma_update_evdo_registration_state (MMIfaceModemCdma *self,
                                                    MM_MODEM_STATE_ENABLED,
                                                    MM_MODEM_STATE_CHANGE_REASON_UNKNOWN);
             break;
+        default:
+            g_assert_not_reached ();
+            break;
         }
     }
 
@@ -1119,6 +1210,9 @@ mm_iface_modem_cdma_update_cdma1x_registration_state (MMIfaceModemCdma *self,
                                                    SUBSYSTEM_CDMA1X,
                                                    MM_MODEM_STATE_ENABLED,
                                                    MM_MODEM_STATE_CHANGE_REASON_UNKNOWN);
+            break;
+        default:
+            g_assert_not_reached ();
             break;
         }
     }
@@ -1353,13 +1447,13 @@ interface_disabling_step (GTask *task)
 
     switch (ctx->step) {
     case DISABLING_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_PERIODIC_REGISTRATION_CHECKS:
         periodic_registration_check_disable (self);
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_DISABLE_UNSOLICITED_EVENTS:
         if (MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->disable_unsolicited_events &&
@@ -1370,8 +1464,8 @@ interface_disabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_CLEANUP_UNSOLICITED_EVENTS:
         if (MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->cleanup_unsolicited_events &&
@@ -1382,14 +1476,17 @@ interface_disabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_LAST:
         /* We are done without errors! */
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -1518,8 +1615,8 @@ interface_enabling_step (GTask *task)
 
     switch (ctx->step) {
     case ENABLING_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_SETUP_UNSOLICITED_EVENTS:
         if (MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->setup_unsolicited_events &&
@@ -1530,8 +1627,8 @@ interface_enabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_ENABLE_UNSOLICITED_EVENTS:
         if (MM_IFACE_MODEM_CDMA_GET_INTERFACE (self)->enable_unsolicited_events &&
@@ -1542,19 +1639,22 @@ interface_enabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_PERIODIC_REGISTRATION_CHECKS:
         periodic_registration_check_enable (self);
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_LAST:
         /* We are done without errors! */
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -1686,8 +1786,8 @@ interface_initialization_step (GTask *task)
 
     switch (ctx->step) {
     case INITIALIZATION_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_MEID:
         /* MEID value is meant to be loaded only once during the whole
@@ -1702,8 +1802,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_ESN:
         /* ESN value is meant to be loaded only once during the whole
@@ -1718,8 +1818,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_ACTIVATION_STATE:
         /* Initial activation state is meant to be loaded only once during the
@@ -1734,8 +1834,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_LAST:
         /* We are done without errors! */
@@ -1757,6 +1857,9 @@ interface_initialization_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();

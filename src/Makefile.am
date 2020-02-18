@@ -12,6 +12,7 @@ BUILT_SOURCES =
 CLEANFILES =
 
 AM_CFLAGS = \
+	$(WARN_CFLAGS) \
 	$(MM_CFLAGS) \
 	$(CODE_COVERAGE_CFLAGS) \
 	$(GUDEV_CFLAGS) \
@@ -26,6 +27,7 @@ AM_CFLAGS = \
 	$(NULL)
 
 AM_LDFLAGS = \
+	$(WARN_LDFLAGS) \
 	$(MM_LIBS) \
 	$(CODE_COVERAGE_LDFLAGS) \
 	$(GUDEV_LIBS) \
@@ -286,8 +288,6 @@ ModemManager_SOURCES = \
 	mm-utils.h \
 	mm-private-boxed-types.h \
 	mm-private-boxed-types.c \
-	mm-auth.h \
-	mm-auth.c \
 	mm-auth-provider.h \
 	mm-auth-provider.c \
 	mm-filter.h \
@@ -350,14 +350,10 @@ ModemManager_SOURCES = \
 	mm-port-probe-at.c \
 	mm-plugin.c \
 	mm-plugin.h \
+	mm-shared.h \
 	$(NULL)
 
 nodist_ModemManager_SOURCES = $(DAEMON_ENUMS_GENERATED)
-
-# Additional Polkit support
-if WITH_POLKIT
-ModemManager_SOURCES += mm-auth-provider-polkit.h mm-auth-provider-polkit.c
-endif
 
 # Additional suspend/resume support via systemd
 if WITH_SYSTEMD_SUSPEND_RESUME

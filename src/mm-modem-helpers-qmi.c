@@ -40,6 +40,7 @@ mm_modem_capability_from_qmi_radio_interface (QmiDmsRadioInterface network)
         return MM_MODEM_CAPABILITY_GSM_UMTS;
     case QMI_DMS_RADIO_INTERFACE_LTE:
         return MM_MODEM_CAPABILITY_LTE;
+    case QMI_DMS_RADIO_INTERFACE_5GNR:
     default:
         mm_warn ("Unhandled QMI radio interface (%u)",
                  (guint)network);
@@ -63,6 +64,7 @@ mm_modem_mode_from_qmi_radio_interface (QmiDmsRadioInterface network)
         return MM_MODEM_MODE_3G;
     case QMI_DMS_RADIO_INTERFACE_LTE:
         return MM_MODEM_MODE_4G;
+    case QMI_DMS_RADIO_INTERFACE_5GNR:
     default:
         mm_warn ("Unhandled QMI radio interface (%u)",
                  (guint)network);
@@ -138,19 +140,18 @@ mm_3gpp_facility_to_qmi_uim_facility (MMModem3gppFacility mm)
     case MM_MODEM_3GPP_FACILITY_PH_SIM:
         /* Not really sure about this one; it may be PH_FSIM? */
         return QMI_DMS_UIM_FACILITY_PF;
-
     case MM_MODEM_3GPP_FACILITY_NET_PERS:
         return QMI_DMS_UIM_FACILITY_PN;
-
     case MM_MODEM_3GPP_FACILITY_NET_SUB_PERS:
         return QMI_DMS_UIM_FACILITY_PU;
-
     case MM_MODEM_3GPP_FACILITY_PROVIDER_PERS:
         return QMI_DMS_UIM_FACILITY_PP;
-
     case MM_MODEM_3GPP_FACILITY_CORP_PERS:
         return QMI_DMS_UIM_FACILITY_PC;
-
+    case MM_MODEM_3GPP_FACILITY_NONE:
+    case MM_MODEM_3GPP_FACILITY_SIM:
+    case MM_MODEM_3GPP_FACILITY_FIXED_DIALING:
+    case MM_MODEM_3GPP_FACILITY_PH_FSIM:
     default:
         /* Never try to ask for a facility we cannot translate */
         g_assert_not_reached ();
@@ -786,6 +787,8 @@ mm_modem_access_technology_from_qmi_radio_interface (QmiNasRadioInterface interf
         return MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
     case QMI_NAS_RADIO_INTERFACE_LTE:
         return MM_MODEM_ACCESS_TECHNOLOGY_LTE;
+    case QMI_NAS_RADIO_INTERFACE_5GNR:
+    case QMI_NAS_RADIO_INTERFACE_UNKNOWN:
     case QMI_NAS_RADIO_INTERFACE_TD_SCDMA:
     case QMI_NAS_RADIO_INTERFACE_AMPS:
     case QMI_NAS_RADIO_INTERFACE_NONE:
@@ -843,6 +846,7 @@ mm_modem_access_technology_from_qmi_data_capability (QmiNasDataCapability cap)
     case QMI_NAS_DATA_CAPABILITY_HSDPA_PLUS:
     case QMI_NAS_DATA_CAPABILITY_DC_HSDPA_PLUS:
         return MM_MODEM_ACCESS_TECHNOLOGY_HSPA_PLUS;
+    case QMI_NAS_DATA_CAPABILITY_NONE:
     default:
         return MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
     }
@@ -880,6 +884,11 @@ mm_modem_mode_from_qmi_nas_radio_interface (QmiNasRadioInterface iface)
             return MM_MODEM_MODE_3G;
         case QMI_NAS_RADIO_INTERFACE_LTE:
             return MM_MODEM_MODE_4G;
+        case QMI_NAS_RADIO_INTERFACE_5GNR:
+        case QMI_NAS_RADIO_INTERFACE_NONE:
+        case QMI_NAS_RADIO_INTERFACE_AMPS:
+        case QMI_NAS_RADIO_INTERFACE_TD_SCDMA:
+        case QMI_NAS_RADIO_INTERFACE_UNKNOWN:
         default:
             return MM_MODEM_MODE_NONE;
     }
@@ -1273,6 +1282,9 @@ mm_modem_mode_to_qmi_gsm_wcdma_acquisition_order_preference (MMModemMode mode)
         return QMI_NAS_GSM_WCDMA_ACQUISITION_ORDER_PREFERENCE_GSM;
     case MM_MODEM_MODE_NONE:
         return QMI_NAS_GSM_WCDMA_ACQUISITION_ORDER_PREFERENCE_AUTOMATIC;
+    case MM_MODEM_MODE_CS:
+    case MM_MODEM_MODE_4G:
+    case MM_MODEM_MODE_ANY:
     default:
         break;
     }
@@ -1368,6 +1380,11 @@ mm_sms_storage_to_qmi_storage_type (MMSmsStorage storage)
         return QMI_WMS_STORAGE_TYPE_UIM;
     case MM_SMS_STORAGE_ME:
         return QMI_WMS_STORAGE_TYPE_NV;
+    case MM_SMS_STORAGE_UNKNOWN:
+    case MM_SMS_STORAGE_MT:
+    case MM_SMS_STORAGE_SR:
+    case MM_SMS_STORAGE_BM:
+    case MM_SMS_STORAGE_TA:
     default:
         return QMI_WMS_STORAGE_TYPE_NONE;
     }
@@ -1381,6 +1398,7 @@ mm_sms_storage_from_qmi_storage_type (QmiWmsStorageType qmi_storage)
         return MM_SMS_STORAGE_SM;
     case QMI_WMS_STORAGE_TYPE_NV:
         return MM_SMS_STORAGE_ME;
+    case QMI_WMS_STORAGE_TYPE_NONE:
     default:
         return MM_SMS_STORAGE_UNKNOWN;
     }
@@ -1499,8 +1517,8 @@ mm_modem_capability_from_qmi_capabilities_context (MMQmiCapabilitiesContext *ctx
     if (ctx->nas_ssp_mode_preference_mask)
         tmp = mm_modem_capability_from_qmi_rat_mode_preference (ctx->nas_ssp_mode_preference_mask);
     /* If no value retrieved from SSP, check TP. We only process TP
-     * values if not 'auto'. */
-    else if (ctx->nas_tp_mask && (ctx->nas_tp_mask != QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO))
+     * values if not 'auto' (0). */
+    else if (ctx->nas_tp_mask != QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO)
         tmp = mm_modem_capability_from_qmi_radio_technology_preference (ctx->nas_tp_mask);
 
     /* Final capabilities are the intersection between the Technology
@@ -1577,6 +1595,7 @@ mm_oma_session_type_to_qmi_oma_session_type (MMOmaSessionType mm_session_type)
         return QMI_OMA_SESSION_TYPE_NETWORK_INITIATED_DEVICE_CONFIGURE;
     case MM_OMA_SESSION_TYPE_DEVICE_INITIATED_PRL_UPDATE:
         return QMI_OMA_SESSION_TYPE_DEVICE_INITIATED_PRL_UPDATE;
+    case MM_OMA_SESSION_TYPE_UNKNOWN:
     default:
         g_assert_not_reached ();
     }
@@ -1688,7 +1707,7 @@ gchar *
 mm_qmi_unique_id_to_firmware_unique_id (GArray  *qmi_unique_id,
                                         GError **error)
 {
-    gint     i;
+    guint    i;
     gboolean expect_nul_byte = FALSE;
 
     if (qmi_unique_id->len != EXPECTED_QMI_UNIQUE_ID_LENGTH) {

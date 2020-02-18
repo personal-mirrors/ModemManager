@@ -202,8 +202,8 @@ mm_telit_build_bnd_request (GArray    *bands_array,
     guint64        mask4g = 0;
     guint          i;
     gint           flag2g = -1;
-    gint           flag3g = -1;
-    gint           flag4g = -1;
+    gint64         flag3g = -1;
+    gint64         flag4g = -1;
     gchar         *cmd;
     const guint64 *telit_3g_to_mm_band_mask;
     guint          telit_3g_to_mm_band_mask_n_elements;
@@ -225,19 +225,19 @@ mm_telit_build_bnd_request (GArray    *bands_array,
         band = g_array_index (bands_array, MMModemBand, i);
 
         /* Convert 2G bands into a bitmask, to match against telit_2g_to_mm_band_mask. */
-        if (flag2g && mm_common_band_is_gsm (band) &&
+        if (modem_is_2g && mm_common_band_is_gsm (band) &&
             (band >= MM_MODEM_BAND_TELIT_2G_FIRST) && (band <= MM_MODEM_BAND_TELIT_2G_LAST))
             mask2g += B2G_FLAG (band);
 
         /* Convert 3G bands into a bitmask, to match against telit_3g_to_mm_band_mask. We use
          * a 64-bit explicit bitmask so that all values fit correctly. */
-        if (flag3g && mm_common_band_is_utran (band) &&
+        if (modem_is_3g && mm_common_band_is_utran (band) &&
             (B3G_NUM (band) >= B3G_NUM (MM_MODEM_BAND_TELIT_3G_FIRST)) && (B3G_NUM (band) <= B3G_NUM (MM_MODEM_BAND_TELIT_3G_LAST)))
             mask3g += B3G_FLAG (band);
 
         /* Convert 4G bands into a bitmask. We use a 64bit explicit bitmask so that
          * all values fit correctly. */
-        if (flag4g && mm_common_band_is_eutran (band) &&
+        if (modem_is_4g && mm_common_band_is_eutran (band) &&
             (band >= MM_MODEM_BAND_TELIT_4G_FIRST && band <= MM_MODEM_BAND_TELIT_4G_LAST))
              mask4g += B4G_FLAG (band);
     }
@@ -281,7 +281,7 @@ mm_telit_build_bnd_request (GArray    *bands_array,
     }
 
     /* Get 4G-specific telit band bitmask */
-    flag4g = (mask4g != 0) ? mask4g : -1;
+    flag4g = (mask4g != 0) ? ((gint64)mask4g) : -1;
 
     /* If the modem supports a given access tech, we must always give band settings
      * for the specific tech */
@@ -304,17 +304,17 @@ mm_telit_build_bnd_request (GArray    *bands_array,
     if (modem_is_2g && !modem_is_3g && !modem_is_4g)
         cmd = g_strdup_printf ("#BND=%d", flag2g);
     else if (!modem_is_2g && modem_is_3g && !modem_is_4g)
-        cmd = g_strdup_printf ("#BND=0,%d", flag3g);
+        cmd = g_strdup_printf ("#BND=0,%" G_GINT64_FORMAT, flag3g);
     else if (!modem_is_2g && !modem_is_3g && modem_is_4g)
-        cmd = g_strdup_printf ("#BND=0,0,%d", flag4g);
+        cmd = g_strdup_printf ("#BND=0,0,%" G_GINT64_FORMAT, flag4g);
     else if (modem_is_2g && modem_is_3g && !modem_is_4g)
-        cmd = g_strdup_printf ("#BND=%d,%d", flag2g, flag3g);
+        cmd = g_strdup_printf ("#BND=%d,%" G_GINT64_FORMAT, flag2g, flag3g);
     else if (!modem_is_2g && modem_is_3g && modem_is_4g)
-        cmd = g_strdup_printf ("#BND=0,%d,%d", flag3g, flag4g);
+        cmd = g_strdup_printf ("#BND=0,%" G_GINT64_FORMAT ",%" G_GINT64_FORMAT, flag3g, flag4g);
     else if (modem_is_2g && !modem_is_3g && modem_is_4g)
-        cmd = g_strdup_printf ("#BND=%d,0,%d", flag2g, flag4g);
+        cmd = g_strdup_printf ("#BND=%d,0,%" G_GINT64_FORMAT, flag2g, flag4g);
     else if (modem_is_2g && modem_is_3g && modem_is_4g)
-        cmd = g_strdup_printf ("#BND=%d,%d,%d", flag2g, flag3g, flag4g);
+        cmd = g_strdup_printf ("#BND=%d,%" G_GINT64_FORMAT ",%" G_GINT64_FORMAT, flag2g, flag3g, flag4g);
     else
         g_assert_not_reached ();
 

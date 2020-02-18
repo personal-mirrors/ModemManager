@@ -168,11 +168,13 @@ refresh_context_cb (MMIfaceModemSignal *self)
 static void
 teardown_refresh_context (MMIfaceModemSignal *self)
 {
-    mm_dbg ("Extended signal information reporting disabled");
     clear_values (self);
     if (G_UNLIKELY (!refresh_context_quark))
         refresh_context_quark  = g_quark_from_static_string (REFRESH_CONTEXT_TAG);
-    g_object_set_qdata (G_OBJECT (self), refresh_context_quark, NULL);
+    if (g_object_get_qdata (G_OBJECT (self), refresh_context_quark)) {
+        mm_dbg ("Extended signal information reporting disabled");
+        g_object_set_qdata (G_OBJECT (self), refresh_context_quark, NULL);
+    }
 }
 
 static gboolean
@@ -441,8 +443,8 @@ interface_initialization_step (GTask *task)
             supported_quark = (g_quark_from_static_string (
                                    SUPPORTED_TAG));
 
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_CHECK_SUPPORT:
         if (!GPOINTER_TO_UINT (g_object_get_qdata (G_OBJECT (self),
@@ -468,8 +470,8 @@ interface_initialization_step (GTask *task)
             /* If there is no implementation to check support, assume we DON'T
              * support it. */
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_FAIL_IF_UNSUPPORTED:
         if (!GPOINTER_TO_UINT (g_object_get_qdata (G_OBJECT (self),
@@ -481,8 +483,8 @@ interface_initialization_step (GTask *task)
             g_object_unref (task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_LAST:
         /* We are done without errors! */
@@ -499,6 +501,9 @@ interface_initialization_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();

@@ -637,6 +637,9 @@ set_current_capabilities_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -898,6 +901,9 @@ load_current_capabilities_step (GTask *task)
         g_task_return_int (task, priv->current_capabilities);
         g_object_unref (task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -2542,6 +2548,9 @@ setup_carrier_config_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         break;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -2817,7 +2826,7 @@ get_config_info_indication (QmiClientPdc                        *client,
     ConfigInfo               *current_config = NULL;
     guint32                   token;
     const gchar              *description;
-    int                       i;
+    guint                     i;
     guint16                   error_code = 0;
 
     ctx = g_task_get_task_data (task);
@@ -2883,7 +2892,7 @@ list_configs_indication (QmiClientPdc                      *client,
     LoadCarrierConfigContext *ctx;
     GError                   *error = NULL;
     GArray                   *configs = NULL;
-    int                       i;
+    guint                     i;
     guint16                   error_code = 0;
 
     ctx = g_task_get_task_data (task);
@@ -3034,6 +3043,9 @@ load_carrier_config_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         break;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -4204,6 +4216,7 @@ pds_set_default_tracking_session_ready (QmiClientPds *client,
         case GPS_OPERATION_MODE_STANDALONE:
             mm_dbg ("Standalone mode enabled (A-GPS disabled)");
             break;
+        case GPS_OPERATION_MODE_UNKNOWN:
         default:
             g_assert_not_reached ();
     }
@@ -4349,6 +4362,7 @@ loc_location_set_operation_mode_indication_cb (QmiClientLoc                     
         case GPS_OPERATION_MODE_STANDALONE:
             mm_dbg ("Standalone mode enabled (A-GPS disabled)");
             break;
+        case GPS_OPERATION_MODE_UNKNOWN:
         default:
             g_assert_not_reached ();
     }

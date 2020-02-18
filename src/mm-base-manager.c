@@ -41,7 +41,7 @@
 #include "mm-daemon-enums-types.h"
 #include "mm-device.h"
 #include "mm-plugin-manager.h"
-#include "mm-auth.h"
+#include "mm-auth-provider.h"
 #include "mm-plugin.h"
 #include "mm-filter.h"
 #include "mm-log.h"
@@ -192,7 +192,7 @@ device_support_check_ready (MMPluginManager          *plugin_manager,
     mm_device_set_plugin (ctx->device, G_OBJECT (plugin));
     g_object_unref (plugin);
 
-    if (!mm_device_create_modem (ctx->device, ctx->self->priv->object_manager, &error)) {
+    if (!mm_device_create_modem (ctx->device, &error)) {
         mm_warn ("Couldn't create modem for device '%s': %s",
                  mm_device_get_uid (ctx->device), error->message);
         g_error_free (error);
@@ -368,7 +368,7 @@ device_added (MMBaseManager  *manager,
                 subsys, name, physdev_uid);
 
         /* Keep the device listed in the Manager */
-        device = mm_device_new (physdev_uid, hotplugged, FALSE);
+        device = mm_device_new (physdev_uid, hotplugged, FALSE, manager->priv->object_manager);
         g_hash_table_insert (manager->priv->devices,
                              g_strdup (physdev_uid),
                              device);
@@ -1084,7 +1084,7 @@ remove_device_inhibition (MMBaseManager *self,
         GError *error = NULL;
 
         /* Uninhibit device, which will create and expose the modem object */
-        if (!mm_device_uninhibit (device, self->priv->object_manager, &error)) {
+        if (!mm_device_uninhibit (device, &error)) {
             mm_warn ("Couldn't uninhibit device: %s", error->message);
             g_error_free (error);
         }
@@ -1271,7 +1271,7 @@ handle_set_profile (MmGdbusTest *skeleton,
 
     /* Create device and keep it listed in the Manager */
     physdev_uid = g_strdup_printf ("/virtual/%s", id);
-    device = mm_device_new (physdev_uid, TRUE, TRUE);
+    device = mm_device_new (physdev_uid, TRUE, TRUE, self->priv->object_manager);
     g_hash_table_insert (self->priv->devices, physdev_uid, device);
 
     /* Grab virtual ports */
@@ -1292,7 +1292,7 @@ handle_set_profile (MmGdbusTest *skeleton,
     mm_device_set_plugin (device, G_OBJECT (plugin));
 
     /* Create modem */
-    if (!mm_device_create_modem (device, self->priv->object_manager, &error)) {
+    if (!mm_device_create_modem (device, &error)) {
         mm_warn ("Couldn't create modem for virtual device '%s': %s",
                  mm_device_get_uid (device),
                  error->message);
@@ -1439,7 +1439,7 @@ mm_base_manager_init (MMBaseManager *manager)
                                                         MMBaseManagerPrivate);
 
     /* Setup authorization provider */
-    priv->authp = mm_auth_get_provider ();
+    priv->authp = mm_auth_provider_get ();
     priv->authp_cancellable = g_cancellable_new ();
 
     /* Setup internal lists of device objects */
@@ -1558,8 +1558,7 @@ finalize (GObject *object)
     if (priv->connection)
         g_object_unref (priv->connection);
 
-    if (priv->authp)
-        g_object_unref (priv->authp);
+    /* note: authp is a singleton, we don't keep a full reference */
 
     if (priv->authp_cancellable)
         g_object_unref (priv->authp_cancellable);

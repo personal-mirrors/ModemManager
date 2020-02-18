@@ -303,6 +303,9 @@ huawei_parse_auth_type (MMBearerAllowedAuth mm_auth)
     case MM_BEARER_ALLOWED_AUTH_MSCHAPV2:
         return MM_BEARER_HUAWEI_AUTH_MSCHAPV2;
     default:
+    case MM_BEARER_ALLOWED_AUTH_UNKNOWN:
+    case MM_BEARER_ALLOWED_AUTH_MSCHAP:
+    case MM_BEARER_ALLOWED_AUTH_EAP:
         return MM_BEARER_HUAWEI_AUTH_UNKNOWN;
     }
 }
@@ -373,8 +376,7 @@ connect_3gpp_context_step (GTask *task)
         self->priv->connect_pending = task;
 
         ctx->step++;
-        /* Fall down to the next step */
-    }
+    } /* fall through */
 
     case CONNECT_3GPP_CONTEXT_STEP_NDISDUP: {
         const gchar         *apn;
@@ -487,6 +489,9 @@ connect_3gpp_context_step (GTask *task)
 
         g_object_unref (task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -700,7 +705,7 @@ disconnect_3gpp_context_step (GTask *task)
         }
 
         ctx->step++;
-        /* Fall down to the next step */
+        /* fall through */
 
     case DISCONNECT_3GPP_CONTEXT_STEP_NDISDUP:
         mm_base_modem_at_command_full (ctx->modem,
@@ -759,6 +764,9 @@ disconnect_3gpp_context_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 

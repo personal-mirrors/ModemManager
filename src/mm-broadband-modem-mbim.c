@@ -103,6 +103,7 @@ struct _MMBroadbandModemMbimPrivate {
     gboolean is_ussd_supported;
     gboolean is_atds_location_supported;
     gboolean is_atds_signal_supported;
+    gboolean is_intel_reset_supported;
 
     /* Process unsolicited notifications */
     guint notification_id;
@@ -1674,12 +1675,8 @@ signal_state_query_ready (MbimDevice *device,
             NULL, /* rssi_threshold */
             NULL, /* error_rate_threshold */
             &error)) {
-        guint32 quality;
-
         /* Normalize the quality. 99 means unknown, we default it to 0 */
-        quality = CLAMP (rssi == 99 ? 0 : rssi, 0, 31) * 100 / 31;
-
-        g_task_return_int (task, quality);
+        g_task_return_int (task, MM_CLAMP_HIGH (rssi == 99 ? 0 : rssi, 31) * 100 / 31);
     } else
         g_task_return_error (task, error);
 
@@ -1709,6 +1706,111 @@ modem_load_signal_quality (MMIfaceModem *self,
                          10,
                          NULL,
                          (GAsyncReadyCallback)signal_state_query_ready,
+                         task);
+    mbim_message_unref (message);
+}
+
+/*****************************************************************************/
+/* Reset */
+
+static gboolean
+modem_reset_finish (MMIfaceModem  *self,
+                    GAsyncResult  *res,
+                    GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+
+static void
+shared_qmi_reset_ready (MMIfaceModem *self,
+                        GAsyncResult *res,
+                        GTask        *task)
+{
+    GError *error = NULL;
+
+    if (!mm_shared_qmi_reset_finish (self, res, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_reset_shared_qmi (GTask *task)
+{
+    mm_shared_qmi_reset (MM_IFACE_MODEM (g_task_get_source_object (task)),
+                         (GAsyncReadyCallback)shared_qmi_reset_ready,
+                         task);
+}
+
+#endif
+
+static void
+intel_firmware_update_modem_reboot_set_ready (MbimDevice   *device,
+                                              GAsyncResult *res,
+                                              GTask        *task)
+{
+    MbimMessage *response;
+    GError      *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+        /* We don't really expect the Intel firmware update service to be
+         * available in QMI modems, but doesn't harm to fallback to the QMI
+         * implementation here */
+        mm_dbg ("Couldn't run intel reset: %s", error->message);
+        g_error_free (error);
+        modem_reset_shared_qmi (task);
+#else
+        g_task_return_error (task, error);
+        g_object_unref (task);
+#endif
+    } else {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+    }
+
+    if (response)
+        mbim_message_unref (response);
+}
+
+static void
+modem_reset (MMIfaceModem        *_self,
+             GAsyncReadyCallback  callback,
+             gpointer             user_data)
+{
+    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
+    GTask                *task;
+    MbimDevice           *device;
+    MbimMessage          *message;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    if (!self->priv->is_intel_reset_supported) {
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+        modem_reset_shared_qmi (task);
+#else
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "modem reset operation is not supported");
+        g_object_unref (task);
+#endif
+        return;
+    }
+
+    /* This message is defined in the Intel Firmware Update service, but it
+     * really is just a standard modem reboot. */
+    message = mbim_message_intel_firmware_update_modem_reboot_set_new (NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)intel_firmware_update_modem_reboot_set_ready,
                          task);
     mbim_message_unref (message);
 }
@@ -2020,45 +2122,58 @@ query_device_services_ready (MbimDevice   *device,
 
         for (i = 0; i < device_services_count; i++) {
             MbimService service;
-            guint32 j;
+            guint32     j;
 
             service = mbim_uuid_to_service (&device_services[i]->device_service_id);
 
-            switch (service) {
-                case MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS:
-                    for (j = 0; j < device_services[i]->cids_count; j++) {
-                        if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_PCO) {
-                            mm_dbg ("PCO is supported");
-                            self->priv->is_pco_supported = TRUE;
-                        } else if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_LTE_ATTACH_STATUS) {
-                            mm_dbg ("LTE attach status is supported");
-                            self->priv->is_lte_attach_status_supported = TRUE;
-                        }
+            if (service == MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS) {
+                for (j = 0; j < device_services[i]->cids_count; j++) {
+                    if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_PCO) {
+                        mm_dbg ("PCO is supported");
+                        self->priv->is_pco_supported = TRUE;
+                    } else if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_LTE_ATTACH_STATUS) {
+                        mm_dbg ("LTE attach status is supported");
+                        self->priv->is_lte_attach_status_supported = TRUE;
                     }
-                    break;
-                case MBIM_SERVICE_USSD:
-                    for (j = 0; j < device_services[i]->cids_count; j++) {
-                        if (device_services[i]->cids[j] == MBIM_CID_USSD) {
-                            mm_dbg ("USSD is supported");
-                            self->priv->is_ussd_supported = TRUE;
-                            break;
-                        }
-                    }
-                    break;
-                case MBIM_SERVICE_ATDS:
-                    for (j = 0; j < device_services[i]->cids_count; j++) {
-                        if (device_services[i]->cids[j] == MBIM_CID_ATDS_LOCATION) {
-                            mm_dbg ("ATDS location is supported");
-                            self->priv->is_atds_location_supported = TRUE;
-                        } else if (device_services[i]->cids[j] == MBIM_CID_ATDS_SIGNAL) {
-                            mm_dbg ("ATDS signal is supported");
-                            self->priv->is_atds_signal_supported = TRUE;
-                        }
-                    }
-                    break;
-                default:
-                    break;
+                }
+                continue;
             }
+
+            if (service == MBIM_SERVICE_USSD) {
+                for (j = 0; j < device_services[i]->cids_count; j++) {
+                    if (device_services[i]->cids[j] == MBIM_CID_USSD) {
+                        mm_dbg ("USSD is supported");
+                        self->priv->is_ussd_supported = TRUE;
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            if (service == MBIM_SERVICE_ATDS) {
+                for (j = 0; j < device_services[i]->cids_count; j++) {
+                    if (device_services[i]->cids[j] == MBIM_CID_ATDS_LOCATION) {
+                        mm_dbg ("ATDS location is supported");
+                        self->priv->is_atds_location_supported = TRUE;
+                    } else if (device_services[i]->cids[j] == MBIM_CID_ATDS_SIGNAL) {
+                        mm_dbg ("ATDS signal is supported");
+                        self->priv->is_atds_signal_supported = TRUE;
+                    }
+                }
+                continue;
+            }
+
+            if (service == MBIM_SERVICE_INTEL_FIRMWARE_UPDATE) {
+                for (j = 0; j < device_services[i]->cids_count; j++) {
+                    if (device_services[i]->cids[j] == MBIM_CID_INTEL_FIRMWARE_UPDATE_MODEM_REBOOT) {
+                        mm_dbg ("Intel reset is supported");
+                        self->priv->is_intel_reset_supported = TRUE;
+                    }
+                }
+                continue;
+            }
+
+            /* no optional features to check in remaining services */
         }
         mbim_device_service_element_array_free (device_services);
     } else {
@@ -2450,18 +2565,26 @@ lte_attach_status_query_ready (MbimDevice   *device,
 }
 
 static void
-modem_3gpp_load_initial_eps_bearer (MMIfaceModem3gpp    *self,
+modem_3gpp_load_initial_eps_bearer (MMIfaceModem3gpp    *_self,
                                     GAsyncReadyCallback  callback,
                                     gpointer             user_data)
 {
-    MbimDevice  *device;
-    MbimMessage *message;
-    GTask       *task;
+    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
+    MbimDevice           *device;
+    MbimMessage          *message;
+    GTask                *task;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
 
     task = g_task_new (self, NULL, callback, user_data);
+
+    if (!self->priv->is_lte_attach_status_supported) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "LTE attach status is unsupported");
+        g_object_unref (task);
+        return;
+    }
 
     message = mbim_message_ms_basic_connect_extensions_lte_attach_status_query_new (NULL);
     mbim_device_command (device,
@@ -2570,18 +2693,26 @@ lte_attach_configuration_query_ready (MbimDevice   *device,
 }
 
 static void
-modem_3gpp_load_initial_eps_bearer_settings (MMIfaceModem3gpp    *self,
+modem_3gpp_load_initial_eps_bearer_settings (MMIfaceModem3gpp    *_self,
                                              GAsyncReadyCallback  callback,
                                              gpointer             user_data)
 {
-    MbimDevice  *device;
-    MbimMessage *message;
-    GTask       *task;
+    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
+    MbimDevice           *device;
+    MbimMessage          *message;
+    GTask                *task;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
 
     task = g_task_new (self, NULL, callback, user_data);
+
+    if (!self->priv->is_lte_attach_status_supported) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "LTE attach configuration is unsupported");
+        g_object_unref (task);
+        return;
+    }
 
     message = mbim_message_ms_basic_connect_extensions_lte_attach_configuration_query_new (NULL);
     mbim_device_command (device,
@@ -2732,19 +2863,28 @@ before_set_lte_attach_configuration_query_ready (MbimDevice   *device,
 }
 
 static void
-modem_3gpp_set_initial_eps_bearer_settings (MMIfaceModem3gpp    *self,
+modem_3gpp_set_initial_eps_bearer_settings (MMIfaceModem3gpp    *_self,
                                             MMBearerProperties  *config,
                                             GAsyncReadyCallback  callback,
                                             gpointer             user_data)
 {
-    GTask       *task;
-    MbimDevice  *device;
-    MbimMessage *message;
+    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
+    GTask                *task;
+    MbimDevice           *device;
+    MbimMessage          *message;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
 
     task = g_task_new (self, NULL, callback, user_data);
+
+    if (!self->priv->is_lte_attach_status_supported) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "LTE attach configuration is unsupported");
+        g_object_unref (task);
+        return;
+    }
+
     g_task_set_task_data (task, g_object_ref (config), g_object_unref);
 
     message = mbim_message_ms_basic_connect_extensions_lte_attach_configuration_query_new (NULL);
@@ -2777,7 +2917,7 @@ basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
         guint32 quality;
 
         /* Normalize the quality. 99 means unknown, we default it to 0 */
-        quality = CLAMP (rssi == 99 ? 0 : rssi, 0, 31) * 100 / 31;
+        quality = MM_CLAMP_HIGH (rssi == 99 ? 0 : rssi, 31) * 100 / 31;
 
         mm_dbg ("Signal state indication: %u --> %u%%", rssi, quality);
         mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
@@ -3315,6 +3455,17 @@ device_notification_cb (MbimDevice *device,
     case MBIM_SERVICE_USSD:
         ussd_notification (self, notification);
         break;
+    case MBIM_SERVICE_INVALID:
+    case MBIM_SERVICE_PHONEBOOK:
+    case MBIM_SERVICE_STK:
+    case MBIM_SERVICE_AUTH:
+    case MBIM_SERVICE_DSS:
+    case MBIM_SERVICE_MS_FIRMWARE_ID:
+    case MBIM_SERVICE_MS_HOST_SHUTDOWN:
+    case MBIM_SERVICE_PROXY_CONTROL:
+    case MBIM_SERVICE_QMI:
+    case MBIM_SERVICE_ATDS:
+    case MBIM_SERVICE_INTEL_FIRMWARE_UPDATE:
     default:
         /* Ignore */
         break;
@@ -4355,12 +4506,12 @@ atds_signal_query_ready (MbimDevice   *device,
     if (ecno <= 49) {
         if (!result->umts)
             result->umts = mm_signal_new ();
-        mm_signal_set_ecio (result->umts, -24.0 + ((float) ecno / 2));
+        mm_signal_set_ecio (result->umts, -24.0 + ((gdouble) ecno / 2));
     }
 
     if (rsrq <= 34) {
         result->lte = mm_signal_new ();
-        mm_signal_set_rsrq (result->lte, -19.5 + ((float) rsrq / 2));
+        mm_signal_set_rsrq (result->lte, -19.5 + ((gdouble) rsrq / 2));
     }
 
     if (rsrp <= 97) {
@@ -4661,6 +4812,7 @@ process_ussd_message (MMBroadbandModemMbim *self,
             g_task_return_pointer (task, converted, g_free);
         else
             g_assert_not_reached ();
+        g_object_unref (task);
         return;
     }
 
@@ -4894,6 +5046,8 @@ modem_3gpp_ussd_send (MMIfaceModem3gppUssd *_self,
         case MM_MODEM_3GPP_USSD_SESSION_STATE_USER_RESPONSE:
             action = MBIM_USSD_ACTION_CONTINUE;
             break;
+        case MM_MODEM_3GPP_USSD_SESSION_STATE_UNKNOWN:
+        case MM_MODEM_3GPP_USSD_SESSION_STATE_ACTIVE:
         default:
             g_assert_not_reached ();
             return;
@@ -4954,14 +5108,14 @@ ussd_cancel_ready (MbimDevice   *device,
 
     /* Complete the pending action, regardless of the operation result */
     if (self->priv->pending_ussd_action) {
-        GTask *task;
+        GTask *pending_task;
 
-        task = self->priv->pending_ussd_action;
+        pending_task = self->priv->pending_ussd_action;
         self->priv->pending_ussd_action = NULL;
 
-        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
+        g_task_return_new_error (pending_task, MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
                                  "USSD session was cancelled");
-        g_object_unref (task);
+        g_object_unref (pending_task);
     }
 
     mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
@@ -5287,11 +5441,14 @@ mm_broadband_modem_mbim_init (MMBroadbandModemMbim *self)
 }
 
 static void
-finalize (GObject *object)
+dispose (GObject *object)
 {
     MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (object);
     MMPortMbim *mbim;
 
+    /* If any port cleanup is needed, it must be done during dispose(), as
+     * the modem object will be affected by an explciit g_object_run_dispose()
+     * that will remove all port references right away */
     mbim = mm_base_modem_peek_port_mbim (MM_BASE_MODEM (self));
     if (mbim) {
         /* Explicitly remove notification handler */
@@ -5304,12 +5461,20 @@ finalize (GObject *object)
             mm_port_mbim_close (mbim, NULL, NULL);
     }
 
+    G_OBJECT_CLASS (mm_broadband_modem_mbim_parent_class)->dispose (object);
+}
+
+static void
+finalize (GObject *object)
+{
+    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (object);
+
     g_free (self->priv->caps_device_id);
     g_free (self->priv->caps_firmware_info);
     g_free (self->priv->caps_hardware_info);
     g_free (self->priv->current_operator_id);
     g_free (self->priv->current_operator_name);
-    mm_pco_list_free (self->priv->pco_list);
+    g_list_free_full (self->priv->pco_list, g_object_unref);
 
     G_OBJECT_CLASS (mm_broadband_modem_mbim_parent_class)->finalize (object);
 }
@@ -5354,6 +5519,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface->modem_power_up_finish = power_up_finish;
     iface->modem_power_down = modem_power_down;
     iface->modem_power_down_finish = power_down_finish;
+    iface->reset = modem_reset;
+    iface->reset_finish = modem_reset_finish;
     iface->load_supported_ip_families = modem_load_supported_ip_families;
     iface->load_supported_ip_families_finish = modem_load_supported_ip_families_finish;
 
@@ -5400,8 +5567,6 @@ iface_modem_init (MMIfaceModem *iface)
 
     /* Other actions */
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
-    iface->reset = mm_shared_qmi_reset;
-    iface->reset_finish = mm_shared_qmi_reset_finish;
     iface->factory_reset = mm_shared_qmi_factory_reset;
     iface->factory_reset_finish = mm_shared_qmi_factory_reset_finish;
 #endif
@@ -5570,6 +5735,7 @@ mm_broadband_modem_mbim_class_init (MMBroadbandModemMbimClass *klass)
 
     g_type_class_add_private (object_class, sizeof (MMBroadbandModemMbimPrivate));
 
+    object_class->dispose = dispose;
     object_class->finalize = finalize;
 
     broadband_modem_class->initialization_started = initialization_started;

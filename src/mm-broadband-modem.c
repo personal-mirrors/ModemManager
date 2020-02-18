@@ -418,7 +418,7 @@ broadband_bearer_new_ready (GObject *source,
 
 static void
 modem_create_bearer (MMIfaceModem *self,
-                     MMBearerProperties *properties,
+                     MMBearerProperties *props,
                      GAsyncReadyCallback callback,
                      gpointer user_data)
 {
@@ -429,7 +429,7 @@ modem_create_bearer (MMIfaceModem *self,
     /* We just create a MMBroadbandBearer */
     mm_dbg ("Creating Broadband bearer in broadband modem");
     mm_broadband_bearer_new (MM_BROADBAND_MODEM (self),
-                             properties,
+                             props,
                              NULL, /* cancellable */
                              (GAsyncReadyCallback)broadband_bearer_new_ready,
                              task);
@@ -543,7 +543,7 @@ out:
 }
 
 typedef struct {
-    gchar *name;
+    const gchar *name;
     MMModemCapability bits;
 } ModemCaps;
 
@@ -1508,6 +1508,7 @@ csim_ready (MMBaseModem  *self,
     LoadUnlockRetriesContext *ctx;
     const gchar              *response;
     GError                   *error = NULL;
+    gint                      val;
 
     ctx = g_task_get_task_data (task);
 
@@ -1516,19 +1517,21 @@ csim_ready (MMBaseModem  *self,
         mm_dbg ("Couldn't load retry count for lock '%s': %s",
                 mm_modem_lock_get_string (unlock_retries_map[ctx->i].lock),
                 error->message);
-        g_error_free (error);
-    } else {
-        gint val;
-        GError *error = NULL;
-
-        val = mm_parse_csim_response (response, &error);
-        if (val < 0) {
-            mm_warn ("Parse error in step %d: %s.", ctx->i, error->message);
-            mm_dbg ("Couldn't parse retry count value for lock '%s'",
-                    mm_modem_lock_get_string (unlock_retries_map[ctx->i].lock));
-        } else
-           mm_unlock_retries_set (ctx->retries, unlock_retries_map[ctx->i].lock, val);
+        goto next;
     }
+
+    val = mm_parse_csim_response (response, &error);
+    if (val < 0) {
+        mm_dbg ("Couldn't parse retry count value for lock '%s': %s",
+                mm_modem_lock_get_string (unlock_retries_map[ctx->i].lock),
+                error->message);
+        goto next;
+    }
+
+    mm_unlock_retries_set (ctx->retries, unlock_retries_map[ctx->i].lock, val);
+
+next:
+    g_clear_error (&error);
 
     /* Go to next lock value */
     ctx->i++;
@@ -2461,6 +2464,8 @@ access_tech_and_mask_new (AccessTechContext *ctx)
             act = MM_MODEM_ACCESS_TECHNOLOGY_LTE;
             mask = MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK;
             break;
+        default:
+            break;
         }
     }
 
@@ -2839,18 +2844,19 @@ static void
 cgev_process_detach (MMBroadbandModem *self,
                      MM3gppCgev        type)
 {
-    switch (type) {
-    case MM_3GPP_CGEV_NW_DETACH:
+    if (type == MM_3GPP_CGEV_NW_DETACH) {
         mm_info ("network forced PS detach: all contexts have been deactivated");
         bearer_list_report_disconnections (self, 0);
-        break;
-    case MM_3GPP_CGEV_ME_DETACH:
+        return;
+    }
+
+    if (type == MM_3GPP_CGEV_ME_DETACH) {
         mm_info ("mobile equipment forced PS detach: all contexts have been deactivated");
         bearer_list_report_disconnections (self, 0);
-        break;
-    default:
-        g_assert_not_reached ();
+        return;
     }
+
+    g_assert_not_reached ();
 }
 
 static void
@@ -2882,6 +2888,21 @@ cgev_process_primary (MMBroadbandModem *self,
         mm_info ("mobile equipment request to deactivate context (cid %u)", cid);
         bearer_list_report_disconnections (self, cid);
         break;
+    case MM_3GPP_CGEV_UNKNOWN:
+    case MM_3GPP_CGEV_NW_DETACH:
+    case MM_3GPP_CGEV_ME_DETACH:
+    case MM_3GPP_CGEV_NW_CLASS:
+    case MM_3GPP_CGEV_ME_CLASS:
+    case MM_3GPP_CGEV_NW_ACT_SECONDARY:
+    case MM_3GPP_CGEV_ME_ACT_SECONDARY:
+    case MM_3GPP_CGEV_NW_DEACT_SECONDARY:
+    case MM_3GPP_CGEV_ME_DEACT_SECONDARY:
+    case MM_3GPP_CGEV_NW_DEACT_PDP:
+    case MM_3GPP_CGEV_ME_DEACT_PDP:
+    case MM_3GPP_CGEV_NW_MODIFY:
+    case MM_3GPP_CGEV_ME_MODIFY:
+    case MM_3GPP_CGEV_REJECT:
+    case MM_3GPP_CGEV_NW_REACT:
     default:
         g_assert_not_reached ();
         break;
@@ -2918,6 +2939,21 @@ cgev_process_secondary (MMBroadbandModem *self,
         mm_info ("mobile equipment request to deactivate secondary context (cid %u, primary cid %u)", cid, p_cid);
         bearer_list_report_disconnections (self, cid);
         break;
+    case MM_3GPP_CGEV_UNKNOWN:
+    case MM_3GPP_CGEV_NW_DETACH:
+    case MM_3GPP_CGEV_ME_DETACH:
+    case MM_3GPP_CGEV_NW_CLASS:
+    case MM_3GPP_CGEV_ME_CLASS:
+    case MM_3GPP_CGEV_NW_ACT_PRIMARY:
+    case MM_3GPP_CGEV_ME_ACT_PRIMARY:
+    case MM_3GPP_CGEV_NW_DEACT_PRIMARY:
+    case MM_3GPP_CGEV_ME_DEACT_PRIMARY:
+    case MM_3GPP_CGEV_NW_DEACT_PDP:
+    case MM_3GPP_CGEV_ME_DEACT_PDP:
+    case MM_3GPP_CGEV_NW_MODIFY:
+    case MM_3GPP_CGEV_ME_MODIFY:
+    case MM_3GPP_CGEV_REJECT:
+    case MM_3GPP_CGEV_NW_REACT:
     default:
         g_assert_not_reached ();
         break;
@@ -2965,6 +3001,21 @@ cgev_process_pdp (MMBroadbandModem *self,
         } else
             mm_info ("mobile equipment request to deactivate context (type %s, address %s, cid unknown)", pdp_type, pdp_addr);
         break;
+    case MM_3GPP_CGEV_UNKNOWN:
+    case MM_3GPP_CGEV_NW_DETACH:
+    case MM_3GPP_CGEV_ME_DETACH:
+    case MM_3GPP_CGEV_NW_CLASS:
+    case MM_3GPP_CGEV_ME_CLASS:
+    case MM_3GPP_CGEV_NW_ACT_PRIMARY:
+    case MM_3GPP_CGEV_ME_ACT_PRIMARY:
+    case MM_3GPP_CGEV_NW_ACT_SECONDARY:
+    case MM_3GPP_CGEV_ME_ACT_SECONDARY:
+    case MM_3GPP_CGEV_NW_DEACT_PRIMARY:
+    case MM_3GPP_CGEV_ME_DEACT_PRIMARY:
+    case MM_3GPP_CGEV_NW_DEACT_SECONDARY:
+    case MM_3GPP_CGEV_ME_DEACT_SECONDARY:
+    case MM_3GPP_CGEV_NW_MODIFY:
+    case MM_3GPP_CGEV_ME_MODIFY:
     default:
         g_assert_not_reached ();
         break;
@@ -3017,6 +3068,7 @@ cgev_received (MMPortSerialAt   *port,
     case MM_3GPP_CGEV_ME_MODIFY:
         /* ignore */
         break;
+    case MM_3GPP_CGEV_UNKNOWN:
     default:
         mm_dbg ("unhandled +CGEV indication: %s", str);
         break;
@@ -3058,41 +3110,47 @@ set_cgev_unsolicited_events_handlers (MMBroadbandModem *self,
 }
 
 static void
-ciev_received (MMPortSerialAt *port,
-               GMatchInfo *info,
+ciev_signal_received (MMBroadbandModem *self,
+                      GMatchInfo       *match_info)
+{
+    guint quality;
+
+    if (!mm_get_uint_from_match_info (match_info, 2, &quality)) {
+        mm_dbg ("Couldn't parse signal quality value from +CIEV");
+        return;
+    }
+
+    mm_iface_modem_update_signal_quality (
+        MM_IFACE_MODEM (self),
+        normalize_ciev_cind_signal_quality (quality,
+                                            self->priv->modem_cind_min_signal_quality,
+                                            self->priv->modem_cind_max_signal_quality));
+}
+
+static void
+ciev_received (MMPortSerialAt   *port,
+               GMatchInfo       *match_info,
                MMBroadbandModem *self)
 {
-    gint ind = 0;
+    guint  ind;
     gchar *item;
 
-    item = g_match_info_fetch (info, 1);
-    if (item)
-        ind = atoi (item);
+    item = mm_get_string_unquoted_from_match_info (match_info, 1);
+    if (!item)
+        return;
 
-    /* Handle signal quality change indication */
-    if (ind == self->priv->modem_cind_indicator_signal_quality ||
-        g_str_equal (item, "signal")) {
-        gchar *value;
-
-        value = g_match_info_fetch (info, 2);
-        if (value) {
-            gint quality = 0;
-
-            quality = atoi (value);
-
-            mm_iface_modem_update_signal_quality (
-                MM_IFACE_MODEM (self),
-                normalize_ciev_cind_signal_quality (quality,
-                                                    self->priv->modem_cind_min_signal_quality,
-                                                    self->priv->modem_cind_max_signal_quality));
-            g_free (value);
-        }
+    /* numeric index? */
+    if (mm_get_uint_from_str (item, &ind)) {
+        if (ind == self->priv->modem_cind_indicator_signal_quality)
+            ciev_signal_received (self, match_info);
+    }
+    /* string index? */
+    else {
+        if (g_str_equal (item, "signal"))
+            ciev_signal_received (self, match_info);
     }
 
     g_free (item);
-
-    /* FIXME: handle roaming and service indicators.
-     * ... wait, arent these already handle by unsolicited CREG responses? */
 }
 
 static void
@@ -3542,14 +3600,14 @@ typedef struct {
      *  First one with quotes
      *  Second without.
      *  + last NUL */
-    MMBaseModemAtCommand charset_commands[3];
+    MMBaseModemAtCommandAlloc charset_commands[3];
 } SetupCharsetContext;
 
 static void
 setup_charset_context_free (SetupCharsetContext *ctx)
 {
-    g_free (ctx->charset_commands[0].command);
-    g_free (ctx->charset_commands[1].command);
+    mm_base_modem_at_command_alloc_clear (&ctx->charset_commands[0]);
+    mm_base_modem_at_command_alloc_clear (&ctx->charset_commands[1]);
     g_free (ctx);
 }
 
@@ -3677,7 +3735,7 @@ modem_setup_charset (MMIfaceModem *self,
     /* Launch sequence */
     mm_base_modem_at_sequence (
         MM_BASE_MODEM (self),
-        ctx->charset_commands,
+        (const MMBaseModemAtCommand *)ctx->charset_commands,
         NULL, /* response_processor_context */
         NULL, /* response_processor_context_free */
         (GAsyncReadyCallback)charset_change_ready,
@@ -3851,6 +3909,7 @@ ifc_test_ready (MMBaseModem  *_self,
     case MM_FLOW_CONTROL_NONE:
         cmd = "+IFC=0,0";
         break;
+    case MM_FLOW_CONTROL_UNKNOWN:
     default:
         g_assert_not_reached ();
     }
@@ -4646,7 +4705,7 @@ modem_3gpp_scan_networks_finish (MMIfaceModem3gpp *self,
     if (!result)
         return NULL;
 
-    return mm_3gpp_parse_cops_test_response (result, error);
+    return mm_3gpp_parse_cops_test_response (result, MM_BROADBAND_MODEM (self)->priv->modem_current_charset, error);
 }
 
 static void
@@ -4666,34 +4725,105 @@ modem_3gpp_scan_networks (MMIfaceModem3gpp *self,
 /* Register in network (3GPP interface) */
 
 static gboolean
-modem_3gpp_register_in_network_finish (MMIfaceModem3gpp *self,
-                                       GAsyncResult *res,
-                                       GError **error)
+modem_3gpp_register_in_network_finish (MMIfaceModem3gpp  *self,
+                                       GAsyncResult      *res,
+                                       GError           **error)
 {
-    return !!mm_base_modem_at_command_full_finish (MM_BASE_MODEM (self), res, error);
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
-modem_3gpp_register_in_network (MMIfaceModem3gpp *self,
-                                const gchar *operator_id,
-                                GCancellable *cancellable,
-                                GAsyncReadyCallback callback,
-                                gpointer user_data)
+cops_set_ready (MMBaseModem  *self,
+                GAsyncResult *res,
+                GTask        *task)
 {
+    GError *error = NULL;
+
+    if (!mm_base_modem_at_command_full_finish (MM_BASE_MODEM (self), res, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+cops_ascii_set_ready (MMBaseModem  *self,
+                      GAsyncResult *res,
+                      GTask        *task)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_at_command_full_finish (MM_BASE_MODEM (self), res, &error)) {
+        /* If it failed with an unsupported error, retry with current modem charset */
+        if (g_error_matches (error, MM_MOBILE_EQUIPMENT_ERROR, MM_MOBILE_EQUIPMENT_ERROR_NOT_SUPPORTED)) {
+            gchar *operator_id;
+            gchar *operator_id_current_charset;
+
+            operator_id = g_task_get_task_data (task);
+            operator_id_current_charset = mm_broadband_modem_take_and_convert_to_current_charset (MM_BROADBAND_MODEM (self), g_strdup (operator_id));
+
+            if (g_strcmp0 (operator_id, operator_id_current_charset) != 0) {
+                gchar *command;
+
+                command = g_strdup_printf ("+COPS=1,2,\"%s\"", operator_id_current_charset);
+                mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                               mm_base_modem_peek_best_at_port (MM_BASE_MODEM (self), NULL),
+                                               command,
+                                               120,
+                                               FALSE,
+                                               FALSE, /* raw */
+                                               g_task_get_cancellable (task),
+                                               (GAsyncReadyCallback)cops_set_ready,
+                                               task);
+                g_error_free (error);
+                g_free (operator_id_current_charset);
+                g_free (command);
+                return;
+            }
+            /* operator id string would be the same on the current charset,
+             * so fallback and return the not supported error */
+            g_free (operator_id_current_charset);
+        }
+        g_task_return_error (task, error);
+    } else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_register_in_network (MMIfaceModem3gpp    *self,
+                                const gchar         *operator_id,
+                                GCancellable        *cancellable,
+                                GAsyncReadyCallback  callback,
+                                gpointer             user_data)
+{
+    GTask *task;
     gchar *command;
 
-    /* If the user sent a specific network to use, lock it in. */
-    if (operator_id)
-        command = g_strdup_printf ("+COPS=1,2,\"%s\"", operator_id);
-    /* If no specific network was given, and the modem is not registered and not
-     * searching, kick it to search for a network. Also do auto registration if
-     * the modem had been set to manual registration last time but now is not.
-     */
-    else
+    task = g_task_new (self, cancellable, callback, user_data);
+
+    /* Trigger automatic network registration if no explicit operator id given */
+    if (!operator_id) {
         /* Note that '+COPS=0,,' (same but with commas) won't work in some Nokia
          * phones */
-        command = g_strdup ("+COPS=0");
+        mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                       mm_base_modem_peek_best_at_port (MM_BASE_MODEM (self), NULL),
+                                       "+COPS=0",
+                                       120,
+                                       FALSE,
+                                       FALSE, /* raw */
+                                       cancellable,
+                                       (GAsyncReadyCallback)cops_set_ready,
+                                       task);
+        return;
+    }
 
+    /* Store operator id in context, in case we need to retry with the current
+     * modem charset */
+    g_task_set_task_data (task, g_strdup (operator_id), g_free);
+
+    /* Use the operator id given in ASCII initially */
+    command = g_strdup_printf ("+COPS=1,2,\"%s\"", operator_id);
     mm_base_modem_at_command_full (MM_BASE_MODEM (self),
                                    mm_base_modem_peek_best_at_port (MM_BASE_MODEM (self), NULL),
                                    command,
@@ -4701,8 +4831,8 @@ modem_3gpp_register_in_network (MMIfaceModem3gpp *self,
                                    FALSE,
                                    FALSE, /* raw */
                                    cancellable,
-                                   callback,
-                                   user_data);
+                                   (GAsyncReadyCallback)cops_ascii_set_ready,
+                                   task);
     g_free (command);
 }
 
@@ -5408,14 +5538,14 @@ cancel_command_ready (MMBroadbandModem *self,
 
     /* Complete the pending action, regardless of the CUSD result */
     if (self->priv->pending_ussd_action) {
-        GTask *task;
+        GTask *pending_task;
 
-        task = self->priv->pending_ussd_action;
+        pending_task = self->priv->pending_ussd_action;
         self->priv->pending_ussd_action = NULL;
 
-        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
+        g_task_return_new_error (pending_task, MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
                                  "USSD session was cancelled");
-        g_object_unref (task);
+        g_object_unref (pending_task);
     }
 
     mm_iface_modem_3gpp_ussd_update_state (MM_IFACE_MODEM_3GPP_USSD (self),
@@ -7503,7 +7633,7 @@ set_voice_in_call_unsolicited_events_handlers (MMBroadbandModem *self,
     GRegex         *in_call_event_regex;
     guint           i;
 
-    in_call_event_regex = g_regex_new ("\\r\\n(NO CARRIER|BUSY|NO ANSWER|NO DIALTONE)\\r\\n$",
+    in_call_event_regex = g_regex_new ("\\r\\n(NO CARRIER|BUSY|NO ANSWER|NO DIALTONE)(\\r)?\\r\\n$",
                                        G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 
     ports[0] = MM_PORT_SERIAL_AT (ports_ctx->primary);
@@ -7543,7 +7673,7 @@ modem_voice_setup_in_call_unsolicited_events (MMIfaceModemVoice   *_self,
 
         mm_dbg ("Setting up in-call ports context");
         ctx = ports_context_new ();
-        if (!ports_context_open (self, ctx, FALSE, FALSE, FALSE, &error)) {
+        if (!ports_context_open (self, ctx, FALSE, TRUE, FALSE, &error)) {
             ports_context_unref (ctx);
             g_prefix_error (&error, "Couldn't open ports in-call: ");
         } else {
@@ -7828,7 +7958,7 @@ run_voice_unsolicited_events_setup (GTask *task)
     }
     /* CLIP on secondary port */
     else if (!ctx->clip_secondary_done && ctx->clip_command && ctx->secondary) {
-        mm_dbg ("%s +CLIP calling line reporting in primary port...", ctx->enable ? "Enabling" : "Disabling");
+        mm_dbg ("%s +CLIP calling line reporting in secondary port...", ctx->enable ? "Enabling" : "Disabling");
         ctx->clip_secondary_done = TRUE;
         command = ctx->clip_command;
         port = ctx->secondary;
@@ -9870,7 +10000,7 @@ setup_ports (MMBroadbandModem *self)
     MMPortSerialAt *ports[2];
     GRegex *regex;
     GPtrArray *array;
-    gint i, j;
+    guint i, j;
 
     ports[0] = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
     ports[1] = mm_base_modem_peek_port_secondary (MM_BASE_MODEM (self));
@@ -9967,34 +10097,6 @@ initialization_started_finish (MMBroadbandModem *self,
                                GError **error)
 {
     return g_task_propagate_pointer (G_TASK (res), error);
-}
-
-static gboolean
-open_ports_initialization (MMBroadbandModem *self,
-                           PortsContext *ctx,
-                           GError **error)
-{
-    ctx->primary = mm_base_modem_get_port_primary (MM_BASE_MODEM (self));
-    if (!ctx->primary) {
-        g_set_error (error,
-                     MM_CORE_ERROR,
-                     MM_CORE_ERROR_FAILED,
-                     "Couldn't get primary port");
-        return FALSE;
-    }
-
-    /* Open and send first commands to the primary serial port.
-     * We do keep the primary port open during the whole initialization
-     * sequence. Note that this port is not really passed to the interfaces,
-     * they will get the primary port themselves. */
-    if (!mm_port_serial_open (MM_PORT_SERIAL (ctx->primary), error)) {
-        g_prefix_error (error, "Couldn't open primary port: ");
-        return FALSE;
-    }
-
-    ctx->primary_open = TRUE;
-
-    return TRUE;
 }
 
 static void
@@ -10426,6 +10528,15 @@ disabling_wait_for_final_state_ready (MMIfaceModem *self,
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+    case MM_MODEM_STATE_INITIALIZING:
+    case MM_MODEM_STATE_DISABLING:
+    case MM_MODEM_STATE_ENABLING:
+    case MM_MODEM_STATE_ENABLED:
+    case MM_MODEM_STATE_SEARCHING:
+    case MM_MODEM_STATE_REGISTERED:
+    case MM_MODEM_STATE_DISCONNECTING:
+    case MM_MODEM_STATE_CONNECTING:
+    case MM_MODEM_STATE_CONNECTED:
     default:
         break;
     }
@@ -10454,8 +10565,8 @@ disabling_step (GTask *task)
 
     switch (ctx->step) {
     case DISABLING_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_WAIT_FOR_FINAL_STATE:
         mm_iface_modem_wait_for_final_state (MM_IFACE_MODEM (ctx->self),
@@ -10472,16 +10583,16 @@ disabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_SIMPLE:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_FIRMWARE:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_VOICE:
         if (ctx->self->priv->modem_voice_dbus_skeleton) {
@@ -10492,8 +10603,8 @@ disabling_step (GTask *task)
                                           task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_SIGNAL:
         if (ctx->self->priv->modem_signal_dbus_skeleton) {
@@ -10504,8 +10615,8 @@ disabling_step (GTask *task)
                                            task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_OMA:
         if (ctx->self->priv->modem_oma_dbus_skeleton) {
@@ -10516,8 +10627,8 @@ disabling_step (GTask *task)
                                         task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_TIME:
         if (ctx->self->priv->modem_time_dbus_skeleton) {
@@ -10528,8 +10639,8 @@ disabling_step (GTask *task)
                                          task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_MESSAGING:
         if (ctx->self->priv->modem_messaging_dbus_skeleton) {
@@ -10540,8 +10651,8 @@ disabling_step (GTask *task)
                                               task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_LOCATION:
         if (ctx->self->priv->modem_location_dbus_skeleton) {
@@ -10552,8 +10663,8 @@ disabling_step (GTask *task)
                                              task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_CDMA:
         if (ctx->self->priv->modem_cdma_dbus_skeleton) {
@@ -10564,8 +10675,8 @@ disabling_step (GTask *task)
                                         task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_3GPP_USSD:
         if (ctx->self->priv->modem_3gpp_ussd_dbus_skeleton) {
@@ -10576,8 +10687,8 @@ disabling_step (GTask *task)
                                               task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_3GPP:
         if (ctx->self->priv->modem_3gpp_dbus_skeleton) {
@@ -10588,8 +10699,8 @@ disabling_step (GTask *task)
                                         task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_IFACE_MODEM:
         /* This skeleton may be NULL when mm_base_modem_disable() gets called at
@@ -10601,8 +10712,8 @@ disabling_step (GTask *task)
                                     task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_LAST:
         ctx->disabled = TRUE;
@@ -10610,6 +10721,9 @@ disabling_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -10800,8 +10914,8 @@ enabling_step (GTask *task)
 
     switch (ctx->step) {
     case ENABLING_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_WAIT_FOR_FINAL_STATE:
         mm_iface_modem_wait_for_final_state (MM_IFACE_MODEM (ctx->self),
@@ -10818,8 +10932,8 @@ enabling_step (GTask *task)
                                                                         task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_IFACE_MODEM:
         g_assert (ctx->self->priv->modem_dbus_skeleton != NULL);
@@ -10840,8 +10954,8 @@ enabling_step (GTask *task)
                                         task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_IFACE_3GPP_USSD:
         if (ctx->self->priv->modem_3gpp_ussd_dbus_skeleton) {
@@ -10851,8 +10965,8 @@ enabling_step (GTask *task)
                                              task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_IFACE_CDMA:
         if (ctx->self->priv->modem_cdma_dbus_skeleton) {
@@ -10864,8 +10978,8 @@ enabling_step (GTask *task)
                                         task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_IFACE_LOCATION:
         if (ctx->self->priv->modem_location_dbus_skeleton) {
@@ -10877,8 +10991,8 @@ enabling_step (GTask *task)
                                             task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_IFACE_MESSAGING:
         if (ctx->self->priv->modem_messaging_dbus_skeleton) {
@@ -10890,8 +11004,8 @@ enabling_step (GTask *task)
                                              task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_IFACE_TIME:
         if (ctx->self->priv->modem_time_dbus_skeleton) {
@@ -10903,8 +11017,8 @@ enabling_step (GTask *task)
                                         task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case ENABLING_STEP_IFACE_SIGNAL:
         if (ctx->self->priv->modem_signal_dbus_skeleton) {
@@ -10916,8 +11030,8 @@ enabling_step (GTask *task)
                                           task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case ENABLING_STEP_IFACE_OMA:
         if (ctx->self->priv->modem_oma_dbus_skeleton) {
@@ -10929,8 +11043,8 @@ enabling_step (GTask *task)
                                        task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case ENABLING_STEP_IFACE_VOICE:
         if (ctx->self->priv->modem_voice_dbus_skeleton) {
@@ -10942,16 +11056,16 @@ enabling_step (GTask *task)
                                          task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case ENABLING_STEP_IFACE_FIRMWARE:
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case ENABLING_STEP_IFACE_SIMPLE:
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case ENABLING_STEP_LAST:
         ctx->enabled = TRUE;
@@ -10969,6 +11083,9 @@ enabling_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -11033,6 +11150,9 @@ enable (MMBaseModem *self,
         /* Just return success, don't relaunch enabling */
         g_task_return_boolean (task, TRUE);
         break;
+
+    default:
+        g_assert_not_reached ();
     }
 
     g_object_unref (task);
@@ -11258,14 +11378,14 @@ initialize_step (GTask *task)
 
     switch (ctx->step) {
     case INITIALIZE_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_SETUP_PORTS:
         if (MM_BROADBAND_MODEM_GET_CLASS (ctx->self)->setup_ports)
             MM_BROADBAND_MODEM_GET_CLASS (ctx->self)->setup_ports (ctx->self);
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_STARTED:
         if (MM_BROADBAND_MODEM_GET_CLASS (ctx->self)->initialization_started &&
@@ -11275,8 +11395,8 @@ initialize_step (GTask *task)
                                                                               task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_SETUP_SIMPLE_STATUS:
         /* Simple status must be created before any interface initialization,
@@ -11284,8 +11404,8 @@ initialize_step (GTask *task)
          */
         if (!ctx->self->priv->modem_simple_status)
             ctx->self->priv->modem_simple_status = mm_simple_status_new ();
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_IFACE_MODEM:
         /* Initialize the Modem interface */
@@ -11305,8 +11425,8 @@ initialize_step (GTask *task)
             return;
         }
 
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_IFACE_3GPP_USSD:
         if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (ctx->self))) {
@@ -11316,8 +11436,8 @@ initialize_step (GTask *task)
                                                  task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_IFACE_CDMA:
         if (mm_iface_modem_is_cdma (MM_IFACE_MODEM (ctx->self))) {
@@ -11328,8 +11448,8 @@ initialize_step (GTask *task)
                                             task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_IFACE_LOCATION:
         /* Initialize the Location interface */
@@ -11373,9 +11493,9 @@ initialize_step (GTask *task)
 
     case INITIALIZE_STEP_FALLBACK_LIMITED:
         /* All the initialization steps after this one will be run both on
-         * successful and locked/failed initializations.
-         * Fall down to next step */
+         * successful and locked/failed initializations. */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_IFACE_VOICE:
         /* Initialize the Voice interface */
@@ -11428,14 +11548,14 @@ initialize_step (GTask *task)
         } else
             mm_dbg ("Ports context for SIM hot swap already available");
 
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_IFACE_SIMPLE:
         if (ctx->self->priv->modem_state != MM_MODEM_STATE_FAILED)
             mm_iface_modem_simple_initialize (MM_IFACE_MODEM_SIMPLE (ctx->self));
-        /* Fall down to next step */
         ctx->step++;
+       /* fall through */
 
     case INITIALIZE_STEP_LAST:
         if (ctx->self->priv->modem_state == MM_MODEM_STATE_FAILED) {
@@ -11525,6 +11645,9 @@ sim_hot_swap_enabled:
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -11590,6 +11713,9 @@ initialize (MMBaseModem *self,
         /* Just return success, don't relaunch initialization */
         g_task_return_boolean (task, TRUE);
         break;
+
+    default:
+        g_assert_not_reached ();
     }
 
     g_object_unref (task);

@@ -154,6 +154,7 @@ check_next_registration (GTask *task)
         mm_iface_modem_3gpp_register_in_network (
             MM_IFACE_MODEM_3GPP (self),
             ctx->operator_id,
+            FALSE, /* if already registered with same settings, do nothing */
             ctx->max_try_time,
             (GAsyncReadyCallback)register_in_3gpp_network_ready,
             task);
@@ -238,9 +239,28 @@ typedef struct {
 } ConnectionContext;
 
 static void
+cleanup_cancellation (ConnectionContext *ctx)
+{
+    Private *priv;
+
+    /* The ongoing connect cancellable and the one in the connection context
+     * must be the same, as they're set together, so if the one in the
+     * context doesn't exist, do nothing. */
+    if (!ctx->cancellable)
+        return;
+
+    /* If the ongoing connect cancellable is cancelled via the Simple.Disconnect
+     * method, it won't exist in the private struct, so don't assume they
+     * both exist. */
+    priv = get_private (ctx->self);
+    g_clear_object (&priv->ongoing_connect);
+    g_clear_object (&ctx->cancellable);
+}
+
+static void
 connection_context_free (ConnectionContext *ctx)
 {
-    g_clear_object (&ctx->cancellable);
+    cleanup_cancellation (ctx);
     g_clear_object (&ctx->properties);
     g_clear_object (&ctx->bearer);
     g_variant_unref (ctx->dictionary);
@@ -412,10 +432,11 @@ update_lock_info_ready (MMIfaceModem *self,
     }
 
     /* If we are already unlocked, go on to next step. Note that we do also
-     * allow SIM-PIN2, as we don't need to unlock that in order to get
+     * allow SIM-PIN2/SIM-PUK2, as we don't need to unlock that in order to get
      * connected. */
     if (lock == MM_MODEM_LOCK_NONE ||
-        lock == MM_MODEM_LOCK_SIM_PIN2) {
+        lock == MM_MODEM_LOCK_SIM_PIN2 ||
+        lock == MM_MODEM_LOCK_SIM_PUK2) {
         ctx->step++;
         connection_step (ctx);
         return;
@@ -487,16 +508,6 @@ completed_if_cancelled (ConnectionContext *ctx)
     return TRUE;
 }
 
-static void
-cleanup_cancellation (ConnectionContext *ctx)
-{
-    Private *priv;
-
-    priv = get_private (ctx->self);
-    g_clear_object (&priv->ongoing_connect);
-    g_clear_object (&ctx->cancellable);
-}
-
 static gboolean
 setup_cancellation (ConnectionContext  *ctx,
                     GError            **error)
@@ -526,8 +537,8 @@ connection_step (ConnectionContext *ctx)
 
     switch (ctx->step) {
     case CONNECTION_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case CONNECTION_STEP_UNLOCK_CHECK:
         mm_info ("Simple connect state (%d/%d): Unlock check",
@@ -580,9 +591,9 @@ connection_step (ConnectionContext *ctx)
         }
 
         /* If not 3GPP and not CDMA, this will possibly be a POTS modem,
-         * which won't require any specific registration anywhere.
-         * So, fall down to next step */
+         * which won't require any specific registration anywhere. */
         ctx->step++;
+        /* fall through */
 
     case CONNECTION_STEP_BEARER: {
         MMBearerList *list = NULL;
@@ -665,9 +676,8 @@ connection_step (ConnectionContext *ctx)
                 mm_base_bearer_get_path (ctx->bearer));
         g_object_unref (list);
         g_object_unref (bearer_properties);
-        /* Fall down to next step */
         ctx->step++;
-    }
+    } /* fall through */
 
     case CONNECTION_STEP_CONNECT:
         mm_info ("Simple connect state (%d/%d): Connect",
@@ -689,8 +699,8 @@ connection_step (ConnectionContext *ctx)
         mm_dbg ("Bearer at '%s' is already connected...",
                 mm_base_bearer_get_path (ctx->bearer));
 
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case CONNECTION_STEP_LAST:
         mm_info ("Simple connect state (%d/%d): All done",
@@ -702,6 +712,9 @@ connection_step (ConnectionContext *ctx)
             mm_base_bearer_get_path (ctx->bearer));
         connection_context_free (ctx);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -812,6 +825,10 @@ connect_auth_ready (MMBaseModem *self,
     case MM_MODEM_STATE_CONNECTING:
     case MM_MODEM_STATE_CONNECTED:
         ctx->step = CONNECTION_STEP_ENABLE + 1;
+        break;
+
+    default:
+        g_assert_not_reached ();
         break;
     }
     connection_step (ctx);

@@ -157,8 +157,9 @@ typedef struct {
     MMModemAccessTechnology access_tech;
 } MM3gppNetworkInfo;
 void mm_3gpp_network_info_list_free (GList *info_list);
-GList *mm_3gpp_parse_cops_test_response (const gchar *reply,
-                                         GError **error);
+GList *mm_3gpp_parse_cops_test_response (const gchar     *reply,
+                                         MMModemCharset   cur_charset,
+                                         GError         **error);
 
 /* AT+COPS? (current operator) response parser */
 gboolean mm_3gpp_parse_cops_read_response (const gchar              *response,
@@ -422,8 +423,8 @@ gboolean mm_3gpp_parse_ccwa_service_query_response (const gchar  *response,
 
 /* Additional 3GPP-specific helpers */
 
-MMModem3gppFacility mm_3gpp_acronym_to_facility (const gchar *str);
-gchar *mm_3gpp_facility_to_acronym (MMModem3gppFacility facility);
+MMModem3gppFacility  mm_3gpp_acronym_to_facility (const gchar         *str);
+const gchar         *mm_3gpp_facility_to_acronym (MMModem3gppFacility  facility);
 
 MMModemAccessTechnology mm_string_to_access_tech (const gchar *string);
 
@@ -511,5 +512,11 @@ gboolean mm_parse_supl_address (const gchar  *supl,
                                 guint32      *out_ip,
                                 guint16      *out_port,
                                 GError      **error);
+
+/*****************************************************************************/
+
+/* Useful when clamp-ing an unsigned integer with implicit low limit set to 0,
+ * and in order to avoid -Wtype-limits warnings. */
+#define MM_CLAMP_HIGH(x, high) (((x) > (high)) ? (high) : (x))
 
 #endif  /* MM_MODEM_HELPERS_H */

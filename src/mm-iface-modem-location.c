@@ -128,15 +128,19 @@ build_location_dictionary (GVariant *previous,
         while (g_variant_iter_next (&iter, "{uv}", &source, &value)) {
             switch (source) {
             case MM_MODEM_LOCATION_SOURCE_3GPP_LAC_CI:
+                g_assert (!location_3gpp_value);
                 location_3gpp_value = value;
                 break;
             case MM_MODEM_LOCATION_SOURCE_GPS_NMEA:
+                g_assert (!location_gps_nmea_value);
                 location_gps_nmea_value = value;
                 break;
             case MM_MODEM_LOCATION_SOURCE_GPS_RAW:
+                g_assert (!location_gps_raw_value);
                 location_gps_raw_value = value;
                 break;
             case MM_MODEM_LOCATION_SOURCE_CDMA_BS:
+                g_assert (!location_cdma_bs_value);
                 location_cdma_bs_value = value;
                 break;
             case MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED:
@@ -147,6 +151,7 @@ build_location_dictionary (GVariant *previous,
                 g_assert_not_reached ();
             default:
                 g_warn_if_reached ();
+                g_variant_unref (value);
                 break;
             }
         }
@@ -163,10 +168,12 @@ build_location_dictionary (GVariant *previous,
     }
 
     if (location_3gpp_value) {
+        g_assert (!g_variant_is_floating (location_3gpp_value));
         g_variant_builder_add (&builder,
                                "{uv}",
                                MM_MODEM_LOCATION_SOURCE_3GPP_LAC_CI,
                                location_3gpp_value);
+        g_variant_unref (location_3gpp_value);
     }
 
     /* If a new one given, use it */
@@ -176,11 +183,14 @@ build_location_dictionary (GVariant *previous,
         location_gps_nmea_value = mm_location_gps_nmea_get_string_variant (location_gps_nmea);
     }
 
-    if (location_gps_nmea_value)
+    if (location_gps_nmea_value) {
+        g_assert (!g_variant_is_floating (location_gps_nmea_value));
         g_variant_builder_add (&builder,
                                "{uv}",
                                MM_MODEM_LOCATION_SOURCE_GPS_NMEA,
                                location_gps_nmea_value);
+        g_variant_unref (location_gps_nmea_value);
+    }
 
     /* If a new one given, use it */
     if (location_gps_raw) {
@@ -189,11 +199,14 @@ build_location_dictionary (GVariant *previous,
         location_gps_raw_value = mm_location_gps_raw_get_dictionary (location_gps_raw);
     }
 
-    if (location_gps_raw_value)
+    if (location_gps_raw_value) {
+        g_assert (!g_variant_is_floating (location_gps_raw_value));
         g_variant_builder_add (&builder,
                                "{uv}",
                                MM_MODEM_LOCATION_SOURCE_GPS_RAW,
                                location_gps_raw_value);
+        g_variant_unref (location_gps_raw_value);
+    }
 
     /* If a new one given, use it */
     if (location_cdma_bs) {
@@ -202,11 +215,14 @@ build_location_dictionary (GVariant *previous,
         location_cdma_bs_value = mm_location_cdma_bs_get_dictionary (location_cdma_bs);
     }
 
-    if (location_cdma_bs_value)
+    if (location_cdma_bs_value) {
+        g_assert (!g_variant_is_floating (location_cdma_bs_value));
         g_variant_builder_add (&builder,
                                "{uv}",
                                MM_MODEM_LOCATION_SOURCE_CDMA_BS,
                                location_cdma_bs_value);
+        g_variant_unref (location_cdma_bs_value);
+    }
 
     return g_variant_builder_end (&builder);
 }
@@ -237,14 +253,14 @@ notify_gps_location_update (MMIfaceModemLocation *self,
                                        NULL));
 }
 
-void
-mm_iface_modem_location_gps_update (MMIfaceModemLocation *self,
-                                    const gchar *nmea_trace)
+static void
+location_gps_update_nmea (MMIfaceModemLocation *self,
+                          const gchar          *nmea_trace)
 {
     MmGdbusModemLocation *skeleton;
-    LocationContext *ctx;
-    gboolean update_nmea = FALSE;
-    gboolean update_raw = FALSE;
+    LocationContext      *ctx;
+    gboolean              update_nmea = FALSE;
+    gboolean              update_raw = FALSE;
 
     ctx = get_location_context (self);
     g_object_get (self,
@@ -280,6 +296,50 @@ mm_iface_modem_location_gps_update (MMIfaceModemLocation *self,
                                     update_raw ? ctx->location_gps_raw : NULL);
 
     g_object_unref (skeleton);
+}
+
+void
+mm_iface_modem_location_gps_update (MMIfaceModemLocation *self,
+                                    const gchar          *nmea_trace)
+{
+    /* Helper to debug GPS location related issues. Don't depend on a real GPS
+     * fix for debugging, just use some random values to update */
+#if 0
+    {
+        const gchar *prefix = NULL;
+        const gchar *lat = NULL;
+
+        /* lat N/S just to test which one is used */
+        if (g_str_has_prefix (nmea_trace, "$GPGGA")) {
+            prefix = "GPGGA";
+            lat = "S";
+        } else if (g_str_has_prefix (nmea_trace, "$GNGGA")) {
+            prefix = "GNGGA";
+            lat = "N";
+        }
+
+        if (prefix && lat) {
+            g_autoptr(GString)   str = NULL;
+            g_autoptr(GDateTime) now = NULL;
+
+            mm_dbg ("GGA trace detected: '%s'", nmea_trace);
+
+            now = g_date_time_new_now_utc ();
+            str = g_string_new ("");
+            g_string_append_printf (str,
+                                    "$%s,%02u%02u%02u,4807.038,%s,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47",
+                                    prefix,
+                                    g_date_time_get_hour (now),
+                                    g_date_time_get_minute (now),
+                                    g_date_time_get_second (now),
+                                    lat);
+            location_gps_update_nmea (self, str->str);
+            return;
+        }
+    }
+#endif
+
+    location_gps_update_nmea (self, nmea_trace);
 }
 
 /*****************************************************************************/
@@ -511,6 +571,7 @@ update_location_source_status (MMIfaceModemLocation *self,
     case MM_MODEM_LOCATION_SOURCE_GPS_UNMANAGED:
     case MM_MODEM_LOCATION_SOURCE_AGPS_MSA:
     case MM_MODEM_LOCATION_SOURCE_AGPS_MSB:
+    case MM_MODEM_LOCATION_SOURCE_NONE:
         /* Nothing to setup in the context */
     default:
         break;
@@ -1385,8 +1446,8 @@ interface_disabling_step (GTask *task)
 
     switch (ctx->step) {
     case DISABLING_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_DISABLE_GATHERING:
         setup_gathering (self,
@@ -1401,6 +1462,9 @@ interface_disabling_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -1504,8 +1568,8 @@ interface_enabling_step (GTask *task)
 
     switch (ctx->step) {
     case ENABLING_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_ENABLE_GATHERING: {
         MMModemLocationSource default_sources;
@@ -1530,6 +1594,9 @@ interface_enabling_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -1708,8 +1775,8 @@ interface_initialization_step (GTask *task)
 
     switch (ctx->step) {
     case INITIALIZATION_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_CAPABILITIES:
         /* Location capabilities value is meant to be loaded only once during
@@ -1724,8 +1791,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_VALIDATE_CAPABILITIES:
         /* If the modem doesn't support any location capabilities, we won't export
@@ -1738,8 +1805,8 @@ interface_initialization_step (GTask *task)
             g_object_unref (task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_SUPL_SERVER:
         /* If the modem supports A-GPS, load SUPL server */
@@ -1753,8 +1820,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_SUPPORTED_ASSISTANCE_DATA:
         /* If the modem supports any GPS-related technology, check assistance data types supported */
@@ -1770,8 +1837,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_ASSISTANCE_DATA_SERVERS:
         /* If any assistance data supported, load servers */
@@ -1784,8 +1851,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_GPS_REFRESH_RATE:
         /* If we have GPS capabilities, expose the GPS refresh rate */
@@ -1794,8 +1861,8 @@ interface_initialization_step (GTask *task)
             /* Set the default rate in the interface */
             mm_gdbus_modem_location_set_gps_refresh_rate (ctx->skeleton, MM_LOCATION_GPS_REFRESH_TIME_SECS);
 
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_LAST:
         /* We are done without errors! */
@@ -1829,6 +1896,9 @@ interface_initialization_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();

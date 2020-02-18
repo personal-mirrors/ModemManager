@@ -561,8 +561,8 @@ load_access_technologies_step (GTask *task)
 
     switch (ctx->step) {
     case ACCESS_TECHNOLOGIES_STEP_FIRST:
-        /* Go on to next step */
         ctx->step++;
+        /* fall through */
 
     case ACCESS_TECHNOLOGIES_STEP_OSSYS:
         mm_base_modem_at_command (MM_BASE_MODEM (self),
@@ -583,8 +583,8 @@ load_access_technologies_step (GTask *task)
                                       task);
             return;
         }
-        /* Go on to next step */
         ctx->step++;
+        /* fall through */
 
     case ACCESS_TECHNOLOGIES_STEP_OWCTI:
         if (ctx->check_3g) {
@@ -596,14 +596,17 @@ load_access_technologies_step (GTask *task)
                                       task);
             return;
         }
-        /* Go on to next step */
         ctx->step++;
+        /* fall through */
 
     case ACCESS_TECHNOLOGIES_STEP_LAST:
         /* All done, set result and complete */
         g_task_return_int (task, ctx->access_technology);
         g_object_unref (task);
         break;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -805,7 +808,7 @@ option_signal_changed (MMPortSerialAt *port,
                        MMBroadbandModemOption *self)
 {
     gchar *str;
-    gint quality = 0;
+    guint quality = 0;
 
     str = g_match_info_fetch (match_info, 1);
     if (str) {
@@ -818,10 +821,10 @@ option_signal_changed (MMPortSerialAt *port,
         quality = 0;
     } else {
         /* Normalize the quality */
-        quality = CLAMP (quality, 0, 31) * 100 / 31;
+        quality = MM_CLAMP_HIGH (quality, 31) * 100 / 31;
     }
 
-    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), (guint)quality);
+    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
 }
 
 static void

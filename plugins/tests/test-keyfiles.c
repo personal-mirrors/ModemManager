@@ -12,6 +12,7 @@
  *
  * Copyright (C) 2018 Aleksander Morgado <aleksander@aleksander.es>
  */
+#include <config.h>
 
 #include <glib.h>
 #include <glib-object.h>
@@ -33,6 +34,9 @@ common_test (const gchar *keyfile_path)
     GError   *error = NULL;
     gboolean  ret;
 
+    if (!keyfile_path)
+        return;
+
     keyfile = g_key_file_new ();
     ret = g_key_file_load_from_file (keyfile, keyfile_path, G_KEY_FILE_NONE, &error);
     g_assert_no_error (error);
@@ -40,13 +44,23 @@ common_test (const gchar *keyfile_path)
     g_key_file_unref (keyfile);
 }
 
+/* Dummy test to avoid compiler warning about common_test() being unused
+ * when none of the plugins enabled in build have custom key files. */
+static void
+test_dummy (void)
+{
+    common_test (NULL);
+}
+
 /************************************************************/
 
+#if defined ENABLE_PLUGIN_FOXCONN
 static void
 test_foxconn_t77w968 (void)
 {
     common_test (TESTKEYFILE_FOXCONN_T77W968);
 }
+#endif
 
 /************************************************************/
 
@@ -75,8 +89,11 @@ int main (int argc, char **argv)
     setlocale (LC_ALL, "");
 
     g_test_init (&argc, &argv, NULL);
+    g_test_add_func ("/MM/test-keyfiles/dummy", test_dummy);
 
+#if defined ENABLE_PLUGIN_FOXCONN
     g_test_add_func ("/MM/test-keyfiles/foxconn/t77w968", test_foxconn_t77w968);
+#endif
 
     return g_test_run ();
 }

@@ -187,6 +187,9 @@ parse_auth_type (MMBearerAllowedAuth mm_auth)
         return BEARER_CINTERION_AUTH_CHAP;
     case MM_BEARER_ALLOWED_AUTH_MSCHAPV2:
         return BEARER_CINTERION_AUTH_MSCHAPV2;
+    case MM_BEARER_ALLOWED_AUTH_UNKNOWN:
+    case MM_BEARER_ALLOWED_AUTH_MSCHAP:
+    case MM_BEARER_ALLOWED_AUTH_EAP:
     default:
         return BEARER_CINTERION_AUTH_UNKNOWN;
     }
@@ -386,9 +389,8 @@ dial_3gpp_context_step (GTask *task)
             return;
         }
 
-        /* Fall down to next step */
         ctx->step++;
-    }
+    } /* fall through */
 
     case DIAL_3GPP_CONTEXT_STEP_AUTH: {
         gchar *command;
@@ -411,10 +413,9 @@ dial_3gpp_context_step (GTask *task)
             return;
         }
 
-        /* Fall down to next step */
         mm_dbg ("cinterion dial step %u/%u: authentication not required", ctx->step, DIAL_3GPP_CONTEXT_STEP_LAST);
         ctx->step++;
-    }
+    } /* fall through */
 
     case DIAL_3GPP_CONTEXT_STEP_START_SWWAN: {
         gchar *command;
@@ -451,6 +452,9 @@ dial_3gpp_context_step (GTask *task)
         g_task_return_pointer (task, g_object_ref (ctx->data), g_object_unref);
         g_object_unref (task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -568,6 +572,8 @@ disconnect_connection_status_ready (MMBroadbandBearerCinterion *self,
                                  "CID %u is reported connected", ctx->cid);
         g_object_unref (task);
         return;
+    case MM_BEARER_CONNECTION_STATUS_DISCONNECTING:
+    case MM_BEARER_CONNECTION_STATUS_CONNECTION_FAILED:
     default:
         g_assert_not_reached ();
     }
@@ -604,8 +610,8 @@ disconnect_3gpp_context_step (GTask *task)
 
     switch (ctx->step) {
     case DISCONNECT_3GPP_CONTEXT_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISCONNECT_3GPP_CONTEXT_STEP_STOP_SWWAN: {
         gchar *command;
@@ -643,6 +649,9 @@ disconnect_3gpp_context_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 

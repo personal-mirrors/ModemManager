@@ -72,7 +72,7 @@ struct _MMBroadbandModemTelitPrivate {
 
 typedef struct {
     MMModemLocationSource source;
-    gint gps_enable_step;
+    guint gps_enable_step;
 } LocationGatheringContext;
 
 /*
@@ -615,8 +615,8 @@ qss_setup_step (GTask *task)
 
     switch (ctx->step) {
         case QSS_SETUP_STEP_FIRST:
-            /* Fall back on next step */
             ctx->step++;
+            /* fall through */
         case QSS_SETUP_STEP_QUERY:
             mm_base_modem_at_command (MM_BASE_MODEM (self),
                                       "#QSS?",
@@ -649,8 +649,8 @@ qss_setup_step (GTask *task)
                                                task);
                 return;
             }
-            /* Fall back to next step */
             ctx->step++;
+            /* fall through */
         case QSS_SETUP_STEP_LAST:
             /* If all enabling actions failed (either both, or only primary if
              * there is no secondary), then we return an error */
@@ -664,6 +664,9 @@ qss_setup_step (GTask *task)
                 g_task_return_boolean (task, TRUE);
             g_object_unref (task);
             break;
+
+        default:
+            g_assert_not_reached ();
     }
 }
 
@@ -902,8 +905,8 @@ load_unlock_retries_step (GTask *task)
     ctx = g_task_get_task_data (task);
     switch (ctx->step) {
         case LOAD_UNLOCK_RETRIES_STEP_FIRST:
-            /* Fall back on next step */
             ctx->step++;
+            /* fall through */
         case LOAD_UNLOCK_RETRIES_STEP_LOCK:
             handle_csim_locking (task, TRUE);
             break;

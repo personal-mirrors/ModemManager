@@ -844,6 +844,13 @@ uim_get_card_status_output_parse (QmiMessageUimGetCardStatusOutput  *output,
 
     /* PIN1 */
     switch (app->pin1_state) {
+    case QMI_UIM_PIN_STATE_NOT_INITIALIZED:
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
+                     "SIM PIN/PUK status not known yet");
+        return FALSE;
+
     case QMI_UIM_PIN_STATE_PERMANENTLY_BLOCKED:
         g_set_error (error,
                      MM_MOBILE_EQUIPMENT_ERROR,
@@ -875,12 +882,17 @@ uim_get_card_status_output_parse (QmiMessageUimGetCardStatusOutput  *output,
     /* PIN2 */
     if (lock == MM_MODEM_LOCK_NONE) {
         switch (app->pin2_state) {
+        case QMI_UIM_PIN_STATE_NOT_INITIALIZED:
+            mm_warn ("SIM PIN2/PUK2 status not known yet");
+            break;
+
         case QMI_UIM_PIN_STATE_ENABLED_NOT_VERIFIED:
             lock = MM_MODEM_LOCK_SIM_PIN2;
             break;
 
         case QMI_UIM_PIN_STATE_PERMANENTLY_BLOCKED:
             mm_warn ("PUK2 permanently blocked");
+            /* Fall through */
         case QMI_UIM_PIN_STATE_BLOCKED:
             lock = MM_MODEM_LOCK_SIM_PUK2;
             break;
@@ -1033,6 +1045,7 @@ dms_uim_get_pin_status_ready (QmiClientDms *client,
     }
 
     /* We're done! */
+    qmi_message_dms_uim_get_pin_status_output_unref (output);
     g_task_return_int (task, lock);
     g_object_unref (task);
 }
@@ -1051,7 +1064,7 @@ load_unlock_required_context_step (GTask *task)
     switch (ctx->step) {
     case LOAD_UNLOCK_REQUIRED_STEP_FIRST:
         ctx->step++;
-        /* Go on to next step */
+        /* Fall through */
 
     case LOAD_UNLOCK_REQUIRED_STEP_CDMA:
         /* CDMA-only modems don't need this */
@@ -1062,7 +1075,7 @@ load_unlock_required_context_step (GTask *task)
             return;
         }
         ctx->step++;
-        /* Go on to next step */
+        /* Fall through */
 
     case LOAD_UNLOCK_REQUIRED_STEP_DMS:
         if (!self->priv->dms_uim_deprecated) {
@@ -1087,7 +1100,7 @@ load_unlock_required_context_step (GTask *task)
             return;
         }
         ctx->step++;
-        /* Go on to next step */
+        /* Fall through */
 
     case LOAD_UNLOCK_REQUIRED_STEP_UIM:
         /* Failure to get UIM client at this point is hard as well */
@@ -1109,6 +1122,9 @@ load_unlock_required_context_step (GTask *task)
                                         (GAsyncReadyCallback) unlock_required_uim_get_card_status_ready,
                                         task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -1377,6 +1393,14 @@ qmi_dbm_valid (gint8 dbm, QmiNasRadioInterface radio_interface)
         return (dbm > -125 && dbm < -30);
     case QMI_NAS_RADIO_INTERFACE_UMTS:
         return (dbm > -125 && dbm < -30);
+    case QMI_NAS_RADIO_INTERFACE_UNKNOWN:
+    case QMI_NAS_RADIO_INTERFACE_NONE:
+    case QMI_NAS_RADIO_INTERFACE_AMPS:
+    case QMI_NAS_RADIO_INTERFACE_GSM:
+    case QMI_NAS_RADIO_INTERFACE_LTE:
+    case QMI_NAS_RADIO_INTERFACE_TD_SCDMA:
+    case QMI_NAS_RADIO_INTERFACE_5GNR:
+        /* no explicit validation */
     default:
         break;
     }
@@ -1979,6 +2003,10 @@ dms_get_operating_mode_ready (QmiClientDms *client,
         case QMI_DMS_OPERATING_MODE_OFFLINE:
             g_task_return_int (task, MM_MODEM_POWER_STATE_OFF);
             break;
+        case QMI_DMS_OPERATING_MODE_SHUTTING_DOWN:
+        case QMI_DMS_OPERATING_MODE_FACTORY_TEST:
+        case QMI_DMS_OPERATING_MODE_RESET:
+        case QMI_DMS_OPERATING_MODE_UNKNOWN:
         default:
             g_task_return_new_error (task,
                                      MM_CORE_ERROR,
@@ -4390,7 +4418,7 @@ cdma_activation_context_step (GTask *task)
     switch (ctx->step) {
     case CDMA_ACTIVATION_STEP_FIRST:
         ctx->step++;
-        /* Fall down to next step */
+        /* Fall through */
 
     case CDMA_ACTIVATION_STEP_ENABLE_INDICATIONS:
         /* Indications needed in automatic activation */
@@ -4416,7 +4444,7 @@ cdma_activation_context_step (GTask *task)
         g_assert (ctx->input_manual != NULL);
         mm_info ("Activation step [1/5]: indications not needed in manual activation");
         ctx->step++;
-        /* Fall down to next step */
+        /* Fall through */
 
     case CDMA_ACTIVATION_STEP_REQUEST_ACTIVATION:
         /* Automatic activation */
@@ -5890,7 +5918,8 @@ load_initial_sms_parts_step (GTask *task)
     switch (ctx->step) {
     case LOAD_INITIAL_SMS_PARTS_STEP_FIRST:
         ctx->step++;
-        /* Fall down */
+        /* Fall through */
+
     case LOAD_INITIAL_SMS_PARTS_STEP_3GPP_FIRST:
         /* If modem doesn't have 3GPP caps, skip 3GPP SMS */
         if (!mm_iface_modem_is_3gpp (MM_IFACE_MODEM (self))) {
@@ -5899,39 +5928,46 @@ load_initial_sms_parts_step (GTask *task)
             return;
         }
         ctx->step++;
-        /* Fall down */
+        /* Fall through */
+
     case LOAD_INITIAL_SMS_PARTS_STEP_3GPP_LIST_ALL:
         mm_dbg ("loading all 3GPP messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         mode = QMI_WMS_MESSAGE_MODE_GSM_WCDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_3GPP_LIST_MT_READ:
         mm_dbg ("loading 3GPP MT-read messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         tag_type = QMI_WMS_MESSAGE_TAG_TYPE_MT_READ;
         mode = QMI_WMS_MESSAGE_MODE_GSM_WCDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_3GPP_LIST_MT_NOT_READ:
         mm_dbg ("loading 3GPP MT-not-read messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         tag_type = QMI_WMS_MESSAGE_TAG_TYPE_MT_NOT_READ;
         mode = QMI_WMS_MESSAGE_MODE_GSM_WCDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_3GPP_LIST_MO_SENT:
         mm_dbg ("loading 3GPP MO-sent messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         tag_type = QMI_WMS_MESSAGE_TAG_TYPE_MO_SENT;
         mode = QMI_WMS_MESSAGE_MODE_GSM_WCDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_3GPP_LIST_MO_NOT_SENT:
         mm_dbg ("loading 3GPP MO-not-sent messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         tag_type = QMI_WMS_MESSAGE_TAG_TYPE_MO_NOT_SENT;
         mode = QMI_WMS_MESSAGE_MODE_GSM_WCDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_3GPP_LAST:
         ctx->step++;
-        /* Fall down */
+        /* Fall through */
+
     case LOAD_INITIAL_SMS_PARTS_STEP_CDMA_FIRST:
         /* If modem doesn't have CDMA caps, skip CDMA SMS */
         if (!mm_iface_modem_is_cdma (MM_IFACE_MODEM (self))) {
@@ -5940,44 +5976,54 @@ load_initial_sms_parts_step (GTask *task)
             return;
         }
         ctx->step++;
-        /* Fall down */
+        /* Fall through */
+
     case LOAD_INITIAL_SMS_PARTS_STEP_CDMA_LIST_ALL:
         mm_dbg ("loading all CDMA messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         mode = QMI_WMS_MESSAGE_MODE_CDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_CDMA_LIST_MT_READ:
         mm_dbg ("loading CDMA MT-read messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         tag_type = QMI_WMS_MESSAGE_TAG_TYPE_MT_READ;
         mode = QMI_WMS_MESSAGE_MODE_CDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_CDMA_LIST_MT_NOT_READ:
         mm_dbg ("loading CDMA MT-not-read messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         tag_type = QMI_WMS_MESSAGE_TAG_TYPE_MT_NOT_READ;
         mode = QMI_WMS_MESSAGE_MODE_CDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_CDMA_LIST_MO_SENT:
         mm_dbg ("loading CDMA MO-sent messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         tag_type = QMI_WMS_MESSAGE_TAG_TYPE_MO_SENT;
         mode = QMI_WMS_MESSAGE_MODE_CDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_CDMA_LIST_MO_NOT_SENT:
         mm_dbg ("loading CDMA MO-not-sent messages from storage '%s'...",
                 mm_sms_storage_get_string (ctx->storage));
         tag_type = QMI_WMS_MESSAGE_TAG_TYPE_MO_NOT_SENT;
         mode = QMI_WMS_MESSAGE_MODE_CDMA;
         break;
+
     case LOAD_INITIAL_SMS_PARTS_STEP_CDMA_LAST:
         ctx->step++;
-        /* Fall down */
+        /* Fall through */
+
     case LOAD_INITIAL_SMS_PARTS_STEP_LAST:
         /* All steps done */
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 
     g_assert (mode != -1);
@@ -8218,6 +8264,11 @@ signal_load_values_get_signal_strength_ready (QmiClientNas *client,
                     ctx->values_result->lte = mm_signal_new ();
                 mm_signal_set_rssi (ctx->values_result->lte, (gdouble)element->rssi);
                 break;
+            case QMI_NAS_RADIO_INTERFACE_UNKNOWN:
+            case QMI_NAS_RADIO_INTERFACE_NONE:
+            case QMI_NAS_RADIO_INTERFACE_AMPS:
+            case QMI_NAS_RADIO_INTERFACE_TD_SCDMA:
+            case QMI_NAS_RADIO_INTERFACE_5GNR:
             default:
                 break;
             }
@@ -8247,6 +8298,13 @@ signal_load_values_get_signal_strength_ready (QmiClientNas *client,
                     mm_signal_set_ecio (ctx->values_result->umts, ((gdouble)element->ecio) * (-0.5));
                 break;
             default:
+            case QMI_NAS_RADIO_INTERFACE_GSM:
+            case QMI_NAS_RADIO_INTERFACE_LTE:
+            case QMI_NAS_RADIO_INTERFACE_UNKNOWN:
+            case QMI_NAS_RADIO_INTERFACE_NONE:
+            case QMI_NAS_RADIO_INTERFACE_AMPS:
+            case QMI_NAS_RADIO_INTERFACE_TD_SCDMA:
+            case QMI_NAS_RADIO_INTERFACE_5GNR:
                 break;
             }
         }
@@ -8400,7 +8458,7 @@ signal_load_values_context_step (GTask *task)
     switch (ctx->step) {
     case SIGNAL_LOAD_VALUES_STEP_SIGNAL_FIRST:
         ctx->step++;
-        /* Fall down */
+        /* Fall through */
 
     case SIGNAL_LOAD_VALUES_STEP_SIGNAL_INFO:
         if (qmi_client_check_version (QMI_CLIENT (ctx->client), 1, 8)) {
@@ -8413,35 +8471,35 @@ signal_load_values_context_step (GTask *task)
             return;
         }
         ctx->step++;
-        /* Fall down */
+        /* Fall through */
 
-   case SIGNAL_LOAD_VALUES_STEP_SIGNAL_STRENGTH:
-       /* If already loaded with signal info, don't try signal strength */
-       if (!VALUES_RESULT_LOADED (ctx)) {
-           QmiMessageNasGetSignalStrengthInput *input;
+    case SIGNAL_LOAD_VALUES_STEP_SIGNAL_STRENGTH:
+        /* If already loaded with signal info, don't try signal strength */
+        if (!VALUES_RESULT_LOADED (ctx)) {
+            QmiMessageNasGetSignalStrengthInput *input;
 
-           input = qmi_message_nas_get_signal_strength_input_new ();
-           qmi_message_nas_get_signal_strength_input_set_request_mask (
-               input,
-               (QMI_NAS_SIGNAL_STRENGTH_REQUEST_RSSI |
-                QMI_NAS_SIGNAL_STRENGTH_REQUEST_ECIO |
-                QMI_NAS_SIGNAL_STRENGTH_REQUEST_IO |
-                QMI_NAS_SIGNAL_STRENGTH_REQUEST_SINR |
-                QMI_NAS_SIGNAL_STRENGTH_REQUEST_RSRQ |
-                QMI_NAS_SIGNAL_STRENGTH_REQUEST_LTE_SNR |
-                QMI_NAS_SIGNAL_STRENGTH_REQUEST_LTE_RSRP),
-               NULL);
-           qmi_client_nas_get_signal_strength (ctx->client,
-                                               input,
-                                               5,
-                                               NULL,
-                                               (GAsyncReadyCallback)signal_load_values_get_signal_strength_ready,
-                                               task);
-           qmi_message_nas_get_signal_strength_input_unref (input);
-           return;
-       }
-       ctx->step++;
-       /* Fall down */
+            input = qmi_message_nas_get_signal_strength_input_new ();
+            qmi_message_nas_get_signal_strength_input_set_request_mask (
+                input,
+                (QMI_NAS_SIGNAL_STRENGTH_REQUEST_RSSI |
+                 QMI_NAS_SIGNAL_STRENGTH_REQUEST_ECIO |
+                 QMI_NAS_SIGNAL_STRENGTH_REQUEST_IO |
+                 QMI_NAS_SIGNAL_STRENGTH_REQUEST_SINR |
+                 QMI_NAS_SIGNAL_STRENGTH_REQUEST_RSRQ |
+                 QMI_NAS_SIGNAL_STRENGTH_REQUEST_LTE_SNR |
+                 QMI_NAS_SIGNAL_STRENGTH_REQUEST_LTE_RSRP),
+                NULL);
+            qmi_client_nas_get_signal_strength (ctx->client,
+                                                input,
+                                                5,
+                                                NULL,
+                                                (GAsyncReadyCallback)signal_load_values_get_signal_strength_ready,
+                                                task);
+            qmi_message_nas_get_signal_strength_input_unref (input);
+            return;
+        }
+        ctx->step++;
+        /* Fall through */
 
     case SIGNAL_LOAD_VALUES_STEP_SIGNAL_LAST:
         /* If any result is set, succeed */
@@ -8463,6 +8521,9 @@ signal_load_values_context_step (GTask *task)
         }
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -8829,17 +8890,7 @@ mm_broadband_modem_qmi_init (MMBroadbandModemQmi *self)
 static void
 finalize (GObject *object)
 {
-    MMPortQmi *qmi;
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (object);
-
-    qmi = mm_base_modem_peek_port_qmi (MM_BASE_MODEM (self));
-    if (qmi) {
-        /* Disconnect signal handler for qmi-proxy disappearing, if it exists */
-        untrack_qmi_device_removed (self, qmi);
-        /* If we did open the QMI port during initialization, close it now */
-        if (mm_port_qmi_is_open (qmi))
-            mm_port_qmi_close (qmi);
-    }
 
     g_free (self->priv->imei);
     g_free (self->priv->meid);
@@ -8856,6 +8907,19 @@ static void
 dispose (GObject *object)
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (object);
+    MMPortQmi *qmi;
+
+    /* If any port cleanup is needed, it must be done during dispose(), as
+     * the modem object will be affected by an explciit g_object_run_dispose()
+     * that will remove all port references right away */
+    qmi = mm_base_modem_peek_port_qmi (MM_BASE_MODEM (self));
+    if (qmi) {
+        /* Disconnect signal handler for qmi-proxy disappearing, if it exists */
+        untrack_qmi_device_removed (self, qmi);
+        /* If we did open the QMI port during initialization, close it now */
+        if (mm_port_qmi_is_open (qmi))
+            mm_port_qmi_close (qmi, NULL, NULL);
+    }
 
     g_list_free_full (self->priv->firmware_list, g_object_unref);
     self->priv->firmware_list = NULL;

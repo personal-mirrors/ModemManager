@@ -606,7 +606,8 @@ port_serial_process_command (MMPortSerial *self,
                 ctx->idx += written;
                 break;
             }
-            /* If written == 0, treat as EAGAIN, so fall down */
+            /* If written == 0 treat as EAGAIN */
+            /* Fall through */
 
         case G_IO_STATUS_AGAIN:
             /* We're in a non-blocking channel and therefore we're up to receive
@@ -622,6 +623,9 @@ port_serial_process_command (MMPortSerial *self,
                 return FALSE;
             }
             break;
+
+        default:
+            g_assert_not_reached ();
         }
     }
     /* Socket based setup */
@@ -945,6 +949,8 @@ parse_response_buffer (MMPortSerial *self)
     case MM_PORT_SERIAL_RESPONSE_NONE:
         /* Nothing to do this time */
         break;
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -1367,7 +1373,7 @@ static void
 _close_internal (MMPortSerial *self, gboolean force)
 {
     const char *device;
-    int i;
+    guint       i;
 
     g_return_if_fail (MM_IS_PORT_SERIAL (self));
 
@@ -1744,18 +1750,28 @@ flash_cancel_cb (GTask *task)
 void
 mm_port_serial_flash_cancel (MMPortSerial *self)
 {
-    GTask *task;
+    FlashContext *ctx;
+    GTask        *task;
 
     /* Do nothing if there is no flash task */
     if (!self->priv->flash_task)
         return;
 
-    /* Recover task and schedule it to be cancelled in an idle.
+    /* Recover task */
+    task = self->priv->flash_task;
+    self->priv->flash_task = NULL;
+
+    /* If flash operation is scheduled, unschedule it */
+    ctx = g_task_get_task_data (task);
+    if (ctx->flash_id) {
+        g_source_remove (ctx->flash_id);
+        ctx->flash_id = 0;
+    }
+
+    /* Schedule task to be cancelled in an idle.
      * We do NOT want this cancellation to happen right away,
      * because the object reference in the flashing task may
      * be the last one valid. */
-    task = self->priv->flash_task;
-    self->priv->flash_task = NULL;
     g_idle_add ((GSourceFunc)flash_cancel_cb, task);
 }
 

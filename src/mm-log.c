@@ -88,6 +88,8 @@ mm_to_syslog_priority (MMLogLevel level)
         return LOG_INFO;
     case MM_LOG_LEVEL_ERR:
         return LOG_ERR;
+    default:
+        break;
     }
     g_assert_not_reached ();
     return 0;
@@ -105,10 +107,15 @@ glib_to_syslog_priority (GLogLevelFlags level)
         return LOG_WARNING;
     case G_LOG_LEVEL_MESSAGE:
         return LOG_NOTICE;
+    case G_LOG_LEVEL_INFO:
+        return LOG_INFO;
     case G_LOG_LEVEL_DEBUG:
         return LOG_DEBUG;
+    case G_LOG_LEVEL_MASK:
+    case G_LOG_FLAG_FATAL:
+    case G_LOG_FLAG_RECURSION:
     default:
-        return LOG_INFO;
+        g_assert_not_reached ();
     }
 }
 
@@ -124,6 +131,8 @@ log_level_description (MMLogLevel level)
         return "<info> ";
     case MM_LOG_LEVEL_ERR:
         return "<error>";
+    default:
+        break;
     }
     g_assert_not_reached ();
     return NULL;

@@ -867,8 +867,8 @@ cid_selection_3gpp_context_step (GTask *task)
 
     switch (ctx->step) {
     case CID_SELECTION_3GPP_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* Fall through */
 
     case CID_SELECTION_3GPP_STEP_FORMAT:
         cid_selection_3gpp_query_format (task);
@@ -891,6 +891,9 @@ cid_selection_3gpp_context_step (GTask *task)
         g_task_return_int (task, (gssize) ctx->cid);
         g_object_unref (task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -1805,15 +1808,12 @@ disconnect (MMBaseBearer *self,
     MMBaseModem *modem = NULL;
     GTask *task;
 
+    task = g_task_new (self, NULL, callback, user_data);
+
     if (!MM_BROADBAND_BEARER (self)->priv->port) {
-        g_task_report_new_error (
-            self,
-            callback,
-            user_data,
-            disconnect,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_FAILED,
-            "Couldn't disconnect: this bearer is not connected");
+        mm_dbg ("No need to disconnect: bearer is already disconnected");
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
         return;
     }
 
@@ -1825,19 +1825,14 @@ disconnect (MMBaseBearer *self,
     /* We need the primary port to disconnect... */
     primary = mm_base_modem_peek_port_primary (modem);
     if (!primary) {
-        g_task_report_new_error (
-            self,
-            callback,
-            user_data,
-            disconnect,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_FAILED,
-            "Couldn't disconnect: couldn't get primary port");
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Couldn't disconnect: couldn't get primary port");
+        g_object_unref (task);
         g_object_unref (modem);
         return;
     }
-
-    task = g_task_new (self, NULL, callback , user_data);
 
     switch (MM_BROADBAND_BEARER (self)->priv->connection_type) {
     case CONNECTION_TYPE_3GPP:
@@ -1864,6 +1859,7 @@ disconnect (MMBaseBearer *self,
         break;
 
     case CONNECTION_TYPE_NONE:
+    default:
         g_assert_not_reached ();
     }
 
@@ -2123,8 +2119,8 @@ interface_initialization_step (GTask *task)
 
     switch (ctx->step) {
     case INITIALIZATION_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* Fall through */
 
     case INITIALIZATION_STEP_CDMA_RM_PROTOCOL:
         /* If a specific RM protocol is given, we need to check whether it is
@@ -2144,14 +2140,17 @@ interface_initialization_step (GTask *task)
             return;
         }
 
-        /* Fall down to next step */
         ctx->step++;
+        /* Fall through */
 
     case INITIALIZATION_STEP_LAST:
         /* We are done without errors! */
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 
     g_assert_not_reached ();
@@ -2201,7 +2200,7 @@ initable_init_async (GAsyncInitable *initable,
 
 void
 mm_broadband_bearer_new (MMBroadbandModem *modem,
-                         MMBearerProperties *properties,
+                         MMBearerProperties *bearer_properties,
                          GCancellable *cancellable,
                          GAsyncReadyCallback callback,
                          gpointer user_data)
@@ -2220,7 +2219,7 @@ mm_broadband_bearer_new (MMBroadbandModem *modem,
         callback,
         user_data,
         MM_BASE_BEARER_MODEM,             modem,
-        MM_BASE_BEARER_CONFIG,            properties,
+        MM_BASE_BEARER_CONFIG,            bearer_properties,
         MM_BROADBAND_BEARER_FLOW_CONTROL, flow_control,
         NULL);
 }

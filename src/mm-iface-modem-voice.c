@@ -196,6 +196,7 @@ match_single_call_info (const MMCallInfo *call_info,
     const gchar     *number;
     guint            idx;
     gboolean         match_direction_and_state = FALSE;
+    gboolean         match_number = FALSE;
     gboolean         match_index = FALSE;
     gboolean         match_terminated = FALSE;
 
@@ -217,6 +218,11 @@ match_single_call_info (const MMCallInfo *call_info,
         (!call_info->index || !idx || match_index))
         match_direction_and_state = TRUE;
 
+    /* Match number */
+    if (call_info->number && number &&
+        g_strcmp0 (call_info->number, number) == 0)
+        match_number = TRUE;
+
     /* Match special terminated event.
      * We cannot apply this match if the call is part of a multiparty
      * call, because we don't know which of the calls in the multiparty
@@ -230,11 +236,16 @@ match_single_call_info (const MMCallInfo *call_info,
         match_terminated = TRUE;
 
     /* If no clear match, nothing to do */
-    if (!match_index && !match_direction_and_state && !match_terminated)
+    if (!match_direction_and_state &&
+        !match_number &&
+        !match_index &&
+        !match_terminated)
         return FALSE;
 
-    mm_dbg ("call info matched (matched direction/state %s, matched index %s, matched terminated %s) with call at '%s'",
+    mm_dbg ("call info matched (matched direction/state %s, matched number %s"
+            ", matched index %s, matched terminated %s) with call at '%s'",
             match_direction_and_state ? "yes" : "no",
+            match_number ? "yes" : "no",
             match_index ? "yes" : "no",
             match_terminated ? "yes" : "no",
             mm_base_call_get_path (call));
@@ -389,10 +400,12 @@ static void
 report_all_calls_foreach (MMBaseCall                   *call,
                           ReportAllCallsForeachContext *ctx)
 {
+    MMCallState state;
     GList *l;
 
     /* fully ignore already terminated calls */
-    if (mm_base_call_get_state (call) == MM_CALL_STATE_TERMINATED)
+    state = mm_base_call_get_state (call);
+    if (state == MM_CALL_STATE_TERMINATED)
         return;
 
     /* Iterate over the call info list */
@@ -407,6 +420,13 @@ report_all_calls_foreach (MMBaseCall                   *call,
     }
 
     /* not found in list! this call is now terminated */
+    mm_dbg ("Call '%s' with direction %s, state %s, number '%s', index %u"
+            " not found in list, terminating",
+            mm_base_call_get_path (call),
+            mm_call_direction_get_string (mm_base_call_get_direction (call)),
+            mm_call_state_get_string (state),
+            mm_base_call_get_number (call),
+            mm_base_call_get_index (call));
     mm_base_call_change_state (call, MM_CALL_STATE_TERMINATED, MM_CALL_STATE_REASON_UNKNOWN);
 }
 
@@ -813,6 +833,11 @@ prepare_hold_and_accept_foreach (MMBaseCall                 *call,
         if (!ctx->next_call)
             ctx->next_call = g_object_ref (call);
         break;
+    case MM_CALL_STATE_UNKNOWN:
+    case MM_CALL_STATE_DIALING:
+    case MM_CALL_STATE_RINGING_IN:
+    case MM_CALL_STATE_RINGING_OUT:
+    case MM_CALL_STATE_TERMINATED:
     default:
         break;
     }
@@ -941,6 +966,11 @@ prepare_hangup_and_accept_foreach (MMBaseCall                   *call,
         if (!ctx->next_call)
             ctx->next_call = g_object_ref (call);
         break;
+    case MM_CALL_STATE_UNKNOWN:
+    case MM_CALL_STATE_DIALING:
+    case MM_CALL_STATE_RINGING_IN:
+    case MM_CALL_STATE_RINGING_OUT:
+    case MM_CALL_STATE_TERMINATED:
     default:
         break;
     }
@@ -1082,6 +1112,8 @@ prepare_hangup_all_foreach (MMBaseCall             *call,
         break;
     case MM_CALL_STATE_WAITING:
     case MM_CALL_STATE_HELD:
+    case MM_CALL_STATE_UNKNOWN:
+    case MM_CALL_STATE_TERMINATED:
     default:
         break;
     }
@@ -1199,6 +1231,12 @@ prepare_transfer_foreach (MMBaseCall            *call,
     case MM_CALL_STATE_HELD:
         ctx->calls = g_list_append (ctx->calls, g_object_ref (call));
         break;
+    case MM_CALL_STATE_UNKNOWN:
+    case MM_CALL_STATE_DIALING:
+    case MM_CALL_STATE_WAITING:
+    case MM_CALL_STATE_RINGING_IN:
+    case MM_CALL_STATE_RINGING_OUT:
+    case MM_CALL_STATE_TERMINATED:
     default:
         break;
     }
@@ -1471,6 +1509,12 @@ prepare_leave_multiparty_foreach (MMBaseCall             *call,
     case MM_CALL_STATE_HELD:
         ctx->other_calls = g_list_append (ctx->other_calls, g_object_ref (call));
         break;
+    case MM_CALL_STATE_UNKNOWN:
+    case MM_CALL_STATE_DIALING:
+    case MM_CALL_STATE_WAITING:
+    case MM_CALL_STATE_RINGING_IN:
+    case MM_CALL_STATE_RINGING_OUT:
+    case MM_CALL_STATE_TERMINATED:
     default:
         break;
     }
@@ -1615,6 +1659,12 @@ prepare_join_multiparty_foreach (MMBaseCall            *call,
     case MM_CALL_STATE_HELD:
         ctx->all_calls = g_list_append (ctx->all_calls, g_object_ref (call));
         break;
+    case MM_CALL_STATE_UNKNOWN:
+    case MM_CALL_STATE_DIALING:
+    case MM_CALL_STATE_RINGING_IN:
+    case MM_CALL_STATE_RINGING_OUT:
+    case MM_CALL_STATE_WAITING:
+    case MM_CALL_STATE_TERMINATED:
     default:
         break;
     }
@@ -1822,8 +1872,10 @@ in_call_setup_context_step (GTask *task)
     MMIfaceModemVoice  *self;
     InCallSetupContext *ctx;
 
-    if (g_task_return_error_if_cancelled (task))
+    if (g_task_return_error_if_cancelled (task)) {
+        g_object_unref (task);
         return;
+    }
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
@@ -1858,7 +1910,12 @@ in_call_setup_context_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
+
+    g_assert_not_reached ();
 }
 
 static void
@@ -1950,8 +2007,10 @@ in_call_cleanup_context_step (GTask *task)
     MMIfaceModemVoice    *self;
     InCallCleanupContext *ctx;
 
-    if (g_task_return_error_if_cancelled (task))
+    if (g_task_return_error_if_cancelled (task)) {
+        g_object_unref (task);
         return;
+    }
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
@@ -1986,7 +2045,12 @@ in_call_cleanup_context_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
+
+    g_assert_not_reached ();
 }
 
 static void
@@ -2126,6 +2190,8 @@ call_list_foreach_count_in_call (MMBaseCall *call,
         /* NOTE: ringing-in and waiting calls are NOT yet in-call, e.g. there must
          * be no audio settings enabled and we must not enable in-call URC handling
          * yet. */
+    case MM_CALL_STATE_UNKNOWN:
+    case MM_CALL_STATE_TERMINATED:
     default:
         break;
     }
@@ -2342,11 +2408,11 @@ load_call_list_ready (MMIfaceModemVoice *self,
     if (!MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->load_call_list_finish (self, res, &call_info_list, &error)) {
         mm_warn ("couldn't load call list: %s", error->message);
         g_error_free (error);
+    } else {
+        /* Always report the list even if NULL (it would mean no ongoing calls) */
+        mm_iface_modem_voice_report_all_calls (self, call_info_list);
+        mm_3gpp_call_info_list_free (call_info_list);
     }
-
-    /* Always report the list even if NULL (it would mean no ongoing calls) */
-    mm_iface_modem_voice_report_all_calls (self, call_info_list);
-    mm_3gpp_call_info_list_free (call_info_list);
 
     /* setup the polling again */
     g_assert (!ctx->polling_id);
@@ -2369,6 +2435,9 @@ call_list_foreach_count_establishing (MMBaseCall *call,
     case MM_CALL_STATE_WAITING:
         *n_calls_establishing = *n_calls_establishing + 1;
         break;
+    case MM_CALL_STATE_ACTIVE:
+    case MM_CALL_STATE_TERMINATED:
+    case MM_CALL_STATE_UNKNOWN:
     default:
         break;
     }
@@ -2547,8 +2616,8 @@ interface_disabling_step (GTask *task)
 
     switch (ctx->step) {
     case DISABLING_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_DISABLE_UNSOLICITED_EVENTS:
         /* Allow cleaning up unsolicited events */
@@ -2560,8 +2629,8 @@ interface_disabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_CLEANUP_UNSOLICITED_EVENTS:
         /* Allow cleaning up unsolicited events */
@@ -2573,14 +2642,17 @@ interface_disabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case DISABLING_STEP_LAST:
         /* We are done without errors! */
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -2707,8 +2779,8 @@ interface_enabling_step (GTask *task)
 
     switch (ctx->step) {
     case ENABLING_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_SETUP_UNSOLICITED_EVENTS:
         /* Allow setting up unsolicited events to get notified of incoming calls */
@@ -2720,8 +2792,8 @@ interface_enabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_ENABLE_UNSOLICITED_EVENTS:
         /* Allow setting up unsolicited events to get notified of incoming calls */
@@ -2733,14 +2805,17 @@ interface_enabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case ENABLING_STEP_LAST:
         /* We are done without errors! */
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -2809,8 +2884,10 @@ check_support_ready (MMIfaceModemVoice *self,
     GError *error = NULL;
 
     if (!MM_IFACE_MODEM_VOICE_GET_INTERFACE (self)->check_support_finish (self, res, &error)) {
-        mm_dbg ("Voice support check failed: '%s'", error->message);
-        g_error_free (error);
+        if (error) {
+            mm_dbg ("Voice support check failed: '%s'", error->message);
+            g_error_free (error);
+        }
         g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED, "Voice not supported");
         g_object_unref (task);
         return;
@@ -2839,8 +2916,8 @@ interface_initialization_step (GTask *task)
 
     switch (ctx->step) {
     case INITIALIZATION_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall through */
 
     case INITIALIZATION_STEP_CHECK_SUPPORT:
         /* Always check voice support when we run initialization, because
@@ -2913,9 +2990,8 @@ interface_initialization_step (GTask *task)
         }
         g_object_unref (list);
 
-        /* Fall down to next step */
         ctx->step++;
-    }
+    } /* fall through */
 
     case INITIALIZATION_STEP_LAST:
         /* Setup all method handlers */
@@ -2938,6 +3014,9 @@ interface_initialization_step (GTask *task)
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();

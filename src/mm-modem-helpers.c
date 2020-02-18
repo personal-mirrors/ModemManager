@@ -1268,8 +1268,9 @@ parse_access_tech (const gchar *str)
 }
 
 GList *
-mm_3gpp_parse_cops_test_response (const gchar *reply,
-                                  GError **error)
+mm_3gpp_parse_cops_test_response (const gchar     *reply,
+                                  MMModemCharset   cur_charset,
+                                  GError         **error)
 {
     GRegex *r;
     GList *info_list = NULL;
@@ -1362,6 +1363,11 @@ mm_3gpp_parse_cops_test_response (const gchar *reply,
         info->operator_long = mm_get_string_unquoted_from_match_info (match_info, 2);
         info->operator_short = mm_get_string_unquoted_from_match_info (match_info, 3);
         info->operator_code = mm_get_string_unquoted_from_match_info (match_info, 4);
+
+        /* The returned strings may be given in e.g. UCS2 */
+        mm_3gpp_normalize_operator (&info->operator_long,  cur_charset);
+        mm_3gpp_normalize_operator (&info->operator_short, cur_charset);
+        mm_3gpp_normalize_operator (&info->operator_code,  cur_charset);
 
         /* Only try for access technology with UMTS-format matches.
          * If none give, assume GSM */
@@ -1941,7 +1947,11 @@ mm_3gpp_parse_cgact_read_response (const gchar *reply,
 /*************************************************************************/
 
 static gulong
-parse_uint (char *str, int base, glong nmin, glong nmax, gboolean *valid)
+parse_uint (gchar    *str,
+            gint      base,
+            gulong    nmin,
+            gulong    nmax,
+            gboolean *valid)
 {
     gulong ret = 0;
     gchar *endquote;
@@ -4016,8 +4026,8 @@ mm_3gpp_parse_pdu_cmgl_response (const gchar *str,
  * many more facilities defined (for various flavors of call
  * barring); we only map the ones we care about. */
 typedef struct {
-    MMModem3gppFacility facility;
-    gchar *acronym;
+    MMModem3gppFacility  facility;
+    const gchar         *acronym;
 } FacilityAcronym;
 
 static const FacilityAcronym facility_acronyms[] = {
@@ -4044,7 +4054,7 @@ mm_3gpp_acronym_to_facility (const gchar *str)
     return MM_MODEM_3GPP_FACILITY_NONE;
 }
 
-gchar *
+const gchar *
 mm_3gpp_facility_to_acronym (MMModem3gppFacility facility)
 {
     guint i;
@@ -4175,6 +4185,8 @@ mm_3gpp_get_pdp_type_from_ip_family (MMBearerIpFamily family)
         return "IPV6";
     case MM_BEARER_IP_FAMILY_IPV4V6:
         return "IPV4V6";
+    case MM_BEARER_IP_FAMILY_NONE:
+    case MM_BEARER_IP_FAMILY_ANY:
     default:
         return NULL;
     }
@@ -4686,7 +4698,7 @@ mm_cdma_parse_eri (const gchar *reply,
             *out_ind = ind;
 
         while (iter->num != -1) {
-            if (iter->num == ind) {
+            if ((guint)iter->num == ind) {
                 *out_roaming = iter->roam_ind;
                 if (out_desc)
                     *out_desc = iter->banner;

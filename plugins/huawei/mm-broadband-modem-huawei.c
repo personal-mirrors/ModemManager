@@ -1537,11 +1537,11 @@ huawei_signal_changed (MMPortSerialAt *port,
         quality = 0;
     } else {
         /* Normalize the quality */
-        quality = CLAMP (quality, 0, 31) * 100 / 31;
+        quality = MM_CLAMP_HIGH (quality, 31) * 100 / 31;
     }
 
     mm_dbg ("3GPP signal quality: %u", quality);
-    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), (guint)quality);
+    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
 }
 
 static void
@@ -1813,14 +1813,17 @@ huawei_hcsq_changed (MMPortSerialAt *port,
 
     detailed_signal_clear (&self->priv->detailed_signal);
 
-    switch (act) {
-    case MM_MODEM_ACCESS_TECHNOLOGY_GSM:
+    /* 2G */
+    if (act == MM_MODEM_ACCESS_TECHNOLOGY_GSM) {
         self->priv->detailed_signal.gsm = mm_signal_new ();
         /* value1: gsm_rssi */
         if (get_rssi_dbm (value1, &v))
             mm_signal_set_rssi (self->priv->detailed_signal.gsm, v);
-        break;
-    case MM_MODEM_ACCESS_TECHNOLOGY_UMTS:
+        return;
+    }
+
+    /* 3G */
+    if (act == MM_MODEM_ACCESS_TECHNOLOGY_UMTS) {
         self->priv->detailed_signal.umts = mm_signal_new ();
         /* value1: wcdma_rssi */
         if (get_rssi_dbm (value1, &v))
@@ -1829,8 +1832,11 @@ huawei_hcsq_changed (MMPortSerialAt *port,
         /* value3: wcdma_ecio */
         if (get_ecio_db (value3, &v))
             mm_signal_set_ecio (self->priv->detailed_signal.umts, v);
-        break;
-    case MM_MODEM_ACCESS_TECHNOLOGY_LTE:
+        return;
+    }
+
+    /* 4G */
+    if (act == MM_MODEM_ACCESS_TECHNOLOGY_LTE) {
         self->priv->detailed_signal.lte = mm_signal_new ();
         /* value1: lte_rssi */
         if (get_rssi_dbm (value1, &v))
@@ -1844,11 +1850,10 @@ huawei_hcsq_changed (MMPortSerialAt *port,
         /* value4: lte_rsrq */
         if (get_rsrq_db (value4, &v))
             mm_signal_set_rsrq (self->priv->detailed_signal.lte, v);
-        break;
-    default:
-        /* CDMA and EVDO not yet supported */
-        break;
+        return;
     }
+
+    /* CDMA and EVDO not yet supported */
 }
 
 static void
@@ -2174,8 +2179,6 @@ create_bearer_for_net_port (GTask *task)
     properties = g_task_get_task_data (task);
 
     switch (self->priv->ndisdup_support) {
-    case FEATURE_SUPPORT_UNKNOWN:
-        g_assert_not_reached ();
     case FEATURE_NOT_SUPPORTED:
         mm_dbg ("^NDISDUP not supported, creating default bearer...");
         mm_broadband_bearer_new (MM_BROADBAND_MODEM (self),
@@ -2192,6 +2195,9 @@ create_bearer_for_net_port (GTask *task)
                                         (GAsyncReadyCallback)broadband_bearer_huawei_new_ready,
                                         task);
         return;
+    case FEATURE_SUPPORT_UNKNOWN:
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -2373,9 +2379,9 @@ huawei_1x_signal_changed (MMPortSerialAt *port,
     if (!mm_get_uint_from_match_info (match_info, 1, &quality))
         return;
 
-    quality = CLAMP (quality, 0, 100);
+    quality = MM_CLAMP_HIGH (quality, 100);
     mm_dbg ("1X signal quality: %u", quality);
-    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), (guint)quality);
+    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
 }
 
 static void
@@ -2388,9 +2394,9 @@ huawei_evdo_signal_changed (MMPortSerialAt *port,
     if (!mm_get_uint_from_match_info (match_info, 1, &quality))
         return;
 
-    quality = CLAMP (quality, 0, 100);
+    quality = MM_CLAMP_HIGH (quality, 100);
     mm_dbg ("EVDO signal quality: %u", quality);
-    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), (guint)quality);
+    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
 }
 
 /* Signal quality loading (Modem interface) */
@@ -2459,7 +2465,7 @@ signal_ready (MMBaseModem *self,
         buf[i++] = *response++;
 
     if (mm_get_uint_from_str (buf, &quality)) {
-        quality = CLAMP (quality, 0, 100);
+        quality = MM_CLAMP_HIGH (quality, 100);
         g_task_return_int (task, quality);
     } else {
         g_task_return_new_error (task,
@@ -2942,6 +2948,44 @@ modem_voice_check_support (MMIfaceModemVoice   *self,
 /* In-call audio channel setup/cleanup */
 
 static gboolean
+modem_voice_cleanup_in_call_audio_channel_finish (MMIfaceModemVoice  *self,
+                                                  GAsyncResult       *res,
+                                                  GError            **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+modem_voice_cleanup_in_call_audio_channel (MMIfaceModemVoice   *_self,
+                                           GAsyncReadyCallback  callback,
+                                           gpointer             user_data)
+{
+    MMBroadbandModemHuawei *self = MM_BROADBAND_MODEM_HUAWEI (_self);
+    GTask                  *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* If there is no CVOICE support, no custom audio setup required
+     * (i.e. audio path is externally managed) */
+    if (self->priv->cvoice_support == FEATURE_SUPPORTED) {
+        MMPort *port;
+
+        /* The QCDM port, if present, switches back from voice to QCDM after
+         * the voice call is dropped. */
+        port = MM_PORT (mm_base_modem_peek_port_qcdm (MM_BASE_MODEM (self)));
+        if (port) {
+            /* During a voice call, we'll set the QCDM port as connected, and that
+             * will make us ignore all incoming data and avoid sending any outgoing
+             * data. */
+            mm_port_set_connected (port, FALSE);
+        }
+    }
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static gboolean
 modem_voice_setup_in_call_audio_channel_finish (MMIfaceModemVoice  *_self,
                                                 GAsyncResult       *res,
                                                 MMPort            **audio_port,
@@ -2954,6 +2998,8 @@ modem_voice_setup_in_call_audio_channel_finish (MMIfaceModemVoice  *_self,
         return FALSE;
 
     if (self->priv->cvoice_support == FEATURE_SUPPORTED) {
+        MMPort *port;
+
         /* Setup audio format */
         if (audio_format) {
             gchar *resolution_str;
@@ -2968,8 +3014,16 @@ modem_voice_setup_in_call_audio_channel_finish (MMIfaceModemVoice  *_self,
 
         /* The QCDM port, if present, switches from QCDM to voice while
          * a voice call is active. */
+        port = MM_PORT (mm_base_modem_peek_port_qcdm (MM_BASE_MODEM (self)));
+        if (port) {
+            /* During a voice call, we'll set the QCDM port as connected, and that
+             * will make us ignore all incoming data and avoid sending any outgoing
+             * data. */
+            mm_port_set_connected (port, TRUE);
+        }
+
         if (audio_port)
-            *audio_port = MM_PORT (mm_base_modem_get_port_qcdm (MM_BASE_MODEM (self)));
+            *audio_port = (port ? g_object_ref (port) : NULL);;
     } else {
         if (audio_format)
             *audio_format =  NULL;
@@ -3593,8 +3647,7 @@ huawei_rfswitch_check_ready (MMBaseModem *_self,
         }
     }
 
-    switch (self->priv->rfswitch_support) {
-    case FEATURE_SUPPORT_UNKNOWN:
+    if (self->priv->rfswitch_support == FEATURE_SUPPORT_UNKNOWN) {
         if (error) {
             mm_dbg ("The device does not support ^RFSWITCH");
             self->priv->rfswitch_support = FEATURE_NOT_SUPPORTED;
@@ -3608,12 +3661,6 @@ huawei_rfswitch_check_ready (MMBaseModem *_self,
 
         mm_dbg ("The device supports ^RFSWITCH");
         self->priv->rfswitch_support = FEATURE_SUPPORTED;
-        break;
-    case FEATURE_SUPPORTED:
-        break;
-    default:
-        g_assert_not_reached ();
-        break;
     }
 
     if (error)
@@ -3712,6 +3759,7 @@ huawei_modem_power_up (MMIfaceModem *self,
                                   callback,
                                   user_data);
         break;
+    case FEATURE_SUPPORT_UNKNOWN:
     default:
         g_assert_not_reached ();
         break;
@@ -3753,6 +3801,7 @@ huawei_modem_power_down (MMIfaceModem *self,
                                   callback,
                                   user_data);
         break;
+    case FEATURE_SUPPORT_UNKNOWN:
     default:
         g_assert_not_reached ();
         break;
@@ -3949,7 +3998,7 @@ enable_location_gathering_finish (MMIfaceModemLocation *self,
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
-static char *gps_startup[] = {
+static const gchar *gps_startup[] = {
     "^WPDOM=0",
     "^WPDST=1",
     "^WPDFR=65535,30",
@@ -4701,6 +4750,8 @@ iface_modem_voice_init (MMIfaceModemVoice *iface)
     iface->disable_unsolicited_events_finish = modem_voice_disable_unsolicited_events_finish;
     iface->setup_in_call_audio_channel = modem_voice_setup_in_call_audio_channel;
     iface->setup_in_call_audio_channel_finish = modem_voice_setup_in_call_audio_channel_finish;
+    iface->cleanup_in_call_audio_channel = modem_voice_cleanup_in_call_audio_channel;
+    iface->cleanup_in_call_audio_channel_finish = modem_voice_cleanup_in_call_audio_channel_finish;
 
     iface->create_call = create_call;
 }

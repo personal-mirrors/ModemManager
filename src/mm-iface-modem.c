@@ -493,6 +493,8 @@ bearer_status_changed (MMBaseBearer *bearer,
         case MM_BEARER_STATUS_DISCONNECTED:
             new_state = get_consolidated_subsystem_state (self);
             break;
+        default:
+            g_assert_not_reached ();
         }
 
         mm_iface_modem_update_state (self,
@@ -745,11 +747,6 @@ handle_command_auth_ready (MMBaseModem *self,
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-        handle_command_context_free (ctx);
-        return;
-    }
-
-    if (abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_LOCKED)) {
         handle_command_context_free (ctx);
         return;
     }
@@ -1295,8 +1292,8 @@ peridic_signal_check_step (MMIfaceModem *self)
         g_assert_not_reached ();
 
     case SIGNAL_CHECK_STEP_FIRST:
-        /* Fall down to next step */
         ctx->running_step++;
+        /* fall-through */
 
     case SIGNAL_CHECK_STEP_SIGNAL_QUALITY:
         if (ctx->enabled && ctx->signal_quality_polling_supported &&
@@ -1305,8 +1302,8 @@ peridic_signal_check_step (MMIfaceModem *self)
                 self, (GAsyncReadyCallback)signal_quality_check_ready, NULL);
             return;
         }
-        /* Fall down to next step */
         ctx->running_step++;
+        /* fall-through */
 
     case SIGNAL_CHECK_STEP_ACCESS_TECHNOLOGIES:
         if (ctx->enabled && ctx->access_technology_polling_supported &&
@@ -1315,8 +1312,8 @@ peridic_signal_check_step (MMIfaceModem *self)
                 self, (GAsyncReadyCallback)access_technologies_check_ready, NULL);
             return;
         }
-        /* Fall down to next step */
         ctx->running_step++;
+        /* fall-through */
 
     case SIGNAL_CHECK_STEP_LAST:
         /* Flag as sequence finished */
@@ -1367,6 +1364,9 @@ peridic_signal_check_step (MMIfaceModem *self)
                                                      (GSourceFunc) periodic_signal_check_cb,
                                                      self);
         return;
+
+    default:
+        g_assert_not_reached ();
     }
 }
 
@@ -3171,6 +3171,24 @@ set_lock_status (MMIfaceModem *self,
     }
 }
 
+MMModemLock
+mm_iface_modem_get_unlock_required (MMIfaceModem *self)
+{
+    MmGdbusModem *skeleton = NULL;
+    MMModemLock   lock;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
+                  NULL);
+    if (skeleton) {
+        lock = mm_gdbus_modem_get_unlock_required (skeleton);
+        g_object_unref (skeleton);
+    } else
+        lock = MM_MODEM_LOCK_UNKNOWN;
+
+    return lock;
+}
+
 MMUnlockRetries *
 mm_iface_modem_get_unlock_retries (MMIfaceModem *self)
 {
@@ -3387,9 +3405,8 @@ update_lock_info_context_step (GTask *task)
             update_lock_info_context_step (task);
             return;
         }
-
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case UPDATE_LOCK_INFO_CONTEXT_STEP_LOCK:
         /* Don't re-ask if already known */
@@ -3401,9 +3418,8 @@ update_lock_info_context_step (GTask *task)
                 task);
             return;
         }
-
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case UPDATE_LOCK_INFO_CONTEXT_STEP_AFTER_UNLOCK:
         /* If we get that no lock is required, run the after SIM unlock step
@@ -3426,9 +3442,8 @@ update_lock_info_context_step (GTask *task)
             /* If no way to run after SIM unlock step, we're done */
             mm_dbg ("SIM is ready, and no need for the after SIM unlock step...");
         }
-
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case UPDATE_LOCK_INFO_CONTEXT_STEP_RETRIES:
         /* Load unlock retries if possible */
@@ -3440,9 +3455,8 @@ update_lock_info_context_step (GTask *task)
                 task);
             return;
         }
-
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case UPDATE_LOCK_INFO_CONTEXT_STEP_LAST:
         if (ctx->saved_error) {
@@ -3964,8 +3978,8 @@ interface_enabling_step (GTask *task)
 
     switch (ctx->step) {
     case ENABLING_STEP_FIRST:
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case ENABLING_STEP_SET_POWER_STATE:
         mm_iface_modem_set_power_state (self,
@@ -3983,8 +3997,8 @@ interface_enabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case ENABLING_STEP_FLOW_CONTROL:
         if (MM_IFACE_MODEM_GET_INTERFACE (self)->setup_flow_control &&
@@ -3995,8 +4009,8 @@ interface_enabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case ENABLING_STEP_SUPPORTED_CHARSETS:
         if (MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_charsets &&
@@ -4007,8 +4021,8 @@ interface_enabling_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case ENABLING_STEP_CHARSET:
         /* Only try to set charsets if we were able to load supported ones */
@@ -4048,14 +4062,17 @@ interface_enabling_step (GTask *task)
             g_object_unref (task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case ENABLING_STEP_LAST:
         /* We are done without errors! */
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();
@@ -4763,8 +4780,8 @@ interface_initialization_step (GTask *task)
             mm_gdbus_modem_set_ports (ctx->skeleton, mm_common_ports_array_to_variant (port_infos, n_port_infos));
             mm_modem_port_info_array_free (port_infos, n_port_infos);
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_CURRENT_CAPABILITIES:
         /* Current capabilities may change during runtime, i.e. if new firmware reloaded; but we'll
@@ -4780,8 +4797,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_SUPPORTED_CAPABILITIES: {
         GArray *supported_capabilities;
@@ -4817,9 +4834,8 @@ interface_initialization_step (GTask *task)
         }
         g_array_unref (supported_capabilities);
 
-        /* Fall down to next step */
         ctx->step++;
-    }
+    } /* fall-through */
 
     case INITIALIZATION_STEP_BEARERS: {
         MMBearerList *list = NULL;
@@ -4860,9 +4876,8 @@ interface_initialization_step (GTask *task)
                 mm_bearer_list_get_max_active (list));
         g_object_unref (list);
 
-        /* Fall down to next step */
         ctx->step++;
-    }
+    } /* fall-through */
 
     case INITIALIZATION_STEP_MANUFACTURER:
         /* Manufacturer is meant to be loaded only once during the whole
@@ -4877,8 +4892,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_MODEL:
         /* Model is meant to be loaded only once during the whole
@@ -4893,8 +4908,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_REVISION:
         /* Revision is meant to be loaded only once during the whole
@@ -4909,8 +4924,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_CARRIER_CONFIG:
         /* Current carrier config is meant to be loaded only once during the whole
@@ -4924,8 +4939,8 @@ interface_initialization_step (GTask *task)
                                                                       task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_HARDWARE_REVISION:
         /* HardwareRevision is meant to be loaded only once during the whole
@@ -4940,8 +4955,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_EQUIPMENT_ID:
         /* Equipment ID is meant to be loaded only once during the whole
@@ -4956,8 +4971,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_DEVICE_ID:
         /* Device ID is meant to be loaded only once during the whole
@@ -4972,8 +4987,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_SUPPORTED_MODES:
         if (MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_modes != NULL &&
@@ -5001,8 +5016,8 @@ interface_initialization_step (GTask *task)
 
             g_array_unref (supported_modes);
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_SUPPORTED_BANDS: {
         GArray *supported_bands;
@@ -5031,9 +5046,8 @@ interface_initialization_step (GTask *task)
         }
         g_array_unref (supported_bands);
 
-        /* Fall down to next step */
         ctx->step++;
-    }
+    } /* fall-through */
 
     case INITIALIZATION_STEP_SUPPORTED_IP_FAMILIES:
         /* Supported ip_families are meant to be loaded only once during the whole
@@ -5048,8 +5062,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_POWER_STATE:
         /* Initial power state is meant to be loaded only once. Therefore, if we
@@ -5067,8 +5081,8 @@ interface_initialization_step (GTask *task)
             /* We don't know how to load current power state; assume ON */
             mm_gdbus_modem_set_power_state (ctx->skeleton, MM_MODEM_POWER_STATE_ON);
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_SIM_HOT_SWAP:
         if (MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap &&
@@ -5079,8 +5093,8 @@ interface_initialization_step (GTask *task)
                 task);
                 return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_UNLOCK_REQUIRED:
         /* Only check unlock required if we were previously not unlocked */
@@ -5091,8 +5105,8 @@ interface_initialization_step (GTask *task)
                                              task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_SIM:
         /* If the modem doesn't need any SIM (not implemented by plugin, or not
@@ -5123,8 +5137,8 @@ interface_initialization_step (GTask *task)
             g_object_unref (sim);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_SETUP_CARRIER_CONFIG:
         /* Setup and perform automatic carrier config switching as soon as the
@@ -5166,8 +5180,8 @@ interface_initialization_step (GTask *task)
             g_clear_object (&sim);
             g_free (carrier_config_mapping);
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_OWN_NUMBERS:
         /* Own numbers is meant to be loaded only once during the whole
@@ -5182,8 +5196,8 @@ interface_initialization_step (GTask *task)
                 task);
             return;
         }
-        /* Fall down to next step */
         ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_CURRENT_MODES: {
         MMModemMode allowed = MM_MODEM_MODE_ANY;
@@ -5223,9 +5237,8 @@ interface_initialization_step (GTask *task)
                 g_array_unref (supported);
         }
 
-        /* Fall down to next step */
         ctx->step++;
-    }
+    } /* fall-through */
 
     case INITIALIZATION_STEP_CURRENT_BANDS: {
         GArray *current;
@@ -5254,9 +5267,8 @@ interface_initialization_step (GTask *task)
         if (current)
             g_array_unref (current);
 
-        /* Fall down to next step */
         ctx->step++;
-    }
+    } /* fall-through */
 
     case INITIALIZATION_STEP_LAST:
         /* Setup all method handlers */
@@ -5288,6 +5300,9 @@ interface_initialization_step (GTask *task)
 
         g_object_unref (task);
         return;
+
+    default:
+        break;
     }
 
     g_assert_not_reached ();

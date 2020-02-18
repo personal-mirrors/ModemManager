@@ -411,7 +411,7 @@ utf8_to_gsm_ext_char (const char *utf8, guint32 len, guint8 *out_gsm)
 guint8 *
 mm_charset_gsm_unpacked_to_utf8 (const guint8 *gsm, guint32 len)
 {
-    int i;
+    guint i;
     GByteArray *utf8;
 
     g_return_val_if_fail (gsm != NULL, NULL);
@@ -423,6 +423,28 @@ mm_charset_gsm_unpacked_to_utf8 (const guint8 *gsm, guint32 len)
     for (i = 0; i < len; i++) {
         guint8 uchars[4];
         guint8 ulen;
+
+        /*
+         * 	0x00 is NULL (when followed only by 0x00 up to the
+         * 	end of (fixed byte length) message, possibly also up to
+         * 	FORM FEED.  But 0x00 is also the code for COMMERCIAL AT
+         * 	when some other character (CARRIAGE RETURN if nothing else)
+         * 	comes after the 0x00.
+         *  http://unicode.org/Public/MAPPINGS/ETSI/GSM0338.TXT
+         *
+         * So, if we find a '@' (0x00) and all the next chars after that
+         * are also 0x00, we can consider the string finished already.
+         */
+        if (gsm[i] == 0x00) {
+            gsize j;
+
+            for (j = i + 1; j < len; j++) {
+                if (gsm[j] != 0x00)
+                    break;
+            }
+            if (j == len)
+                break;
+        }
 
         if (gsm[i] == GSM_ESCAPE_CHAR) {
             /* Extended alphabet, decode next char */
@@ -537,7 +559,7 @@ pccp437_is_subset (gunichar c, const char *utf8, gsize ulen)
         0x2321, 0x00f7, 0x2248, 0x00b0, 0x2219, 0x00b7, 0x221a, 0x207f, 0x00b2,
         0x25a0, 0x00a0
     };
-    int i;
+    guint i;
 
     if (c <= 0x7F)
         return TRUE;
@@ -568,7 +590,7 @@ pcdn_is_subset (gunichar c, const char *utf8, gsize ulen)
         0x00a7, 0x00f7, 0x00b8, 0x00b0, 0x00a8, 0x00b7, 0x00b9, 0x00b3, 0x00b2,
         0x25a0, 0x00a0
     };
-    int i;
+    guint i;
 
     if (c <= 0x7F)
         return TRUE;
@@ -650,7 +672,7 @@ mm_charset_gsm_unpack (const guint8 *gsm,
                        guint32 *out_unpacked_len)
 {
     GByteArray *unpacked;
-    int i;
+    guint i;
 
     unpacked = g_byte_array_sized_new (num_septets + 1);
 
@@ -687,7 +709,7 @@ mm_charset_gsm_pack (const guint8 *src,
 {
     guint8 *packed;
     guint octet = 0, lshift, plen;
-    int i = 0;
+    guint i = 0;
 
     g_return_val_if_fail (start_offset < 8, NULL);
 
@@ -816,6 +838,9 @@ mm_charset_take_and_convert_to_utf8 (gchar *str, MMModemCharset charset)
     case MM_MODEM_CHARSET_UTF8:
         utf8 = str;
         break;
+
+    default:
+        g_assert_not_reached ();
     }
 
     /* Validate UTF-8 always before returning. This result will be exposed in DBus
@@ -910,6 +935,9 @@ mm_utf8_take_and_convert_to_charset (gchar *str,
     case MM_MODEM_CHARSET_UTF8:
         encoded = str;
         break;
+
+    default:
+        g_assert_not_reached ();
     }
 
     return encoded;
