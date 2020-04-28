@@ -206,6 +206,8 @@ mm_3gpp_profile_list_from_mbim_provisioned_contexts (
     GList *profiles = NULL;
     guint i;
 
+    g_return_val_if_fail (contexts != NULL, NULL);
+
     for (i = 0; i < n_contexts; i++) {
         MM3gppProfile *profile;
 
