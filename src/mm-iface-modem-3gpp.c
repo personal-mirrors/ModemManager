@@ -1728,62 +1728,6 @@ out:
 
 /*****************************************************************************/
 
-static GVariant *
-profiles_build_result (const GList *profiles)
-{
-    const GList *l;
-    GVariantBuilder builder;
-
-    g_variant_builder_init (&builder, G_VARIANT_TYPE ("aa{sv}"));
-
-    for (l = profiles; l; l = g_list_next (l)) {
-        const MM3gppProfile *profile = l->data;
-
-        g_variant_builder_open (&builder, G_VARIANT_TYPE ("a{sv}"));
-
-        g_variant_builder_add (&builder, "{sv}",
-                               "profile-id", g_variant_new_uint32 (profile->profile_id));
-        if (profile->apn) {
-            g_variant_builder_add (&builder, "{sv}",
-                                   "apn", g_variant_new_string (profile->apn));
-        } else {
-            g_variant_builder_add (&builder, "{sv}", "apn", g_variant_new_string (""));
-        }
-        g_variant_builder_add (&builder, "{sv}",
-                               "auth-type", g_variant_new_uint32 (profile->auth_type));
-        if (profile->username)
-            g_variant_builder_add (&builder, "{sv}",
-                                   "username", g_variant_new_string (profile->username));
-        if (profile->password)
-            g_variant_builder_add (&builder, "{sv}",
-                                   "password", g_variant_new_string (profile->password));
-        g_variant_builder_close (&builder);
-    }
-
-    return g_variant_ref_sink (g_variant_builder_end (&builder));
-}
-
-void
-mm_iface_modem_3gpp_update_profiles (MMIfaceModem3gpp *self,
-                                     const GList *profiles)
-{
-    MmGdbusModem3gpp *skeleton = NULL;
-    GVariant *variant;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_3GPP_DBUS_SKELETON, &skeleton,
-                  NULL);
-    if (!skeleton)
-        return;
-
-    variant = profiles_build_result (profiles);
-    mm_gdbus_modem3gpp_set_profiles (skeleton, variant);
-    g_variant_unref (variant);
-    g_object_unref (skeleton);
-}
-
-/*****************************************************************************/
-
 typedef struct _DisablingContext DisablingContext;
 static void interface_disabling_step (GTask *task);
 
@@ -1998,7 +1942,6 @@ typedef enum {
     ENABLING_STEP_SETUP_UNSOLICITED_REGISTRATION_EVENTS,
     ENABLING_STEP_ENABLE_UNSOLICITED_REGISTRATION_EVENTS,
     ENABLING_STEP_INITIAL_EPS_BEARER,
-    ENABLING_STEP_LOAD_PROFILES,
     ENABLING_STEP_LAST
 } EnablingStep;
 
@@ -2153,33 +2096,6 @@ out:
 }
 
 static void
-load_profiles_ready (MMIfaceModem3gpp *self,
-                     GAsyncResult     *res,
-                     GTask            *task)
-{
-    GList           *profiles;
-    EnablingContext *ctx;
-    GError          *error = NULL;
-
-    ctx = g_task_get_task_data (task);
-
-    profiles = MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_profiles_finish (self, res, &error);
-    if (!profiles) {
-        mm_dbg ("couldn't load initial profiles: '%s'", error->message);
-        g_error_free (error);
-        goto out;
-    }
-
-    mm_iface_modem_3gpp_update_profiles (self, profiles);
-    mm_3gpp_profile_list_free (profiles);
-
-out:
-    /* Go on to next step */
-    ctx->step++;
-    interface_enabling_step (task);
-}
-
-static void
 interface_enabling_step (GTask *task)
 {
     MMIfaceModem3gpp *self;
@@ -2278,18 +2194,6 @@ interface_enabling_step (GTask *task)
         }
         ctx->step++;
     } /* fall through */
-
-    case ENABLING_STEP_LOAD_PROFILES:
-        if (MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_profiles &&
-            MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_profiles_finish) {
-            MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_profiles (
-                self,
-                (GAsyncReadyCallback)load_profiles_ready,
-                task);
-            return;
-        }
-        /* Fall down to next step */
-        ctx->step++;
 
     case ENABLING_STEP_LAST:
         /* We are done without errors! */
@@ -2635,7 +2539,6 @@ mm_iface_modem_3gpp_initialize (MMIfaceModem3gpp *self,
         mm_gdbus_modem3gpp_set_subscription_state (skeleton, MM_MODEM_3GPP_SUBSCRIPTION_STATE_UNKNOWN);
         mm_gdbus_modem3gpp_set_pco (skeleton, NULL);
         mm_gdbus_modem3gpp_set_initial_eps_bearer (skeleton, NULL);
-        mm_gdbus_modem3gpp_set_profiles (skeleton, NULL);
 
         /* Bind our RegistrationState property */
         g_object_bind_property (self, MM_IFACE_MODEM_3GPP_REGISTRATION_STATE,

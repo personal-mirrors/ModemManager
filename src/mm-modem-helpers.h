@@ -201,15 +201,6 @@ guint mm_3gpp_select_best_cid (const gchar      *apn,
                                gboolean         *cid_reused,
                                gboolean         *cid_overwritten);
 
-typedef struct {
-    guint profile_id;
-    gchar *apn;
-    gchar *username;
-    gchar *password;
-    MMBearerAllowedAuth auth_type;
-} MM3gppProfile;
-void mm_3gpp_profile_list_free (GList *profiles);
-
 /* AT+CGACT? (active PDP context query) response parser */
 typedef struct {
     guint cid;
