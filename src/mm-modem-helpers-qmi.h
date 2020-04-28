@@ -107,10 +107,6 @@ MMSmsState mm_sms_state_from_qmi_message_tag (QmiWmsMessageTagType tag);
 /* QMI/WDS to MM translations */
 
 QmiWdsAuthentication mm_bearer_allowed_auth_to_qmi_authentication (MMBearerAllowedAuth auth);
-MMBearerAllowedAuth mm_bearer_allowed_auth_from_qmi_authentication (QmiWdsAuthentication auth);
-
-/* Input is a GList of QmiMessageWdsGetProfileSettingsOutput. */
-GList *mm_3gpp_profile_list_from_qmi_profile_settings (GList *profile_list);
 
 /*****************************************************************************/
 /* QMI/OMA to MM translations */

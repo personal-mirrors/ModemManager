@@ -1438,54 +1438,6 @@ mm_bearer_allowed_auth_to_qmi_authentication (MMBearerAllowedAuth auth)
     return out;
 }
 
-MMBearerAllowedAuth
-mm_bearer_allowed_auth_from_qmi_authentication (QmiWdsAuthentication auth)
-{
-    MMBearerAllowedAuth out;
-
-    out = MM_BEARER_ALLOWED_AUTH_NONE;
-    if (auth & QMI_WDS_AUTHENTICATION_PAP)
-        out |= MM_BEARER_ALLOWED_AUTH_PAP;
-    if (auth & QMI_WDS_AUTHENTICATION_CHAP)
-        out |= MM_BEARER_ALLOWED_AUTH_CHAP;
-
-    return out;
-}
-
-/*****************************************************************************/
-
-GList *
-mm_3gpp_profile_list_from_qmi_profile_settings (GList *profiles)
-{
-    GList *mm_profiles = NULL;
-    GList *iter;
-
-    for (iter = profiles; iter; iter = g_list_next (iter)) {
-        QmiMessageWdsGetProfileSettingsOutput *wds_profile;
-        MM3gppProfile *mm_profile;
-        const gchar *str;
-        guint8 context_number;
-        QmiWdsAuthentication auth;
-
-        wds_profile = iter->data;
-        mm_profile = g_slice_new0 (MM3gppProfile);
-        if (qmi_message_wds_get_profile_settings_output_get_apn_name (wds_profile, &str, NULL))
-            mm_profile->apn = g_strdup(str);
-        if (qmi_message_wds_get_profile_settings_output_get_pdp_context_number (wds_profile, &context_number, NULL))
-            mm_profile->profile_id = context_number;
-        if (qmi_message_wds_get_profile_settings_output_get_username (wds_profile, &str, NULL))
-            mm_profile->username = g_strdup(str);
-        if (qmi_message_wds_get_profile_settings_output_get_password (wds_profile, &str, NULL))
-            mm_profile->password = g_strdup(str);
-        if (qmi_message_wds_get_profile_settings_output_get_authentication (wds_profile, &auth, NULL))
-            mm_profile->auth_type = mm_bearer_allowed_auth_from_qmi_authentication (auth);
-
-        mm_profiles = g_list_prepend (mm_profiles, mm_profile);
-    }
-
-    return mm_profiles;
-}
-
 /*****************************************************************************/
 
 /**
