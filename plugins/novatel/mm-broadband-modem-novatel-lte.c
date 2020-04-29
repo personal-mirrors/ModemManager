@@ -166,43 +166,6 @@ modem_after_sim_unlock (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Load current capabilities (Modem interface) */
-
-static MMModemCapability
-load_current_capabilities_finish (MMIfaceModem *self,
-                                  GAsyncResult *res,
-                                  GError **error)
-{
-    MMModemCapability caps;
-    gchar *caps_str;
-
-    /* Constrain the modem capabilities to LTE only.
-     * TODO(benchan): Remove this constraint. */
-    caps = MM_MODEM_CAPABILITY_LTE;
-    caps_str = mm_modem_capability_build_string_from_mask (caps);
-    mm_dbg ("loaded current capabilities: %s", caps_str);
-    g_free (caps_str);
-    return caps;
-}
-
-static void
-load_current_capabilities (MMIfaceModem *self,
-                           GAsyncReadyCallback callback,
-                           gpointer user_data)
-{
-    GSimpleAsyncResult *result;
-
-    mm_dbg ("loading (Novatel LTE) current capabilities...");
-
-    result = g_simple_async_result_new (G_OBJECT (self),
-                                        callback,
-                                        user_data,
-                                        load_current_capabilities);
-    g_simple_async_result_complete_in_idle (result);
-    g_object_unref (result);
-}
-
-/*****************************************************************************/
 /* Load own numbers (Modem interface) */
 
 static GStrv
@@ -747,8 +710,6 @@ iface_modem_init (MMIfaceModem *iface)
     iface->create_sim_finish = modem_create_sim_finish;
     iface->modem_after_sim_unlock = modem_after_sim_unlock;
     iface->modem_after_sim_unlock_finish = modem_after_sim_unlock_finish;
-    iface->load_current_capabilities = load_current_capabilities;
-    iface->load_current_capabilities_finish = load_current_capabilities_finish;
     iface->load_own_numbers = load_own_numbers;
     iface->load_own_numbers_finish = load_own_numbers_finish;
     iface->load_supported_bands = load_supported_bands;
