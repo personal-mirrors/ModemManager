@@ -39,13 +39,10 @@
 /* Common utilities */
 /*****************************************************************************/
 
-#define MM_MODEM_CAPABILITY_3GPP_LTE    \
-    (MM_MODEM_CAPABILITY_LTE |          \
-     MM_MODEM_CAPABILITY_LTE_ADVANCED)
-
 #define MM_MODEM_CAPABILITY_3GPP        \
     (MM_MODEM_CAPABILITY_GSM_UMTS |     \
-     MM_MODEM_CAPABILITY_3GPP_LTE)
+     MM_MODEM_CAPABILITY_LTE |          \
+     MM_MODEM_CAPABILITY_5GNR)
 
 gchar       *mm_strip_quotes (gchar *str);
 const gchar *mm_strip_tag    (const gchar *str,
@@ -59,8 +56,9 @@ GArray *mm_parse_uint_list (const gchar  *str,
 guint mm_count_bits_set (gulong number);
 guint mm_find_bit_set   (gulong number);
 
-gchar *mm_create_device_identifier (guint vid,
-                                    guint pid,
+gchar *mm_create_device_identifier (guint        vid,
+                                    guint        pid,
+                                    gpointer     log_object,
                                     const gchar *ati,
                                     const gchar *ati1,
                                     const gchar *gsn,
@@ -83,10 +81,8 @@ gchar *mm_new_iso8601_time (guint year,
                             gint offset_minutes);
 
 GArray *mm_filter_supported_modes (const GArray *all,
-                                   const GArray *supported_combinations);
-
-GArray *mm_filter_supported_capabilities (MMModemCapability all,
-                                          const GArray *supported_combinations);
+                                   const GArray *supported_combinations,
+                                   gpointer      log_object);
 
 gchar *mm_bcd_to_string (const guint8 *bcd, gsize bcd_len);
 
@@ -107,6 +103,7 @@ typedef struct {
     gchar           *number; /* optional */
 } MMCallInfo;
 gboolean mm_3gpp_parse_clcc_response (const gchar  *str,
+                                      gpointer      log_object,
                                       GList       **out_list,
                                       GError      **error);
 void     mm_3gpp_call_info_list_free (GList        *call_info_list);
@@ -126,6 +123,7 @@ typedef enum { /*< underscore_name=mm_flow_control >*/
 } MMFlowControl;
 
 MMFlowControl mm_parse_ifc_test_response (const gchar  *response,
+                                          gpointer      log_object,
                                           GError      **error);
 
 MMFlowControl mm_flow_control_from_string (const gchar  *str,
@@ -159,6 +157,7 @@ typedef struct {
 void mm_3gpp_network_info_list_free (GList *info_list);
 GList *mm_3gpp_parse_cops_test_response (const gchar     *reply,
                                          MMModemCharset   cur_charset,
+                                         gpointer         log_object,
                                          GError         **error);
 
 /* AT+COPS? (current operator) response parser */
@@ -180,8 +179,9 @@ typedef struct {
     MMBearerIpFamily pdp_type;
 } MM3gppPdpContextFormat;
 void mm_3gpp_pdp_context_format_list_free (GList *pdp_format_list);
-GList *mm_3gpp_parse_cgdcont_test_response (const gchar *reply,
-                                            GError **error);
+GList *mm_3gpp_parse_cgdcont_test_response (const gchar  *reply,
+                                            gpointer      log_object,
+                                            GError      **error);
 
 /* AT+CGDCONT? (PDP context query) response parser */
 typedef struct {
@@ -198,8 +198,9 @@ guint mm_3gpp_select_best_cid (const gchar      *apn,
                                MMBearerIpFamily  ip_family,
                                GList            *context_list,
                                GList            *context_format_list,
-                               gboolean         *cid_reused,
-                               gboolean         *cid_overwritten);
+                               gpointer          log_object,
+                               gboolean         *out_cid_reused,
+                               gboolean         *out_cid_overwritten);
 
 typedef struct {
     guint profile_id;
@@ -209,6 +210,7 @@ typedef struct {
     MMBearerAllowedAuth auth_type;
 } MM3gppProfile;
 void mm_3gpp_profile_list_free (GList *profiles);
+GList *mm_3gpp_profile_list_copy (GList *profiles);
 
 /* AT+CGACT? (active PDP context query) response parser */
 typedef struct {
@@ -222,14 +224,16 @@ GList *mm_3gpp_parse_cgact_read_response (const gchar *reply,
                                           GError **error);
 
 /* CREG/CGREG response/unsolicited message parser */
-gboolean mm_3gpp_parse_creg_response (GMatchInfo *info,
-                                      MMModem3gppRegistrationState *out_reg_state,
-                                      gulong *out_lac,
-                                      gulong *out_ci,
-                                      MMModemAccessTechnology *out_act,
-                                      gboolean *out_cgreg,
-                                      gboolean *out_cereg,
-                                      GError **error);
+gboolean mm_3gpp_parse_creg_response (GMatchInfo                    *info,
+                                      gpointer                       log_object,
+                                      MMModem3gppRegistrationState  *out_reg_state,
+                                      gulong                        *out_lac,
+                                      gulong                        *out_ci,
+                                      MMModemAccessTechnology       *out_act,
+                                      gboolean                      *out_cgreg,
+                                      gboolean                      *out_cereg,
+                                      gboolean                      *out_c5greg,
+                                      GError                       **error);
 
 /* AT+CMGF=? (SMS message format) response parser */
 gboolean mm_3gpp_parse_cmgf_test_response (const gchar *reply,
@@ -238,10 +242,11 @@ gboolean mm_3gpp_parse_cmgf_test_response (const gchar *reply,
                                            GError **error);
 
 /* AT+CPMS=? (Preferred SMS storage) response parser */
-gboolean mm_3gpp_parse_cpms_test_response (const gchar *reply,
-                                           GArray **mem1,
-                                           GArray **mem2,
-                                           GArray **mem3);
+gboolean mm_3gpp_parse_cpms_test_response (const gchar  *reply,
+                                           GArray      **mem1,
+                                           GArray      **mem2,
+                                           GArray      **mem3,
+                                           GError      **error);
 
 /* AT+CPMS? (Current SMS storage) response parser */
 gboolean mm_3gpp_parse_cpms_query_response (const gchar *reply,
@@ -288,6 +293,7 @@ typedef enum { /*< underscore_name=mm_3gpp_cmer_ind >*/
 gchar    *mm_3gpp_build_cmer_set_request   (MM3gppCmerMode   mode,
                                             MM3gppCmerInd    ind);
 gboolean  mm_3gpp_parse_cmer_test_response (const gchar     *reply,
+                                            gpointer         log_object,
                                             MM3gppCmerMode  *supported_modes,
                                             MM3gppCmerInd   *supported_inds,
                                             GError         **error);
@@ -404,6 +410,7 @@ gboolean mm_3gpp_parse_cesq_response (const gchar  *response,
                                       GError      **error);
 
 gboolean mm_3gpp_cesq_response_to_signal_info (const gchar  *response,
+                                               gpointer      log_object,
                                                MMSignal    **out_gsm,
                                                MMSignal    **out_umts,
                                                MMSignal    **out_lte,
@@ -417,6 +424,7 @@ gboolean  mm_3gpp_parse_cemode_query_response (const gchar                    *r
 
 /* CCWA service query response parser */
 gboolean mm_3gpp_parse_ccwa_service_query_response (const gchar  *response,
+                                                    gpointer      log_object,
                                                     gboolean     *status,
                                                     GError      **error);
 
@@ -442,18 +450,24 @@ MMBearerIpFamily  mm_3gpp_get_ip_family_from_pdp_type (const gchar *pdp_type);
 char *mm_3gpp_parse_iccid (const char *raw_iccid, GError **error);
 
 
-gboolean mm_3gpp_rscp_level_to_rscp   (guint    rscp_level,
-                                       gdouble *out_rscp);
-gboolean mm_3gpp_rxlev_to_rssi        (guint    rxlev,
-                                       gdouble *out_rssi);
-gboolean mm_3gpp_ecn0_level_to_ecio   (guint    ecn0_level,
-                                       gdouble *out_ecio);
-gboolean mm_3gpp_rsrq_level_to_rsrq   (guint    rsrq_level,
-                                       gdouble *out_rsrq);
-gboolean mm_3gpp_rsrp_level_to_rsrp   (guint    rsrp_level,
-                                       gdouble *out_rsrp);
-gboolean mm_3gpp_rssnr_level_to_rssnr (gint     rssnr_level,
-                                       gdouble *out_rssnr);
+gboolean mm_3gpp_rscp_level_to_rscp   (guint     rscp_level,
+                                       gpointer  log_object,
+                                       gdouble  *out_rscp);
+gboolean mm_3gpp_rxlev_to_rssi        (guint     rxlev,
+                                       gpointer  log_object,
+                                       gdouble  *out_rssi);
+gboolean mm_3gpp_ecn0_level_to_ecio   (guint     ecn0_level,
+                                       gpointer  log_object,
+                                       gdouble  *out_ecio);
+gboolean mm_3gpp_rsrq_level_to_rsrq   (guint     rsrq_level,
+                                       gpointer  log_object,
+                                       gdouble  *out_rsrq);
+gboolean mm_3gpp_rsrp_level_to_rsrp   (guint     rsrp_level,
+                                       gpointer  log_object,
+                                       gdouble  *out_rsrp);
+gboolean mm_3gpp_rssnr_level_to_rssnr (gint      rssnr_level,
+                                       gpointer  log_object,
+                                       gdouble  *out_rssnr);
 
 GStrv mm_3gpp_parse_emergency_numbers (const char *raw, GError **error);
 

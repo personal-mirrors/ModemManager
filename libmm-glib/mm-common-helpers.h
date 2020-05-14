@@ -126,7 +126,6 @@ MMModemCapability *mm_common_capability_combinations_variant_to_array  (GVariant
 GVariant          *mm_common_capability_combinations_array_to_variant  (const MMModemCapability *capabilities,
                                                                         guint n_capabilities);
 GVariant          *mm_common_capability_combinations_garray_to_variant (GArray *array);
-GVariant          *mm_common_build_capability_combinations_any         (void);
 GVariant          *mm_common_build_capability_combinations_none        (void);
 
 GArray                              *mm_common_oma_pending_network_initiated_sessions_variant_to_garray (GVariant *variant);
@@ -163,6 +162,12 @@ gboolean  mm_get_uint_from_match_info            (GMatchInfo  *match_info,
                                                   guint32      match_index,
                                                   guint       *out);
 gboolean  mm_get_u64_from_match_info             (GMatchInfo  *match_info,
+                                                  guint32      match_index,
+                                                  guint64     *out);
+gboolean  mm_get_uint_from_hex_match_info        (GMatchInfo  *match_info,
+                                                  guint32      match_index,
+                                                  guint       *out);
+gboolean  mm_get_u64_from_hex_match_info         (GMatchInfo  *match_info,
                                                   guint32      match_index,
                                                   guint64     *out);
 gboolean  mm_get_double_from_str                 (const gchar *str,

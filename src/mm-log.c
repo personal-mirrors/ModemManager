@@ -10,7 +10,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details:
  *
- * Copyright (C) 2011 Red Hat, Inc.
+ * Copyright (C) 2011-2020 Red Hat, Inc.
+ * Copyright (C) 2020 Aleksander Morgado <aleksander@aleksander.es>
  */
 
 #define _GNU_SOURCE
@@ -41,6 +42,7 @@
 #endif
 
 #include "mm-log.h"
+#include "mm-log-object.h"
 
 enum {
     TS_FLAG_NONE = 0,
@@ -200,10 +202,12 @@ log_backend_systemd_journal (const char *loc,
 #endif
 
 void
-_mm_log (const char *loc,
-         const char *func,
-         MMLogLevel level,
-         const char *fmt,
+_mm_log (gpointer     obj,
+         const gchar *module,
+         const gchar *loc,
+         const gchar *func,
+         MMLogLevel   level,
+         const gchar *fmt,
          ...)
 {
     va_list args;
@@ -242,6 +246,11 @@ _mm_log (const char *loc,
 #if defined MM_LOG_FUNC_LOC
     g_string_append_printf (msgbuf, "[%s] %s(): ", loc, func);
 #endif
+
+    if (obj)
+        g_string_append_printf (msgbuf, "[%s] ", mm_log_object_get_id (MM_LOG_OBJECT (obj)));
+    if (module)
+        g_string_append_printf (msgbuf, "(%s) ", module);
 
     va_start (args, fmt);
     g_string_append_vprintf (msgbuf, fmt, args);
