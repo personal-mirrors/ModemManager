@@ -2164,7 +2164,7 @@ load_profiles_ready (MMIfaceModem3gpp *self,
     ctx = g_task_get_task_data (task);
 
     profiles = MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_profiles_finish (self, res, &error);
-    if (!profiles) {
+    if (error) {
         mm_dbg ("couldn't load initial profiles: '%s'", error->message);
         g_error_free (error);
         goto out;
