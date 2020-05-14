@@ -4260,6 +4260,76 @@ modem_3gpp_scan_networks (MMIfaceModem3gpp *self,
 }
 
 /*****************************************************************************/
+/* Load profiles (3GPP interface) */
+
+static GList *
+modem_3gpp_load_profiles_finish (MMIfaceModem3gpp *self,
+                                 GAsyncResult *res,
+                                 GError **error)
+{
+    return g_task_propagate_pointer (G_TASK (res), error);
+}
+
+static void
+provisioned_contexts_ready (MbimDevice *device,
+                            GAsyncResult *res,
+                            GTask *task)
+{
+    MbimMessage *response;
+    MbimProvisionedContextElement **provisioned_contexts;
+    guint32 n_provisioned_contexts;
+    GError *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        mbim_message_provisioned_contexts_response_parse (response,
+                                                          &n_provisioned_contexts,
+                                                          &provisioned_contexts,
+                                                          &error)) {
+        GList *profiles;
+
+        profiles = mm_3gpp_profile_list_from_mbim_provisioned_contexts (
+            (const MbimProvisionedContextElement *const *)provisioned_contexts,
+            n_provisioned_contexts);
+        mbim_provisioned_context_element_array_free (provisioned_contexts);
+
+        g_task_return_pointer (task, profiles, (GDestroyNotify)mm_3gpp_profile_list_free);
+    } else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+
+    if (response)
+        mbim_message_unref (response);
+}
+
+static void
+modem_3gpp_load_profiles (MMIfaceModem3gpp *self,
+                          GAsyncReadyCallback callback,
+                          gpointer user_data)
+{
+    MbimDevice *device;
+    MbimMessage *message;
+    GTask *task;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    mm_dbg ("loading provisioned contexts...");
+    message = mbim_message_provisioned_contexts_query_new (NULL);
+    mbim_device_command (device,
+                         message,
+                         300,
+                         NULL,
+                         (GAsyncReadyCallback)provisioned_contexts_ready,
+                         task);
+    mbim_message_unref (message);
+}
+
+/*****************************************************************************/
 /* Check support (Signal interface) */
 
 static gboolean
@@ -5505,6 +5575,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->register_in_network_finish = modem_3gpp_register_in_network_finish;
     iface->scan_networks = modem_3gpp_scan_networks;
     iface->scan_networks_finish = modem_3gpp_scan_networks_finish;
+    iface->load_profiles = modem_3gpp_load_profiles;
+    iface->load_profiles_finish = modem_3gpp_load_profiles_finish;
 }
 
 static void
