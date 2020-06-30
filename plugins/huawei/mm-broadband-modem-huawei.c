@@ -128,6 +128,7 @@ struct _MMBroadbandModemHuaweiPrivate {
     GRegex *ecclist_regex;
     GRegex *ltersrp_regex;
     GRegex *cschannelinfo_regex;
+    GRegex *ccallstate_regex;
     GRegex *eons_regex;
 
     FeatureSupport ndisdup_support;
@@ -913,7 +914,7 @@ set_current_bands (MMIfaceModem *self,
 
     task = g_task_new (self, NULL, callback, user_data);
 
-    bands_string = mm_common_build_bands_string ((MMModemBand *)bands_array->data,
+    bands_string = mm_common_build_bands_string ((MMModemBand *)(gpointer)bands_array->data,
                                                  bands_array->len);
 
     if (!bands_array_to_huawei (bands_array, &huawei_band)) {
@@ -1647,14 +1648,11 @@ bearer_report_connection_status (MMBaseBearer *bearer,
 {
     if (ndisstat_result->ipv4_available) {
         /* TODO: MMBroadbandBearerHuawei does not currently support IPv6.
-         * When it does, we should check the IP family associated with each bearer.
-         *
-         * Also, send DISCONNECTING so that we give some time before actually
-         * disconnecting the connection */
+         * When it does, we should check the IP family associated with each bearer. */
         mm_base_bearer_report_connection_status (bearer,
                                                  ndisstat_result->ipv4_connected ?
                                                  MM_BEARER_CONNECTION_STATUS_CONNECTED :
-                                                 MM_BEARER_CONNECTION_STATUS_DISCONNECTING);
+                                                 MM_BEARER_CONNECTION_STATUS_DISCONNECTED);
     }
 }
 
@@ -1792,6 +1790,7 @@ huawei_hcsq_changed (MMPortSerialAt *port,
         g_free (str);
         return;
     }
+    g_free (str);
 
     detailed_signal_clear (&self->priv->detailed_signal);
 
@@ -2227,7 +2226,7 @@ mm_broadband_modem_huawei_peek_port_at_for_data (MMBroadbandModemHuawei *self,
 
     found = peek_port_at_for_data (self, port);
     if (!found)
-        mm_obj_warn (self, "couldn't find associated cdc-wdm port for %s", mm_port_get_device (port));
+        mm_obj_dbg (self, "couldn't find associated cdc-wdm port for %s", mm_port_get_device (port));
     return found;
 }
 
@@ -4406,6 +4405,10 @@ set_ignored_unsolicited_events_handlers (MMBroadbandModemHuawei *self)
             NULL, NULL, NULL);
         mm_port_serial_at_add_unsolicited_msg_handler (
             port,
+            self->priv->ccallstate_regex,
+            NULL, NULL, NULL);
+        mm_port_serial_at_add_unsolicited_msg_handler (
+            port,
             self->priv->eons_regex,
             NULL, NULL, NULL);
     }
@@ -4541,6 +4544,8 @@ mm_broadband_modem_huawei_init (MMBroadbandModemHuawei *self)
                                              G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     self->priv->cschannelinfo_regex = g_regex_new ("\\r\\n\\^CSCHANNELINFO:.+\\r\\n",
                                                     G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
+    self->priv->ccallstate_regex = g_regex_new ("\\r\\n\\^CCALLSTATE:.+\\r\\n",
+                                                G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
     self->priv->eons_regex = g_regex_new ("\\r\\n\\^EONS:.+\\r\\n",
                                           G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
 
@@ -4600,6 +4605,7 @@ finalize (GObject *object)
     g_regex_unref (self->priv->ecclist_regex);
     g_regex_unref (self->priv->ltersrp_regex);
     g_regex_unref (self->priv->cschannelinfo_regex);
+    g_regex_unref (self->priv->ccallstate_regex);
     g_regex_unref (self->priv->eons_regex);
 
     if (self->priv->syscfg_supported_modes)

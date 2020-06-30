@@ -5,7 +5,7 @@ dnl Package and library versioning support
 dnl
 
 m4_define([mm_major_version], [1])
-m4_define([mm_minor_version], [13])
+m4_define([mm_minor_version], [15])
 m4_define([mm_micro_version], [0])
 m4_define([mm_version],
           [mm_major_version.mm_minor_version.mm_micro_version])
@@ -18,9 +18,9 @@ dnl        If the interface has grown (that is, the new library is compatible
 dnl            with old code), increment a.
 dnl        If the interface has changed in an incompatible way (that is,
 dnl            functions have changed or been removed), then zero a.
-m4_define([mm_glib_lt_current],  [5])
+m4_define([mm_glib_lt_current],  [6])
 m4_define([mm_glib_lt_revision], [0])
-m4_define([mm_glib_lt_age],      [5])
+m4_define([mm_glib_lt_age],      [6])
 
 dnl-----------------------------------------------------------------------------
 dnl autoconf, automake, libtool initialization
@@ -45,6 +45,9 @@ AC_PROG_CC
 AM_PROG_CC_C_O
 AC_PROG_INSTALL
 AC_PROG_MKDIR_P
+
+AC_CHECK_PROG(XSLTPROC_CHECK,xsltproc,yes)
+AS_IF([test x"$XSLTPROC_CHECK" != x"yes"], [AC_MSG_ERROR([Please install xsltproc before configuring.])])
 
 dnl Initialize libtool
 LT_PREREQ([2.2])
@@ -367,7 +370,7 @@ dnl-----------------------------------------------------------------------------
 dnl MBIM support (enabled by default)
 dnl
 
-LIBMBIM_VERSION=1.18.0
+LIBMBIM_VERSION=1.24.0
 
 AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support]), [], [with_mbim=yes])
 AM_CONDITIONAL(WITH_MBIM, test "x$with_mbim" = "xyes")
@@ -391,7 +394,7 @@ dnl-----------------------------------------------------------------------------
 dnl QMI support (enabled by default)
 dnl
 
-LIBQMI_VERSION=1.25.5
+LIBQMI_VERSION=1.26.0
 
 AC_ARG_WITH(qmi, AS_HELP_STRING([--without-qmi], [Build without QMI support]), [], [with_qmi=yes])
 AM_CONDITIONAL(WITH_QMI, test "x$with_qmi" = "xyes")
@@ -448,6 +451,7 @@ MM_ENABLE_ALL_PLUGINS
 MM_ENABLE_PLUGIN([generic])
 MM_ENABLE_PLUGIN([altair-lte])
 MM_ENABLE_PLUGIN([anydata])
+MM_ENABLE_PLUGIN([broadmobi])
 MM_ENABLE_PLUGIN([cinterion])
 MM_ENABLE_PLUGIN([dell],
                  [with_shared_sierra,
@@ -592,6 +596,7 @@ echo "
       generic:                 ${enable_plugin_generic}
       altair lte:              ${enable_plugin_altair_lte}
       anydata:                 ${enable_plugin_anydata}
+      broadmobi:               ${enable_plugin_broadmobi}
       cinterion:               ${enable_plugin_cinterion}
       dell:                    ${enable_plugin_dell}
       dlink:                   ${enable_plugin_dlink}

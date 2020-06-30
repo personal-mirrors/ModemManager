@@ -2355,8 +2355,8 @@ after_set_load_current_bands_ready (MMIfaceModem *self,
             goto out;
         }
 
-        requested_str = mm_common_build_bands_string ((MMModemBand *)requested_bands->data, requested_bands->len);
-        current_str   = mm_common_build_bands_string ((MMModemBand *)current_bands->data, current_bands->len);
+        requested_str = mm_common_build_bands_string ((const MMModemBand *)(gconstpointer)requested_bands->data, requested_bands->len);
+        current_str   = mm_common_build_bands_string ((const MMModemBand *)(gconstpointer)current_bands->data, current_bands->len);
         error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                              "reloaded current bands (%s) different to the requested ones (%s)",
                              current_str, requested_str);
@@ -2471,7 +2471,7 @@ validate_bands (const GArray *supported_bands_array,
                     gchar *supported_bands_str;
 
                     supported_bands_str = (mm_common_build_bands_string (
-                                               (const MMModemBand *)supported_bands_array->data,
+                                               (const MMModemBand *)(gconstpointer)supported_bands_array->data,
                                                supported_bands_array->len));
                     g_set_error (error,
                                  MM_CORE_ERROR,
@@ -2532,8 +2532,7 @@ mm_iface_modem_set_current_bands (MMIfaceModem *self,
         return;
     }
 
-    bands_string = mm_common_build_bands_string ((MMModemBand *)bands_array->data,
-                                                 bands_array->len);
+    bands_string = mm_common_build_bands_string ((const MMModemBand *)(gpointer)bands_array->data, bands_array->len);
 
     /* Get list of supported bands */
     ctx->supported_bands_array = (mm_common_bands_variant_to_garray (
@@ -3804,15 +3803,11 @@ typedef enum {
     ENABLING_STEP_SET_POWER_STATE,
     ENABLING_STEP_CHECK_FOR_SIM_SWAP,
     ENABLING_STEP_FLOW_CONTROL,
-    ENABLING_STEP_SUPPORTED_CHARSETS,
-    ENABLING_STEP_CHARSET,
     ENABLING_STEP_LAST
 } EnablingStep;
 
 struct _EnablingContext {
     EnablingStep step;
-    MMModemCharset supported_charsets;
-    const MMModemCharset *current_charset;
     MmGdbusModem *skeleton;
 };
 
@@ -3892,52 +3887,6 @@ setup_flow_control_ready (MMIfaceModem *self,
     interface_enabling_step (task);
 }
 
-static void
-load_supported_charsets_ready (MMIfaceModem *self,
-                               GAsyncResult *res,
-                               GTask *task)
-{
-    EnablingContext *ctx;
-    GError *error = NULL;
-
-    ctx = g_task_get_task_data (task);
-
-    ctx->supported_charsets =
-        MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_charsets_finish (self, res, &error);
-    if (error) {
-        mm_obj_warn (self, "couldn't load supported charsets: %s", error->message);
-        g_error_free (error);
-    }
-
-    /* Go on to next step */
-    ctx->step++;
-    interface_enabling_step (task);
-}
-
-static void
-setup_charset_ready (MMIfaceModem *self,
-                     GAsyncResult *res,
-                     GTask *task)
-{
-    EnablingContext *ctx;
-    GError *error = NULL;
-
-    ctx = g_task_get_task_data (task);
-
-    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->setup_charset_finish (self, res, &error)) {
-        mm_obj_dbg (self, "couldn't set charset '%s': %s",
-                    mm_modem_charset_to_string (*ctx->current_charset),
-                    error->message);
-        g_error_free (error);
-
-        /* Will retry step with some other charset type */
-    } else
-        /* Done, Go on to next step */
-        ctx->step++;
-
-    interface_enabling_step (task);
-}
-
 static const MMModemCharset best_charsets[] = {
     MM_MODEM_CHARSET_UTF8,
     MM_MODEM_CHARSET_UCS2,
@@ -3998,59 +3947,6 @@ interface_enabling_step (GTask *task)
         ctx->step++;
         /* fall-through */
 
-    case ENABLING_STEP_SUPPORTED_CHARSETS:
-        if (MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_charsets &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_charsets_finish) {
-            MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_charsets (
-                self,
-                (GAsyncReadyCallback)load_supported_charsets_ready,
-                task);
-            return;
-        }
-        ctx->step++;
-        /* fall-through */
-
-    case ENABLING_STEP_CHARSET:
-        /* Only try to set charsets if we were able to load supported ones */
-        if (ctx->supported_charsets > 0 &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_charset &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_charset_finish) {
-            gboolean next_to_try = FALSE;
-
-            while (!next_to_try) {
-                if (!ctx->current_charset)
-                    /* Switch the device's charset; we prefer UTF-8, but UCS2 will do too */
-                    ctx->current_charset = &best_charsets[0];
-                else
-                    /* Try with the next one */
-                    ctx->current_charset++;
-
-                if (*ctx->current_charset == MM_MODEM_CHARSET_UNKNOWN)
-                    break;
-
-                if (ctx->supported_charsets & (*ctx->current_charset))
-                    next_to_try = TRUE;
-            }
-
-            if (next_to_try) {
-                MM_IFACE_MODEM_GET_INTERFACE (self)->setup_charset (
-                    self,
-                    *ctx->current_charset,
-                    (GAsyncReadyCallback)setup_charset_ready,
-                    task);
-                return;
-            }
-
-            g_task_return_new_error (task,
-                                     MM_CORE_ERROR,
-                                     MM_CORE_ERROR_FAILED,
-                                     "Failed to find a usable modem character set");
-            g_object_unref (task);
-            return;
-        }
-        ctx->step++;
-        /* fall-through */
-
     case ENABLING_STEP_LAST:
         /* We are done without errors! */
         g_task_return_boolean (task, TRUE);
@@ -4104,6 +4000,8 @@ typedef enum {
     INITIALIZATION_STEP_FIRST,
     INITIALIZATION_STEP_CURRENT_CAPABILITIES,
     INITIALIZATION_STEP_SUPPORTED_CAPABILITIES,
+    INITIALIZATION_STEP_SUPPORTED_CHARSETS,
+    INITIALIZATION_STEP_CHARSET,
     INITIALIZATION_STEP_BEARERS,
     INITIALIZATION_STEP_MANUFACTURER,
     INITIALIZATION_STEP_MODEL,
@@ -4129,6 +4027,8 @@ typedef enum {
 struct _InitializationContext {
     InitializationStep step;
     MmGdbusModem *skeleton;
+    MMModemCharset supported_charsets;
+    const MMModemCharset *current_charset;
     GError *fatal_error;
 };
 
@@ -4342,6 +4242,52 @@ STR_REPLY_READY_FN (revision, "revision")
 STR_REPLY_READY_FN (hardware_revision, "hardware revision")
 STR_REPLY_READY_FN (equipment_identifier, "equipment identifier")
 STR_REPLY_READY_FN (device_identifier, "device identifier")
+
+static void
+load_supported_charsets_ready (MMIfaceModem *self,
+                               GAsyncResult *res,
+                               GTask *task)
+{
+    InitializationContext *ctx;
+    GError *error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    ctx->supported_charsets =
+        MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_charsets_finish (self, res, &error);
+    if (error) {
+        mm_obj_warn (self, "couldn't load supported charsets: %s", error->message);
+        g_error_free (error);
+    }
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_initialization_step (task);
+}
+
+static void
+setup_charset_ready (MMIfaceModem *self,
+                     GAsyncResult *res,
+                     GTask *task)
+{
+    InitializationContext *ctx;
+    GError *error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->setup_charset_finish (self, res, &error)) {
+        mm_obj_dbg (self, "couldn't set charset '%s': %s",
+                    mm_modem_charset_to_string (*ctx->current_charset),
+                    error->message);
+        g_error_free (error);
+
+        /* Will retry step with some other charset type */
+    } else
+        /* Done, Go on to next step */
+        ctx->step++;
+
+    interface_initialization_step (task);
+}
 
 static void
 load_supported_modes_ready (MMIfaceModem *self,
@@ -4833,6 +4779,59 @@ interface_initialization_step (GTask *task)
 
         ctx->step++;
     } /* fall-through */
+
+    case INITIALIZATION_STEP_SUPPORTED_CHARSETS:
+        if (MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_charsets &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_charsets_finish) {
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_charsets (
+                self,
+                (GAsyncReadyCallback)load_supported_charsets_ready,
+                task);
+            return;
+        }
+        ctx->step++;
+        /* fall-through */
+
+    case INITIALIZATION_STEP_CHARSET:
+        /* Only try to set charsets if we were able to load supported ones */
+        if (ctx->supported_charsets > 0 &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_charset &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_charset_finish) {
+            gboolean next_to_try = FALSE;
+
+            while (!next_to_try) {
+                if (!ctx->current_charset)
+                    /* Switch the device's charset; we prefer UTF-8, but UCS2 will do too */
+                    ctx->current_charset = &best_charsets[0];
+                else
+                    /* Try with the next one */
+                    ctx->current_charset++;
+
+                if (*ctx->current_charset == MM_MODEM_CHARSET_UNKNOWN)
+                    break;
+
+                if (ctx->supported_charsets & (*ctx->current_charset))
+                    next_to_try = TRUE;
+            }
+
+            if (next_to_try) {
+                MM_IFACE_MODEM_GET_INTERFACE (self)->setup_charset (
+                    self,
+                    *ctx->current_charset,
+                    (GAsyncReadyCallback)setup_charset_ready,
+                    task);
+                return;
+            }
+
+            g_task_return_new_error (task,
+                                     MM_CORE_ERROR,
+                                     MM_CORE_ERROR_FAILED,
+                                     "Failed to find a usable modem character set");
+            g_object_unref (task);
+            return;
+        }
+        ctx->step++;
+        /* fall-through */
 
     case INITIALIZATION_STEP_BEARERS: {
         MMBearerList *list = NULL;
@@ -5572,6 +5571,12 @@ gboolean
 mm_iface_modem_is_3gpp_lte (MMIfaceModem *self)
 {
     return (mm_iface_modem_get_current_capabilities (self) & MM_MODEM_CAPABILITY_LTE);
+}
+
+gboolean
+mm_iface_modem_is_3gpp_5gnr (MMIfaceModem *self)
+{
+    return (mm_iface_modem_get_current_capabilities (self) & MM_MODEM_CAPABILITY_5GNR);
 }
 
 gboolean
