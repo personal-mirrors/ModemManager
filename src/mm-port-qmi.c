@@ -668,7 +668,11 @@ mm_port_qmi_open (MMPortQmi *self,
 
     ctx = g_slice_new0 (PortOpenContext);
     ctx->step = PORT_OPEN_STEP_FIRST;
+#if QMI_QRTR_SUPPORTED //TODO(crbug.com/1103840): Remove before merging to upstream
+    ctx->set_data_format = FALSE;
+#else
     ctx->set_data_format = set_data_format;
+#endif
     ctx->kernel_data_format = QMI_DEVICE_EXPECTED_DATA_FORMAT_UNKNOWN;
     ctx->llp = QMI_WDA_LINK_LAYER_PROTOCOL_UNKNOWN;
 
