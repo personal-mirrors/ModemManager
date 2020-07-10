@@ -292,6 +292,22 @@ mm_base_modem_grab_port (MMBaseModem         *self,
                                       MM_PORT_TYPE, MM_PORT_TYPE_NET,
                                       NULL));
     }
+#if QMI_QRTR_SUPPORTED //TODO(crbug.com/1103840): Remove hacks before merging to upstream
+    else if (g_str_has_prefix (subsys, "virtual") &&
+             g_str_has_prefix (name, "rmnet_data0")) {
+        mm_obj_info (self, "@@ %s: virtual net port = %s", __FUNCTION__, name);
+        port = MM_PORT (g_object_new (MM_TYPE_PORT,
+                                      MM_PORT_DEVICE, name,
+                                      MM_PORT_SUBSYS, MM_PORT_SUBSYS_NET,
+                                      MM_PORT_TYPE, MM_PORT_TYPE_NET,
+                                      NULL));
+    }
+    else if (g_str_has_prefix (subsys, "virtual") &&
+             g_str_has_prefix (name, "qmi")) {
+        mm_obj_info (self, "@@ %s: virtual qmi port = %s", __FUNCTION__, name);
+        port = MM_PORT (mm_port_qmi_new (name));
+    }
+#endif
     /* cdc-wdm ports... */
     else if (g_str_has_prefix (subsys, "usb") &&
              g_str_has_prefix (name, "cdc-wdm")) {
