@@ -156,7 +156,7 @@
         <varlistentry><term><literal>"constellations"</literal></term>
           <listitem>
             <para>
-              Select constallations using bitmask MMModemLocationConstellation (signature <literal>"u"</literal>).
+              Select constellations using bitmask MMModemLocationConstellation (signature <literal>"u"</literal>).
             </para>
           </listitem>
         </varlistentry>
@@ -440,7 +440,7 @@
         <varlistentry><term><literal>"constellations"</literal></term>
           <listitem>
             <para>
-              Select constallations using bitmask MMModemLocationConstellation (signature <literal>"u"</literal>).
+              Select constellations using bitmask MMModemLocationConstellation (signature <literal>"u"</literal>).
             </para>
           </listitem>
         </varlistentry>
