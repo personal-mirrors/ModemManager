@@ -28,6 +28,27 @@ build-no-qmi:
     - make check
     - make install
 
+build-qrtr-no-mbim:
+  stage: build
+  only:
+    - master
+    - merge_requests
+    - tags
+    - schedules
+  script:
+    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
+    - pushd libqmi
+    - NOCONFIGURE=1 ./autogen.sh
+    - ./configure --prefix=/usr --disable-mbim-qmux --enable-qrtr --enable-collection=basic
+    - make
+    - make install
+    - popd
+    - NOCONFIGURE=1 ./autogen.sh
+    - ./configure --prefix=/tmp/build-qrtr-no-mbim --disable-gtk-doc --without-mbim
+    - make
+    - make check
+    - make install
+
 build-no-mbim:
   stage: build
   only:
