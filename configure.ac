@@ -394,7 +394,7 @@ dnl-----------------------------------------------------------------------------
 dnl QMI support (enabled by default)
 dnl
 
-LIBQMI_VERSION=1.26.0
+LIBQMI_VERSION=1.27.1
 
 AC_ARG_WITH(qmi, AS_HELP_STRING([--without-qmi], [Build without QMI support]), [], [with_qmi=yes])
 AM_CONDITIONAL(WITH_QMI, test "x$with_qmi" = "xyes")
@@ -489,7 +489,8 @@ MM_ENABLE_PLUGIN([samsung],
 MM_ENABLE_PLUGIN([sierra-legacy],
                  [with_shared_icera,
                   with_shared_sierra])
-MM_ENABLE_PLUGIN([sierra])
+MM_ENABLE_PLUGIN([sierra],
+                 [with_shared_xmm])
 MM_ENABLE_PLUGIN([simtech])
 MM_ENABLE_PLUGIN([telit],
                  [with_shared_telit])

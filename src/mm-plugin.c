@@ -1093,7 +1093,7 @@ static gchar *
 log_object_build_id (MMLogObject *_self)
 {
     MMPlugin         *self;
-    g_autofree gchar *plugin_name_lowercase;
+    g_autofree gchar *plugin_name_lowercase = NULL;
 
     self = MM_PLUGIN (_self);
     plugin_name_lowercase = g_ascii_strdown (self->priv->name, -1);

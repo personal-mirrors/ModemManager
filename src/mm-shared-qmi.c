@@ -29,6 +29,7 @@
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-3gpp.h"
 #include "mm-iface-modem-location.h"
+#include "mm-sim-qmi.h"
 #include "mm-shared-qmi.h"
 #include "mm-modem-helpers-qmi.h"
 
@@ -326,41 +327,14 @@ out:
         qmi_message_nas_initiate_network_register_output_unref (output);
 }
 
-void
-mm_shared_qmi_3gpp_register_in_network (MMIfaceModem3gpp    *self,
-                                        const gchar         *operator_id,
-                                        GCancellable        *cancellable,
-                                        GAsyncReadyCallback  callback,
-                                        gpointer             user_data)
+static void
+register_in_network_inr (GTask        *task,
+                         QmiClient    *client,
+                         GCancellable *cancellable,
+                         guint16       mcc,
+                         guint16       mnc)
 {
-    GTask                                     *task;
-    RegisterInNetworkContext                  *ctx;
     QmiMessageNasInitiateNetworkRegisterInput *input;
-    guint16                                    mcc = 0;
-    guint16                                    mnc;
-    QmiClient                                 *client = NULL;
-    GError                                    *error = NULL;
-
-    /* Get NAS client */
-    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_NAS, &client,
-                                      callback, user_data))
-        return;
-
-    task = g_task_new (self, cancellable, callback, user_data);
-
-    ctx = g_slice_new0 (RegisterInNetworkContext);
-    ctx->client = g_object_ref (client);
-    ctx->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
-    g_task_set_task_data (task, ctx, (GDestroyNotify)register_in_network_context_free);
-
-    /* Parse input MCC/MNC */
-    if (operator_id && !mm_3gpp_parse_operator_id (operator_id, &mcc, &mnc, &error)) {
-        g_assert (error != NULL);
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
-    }
 
     input = qmi_message_nas_initiate_network_register_input_new ();
 
@@ -393,6 +367,105 @@ mm_shared_qmi_3gpp_register_in_network (MMIfaceModem3gpp    *self,
         task);
 
     qmi_message_nas_initiate_network_register_input_unref (input);
+}
+
+static void
+set_system_selection_preference_ready (QmiClientNas *client,
+                                       GAsyncResult *res,
+                                       GTask        *task)
+{
+    GError                                          *error = NULL;
+    QmiMessageNasSetSystemSelectionPreferenceOutput *output;
+
+    output = qmi_client_nas_set_system_selection_preference_finish (client, res, &error);
+    if (!output || !qmi_message_nas_set_system_selection_preference_output_get_result (output, &error)) {
+        if (!g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_NO_EFFECT)) {
+            g_prefix_error (&error, "Couldn't set network selection preference: ");
+            g_task_return_error (task, error);
+            goto out;
+        }
+        g_error_free (error);
+    }
+
+    g_task_return_boolean (task, TRUE);
+
+out:
+    g_object_unref (task);
+
+    if (output)
+        qmi_message_nas_set_system_selection_preference_output_unref (output);
+}
+
+static void
+register_in_network_sssp (GTask        *task,
+                          QmiClient    *client,
+                          GCancellable *cancellable,
+                          guint16       mcc,
+                          guint16       mnc)
+{
+    QmiMessageNasSetSystemSelectionPreferenceInput *input;
+
+    input = qmi_message_nas_set_system_selection_preference_input_new ();
+
+    qmi_message_nas_set_system_selection_preference_input_set_network_selection_preference (
+        input,
+        mcc ? QMI_NAS_NETWORK_SELECTION_PREFERENCE_MANUAL : QMI_NAS_NETWORK_SELECTION_PREFERENCE_AUTOMATIC,
+        mcc,
+        mnc,
+        NULL);
+
+    qmi_client_nas_set_system_selection_preference (
+        QMI_CLIENT_NAS (client),
+        input,
+        120,
+        cancellable,
+        (GAsyncReadyCallback)set_system_selection_preference_ready,
+        task);
+
+    qmi_message_nas_set_system_selection_preference_input_unref (input);
+}
+
+void
+mm_shared_qmi_3gpp_register_in_network (MMIfaceModem3gpp    *self,
+                                        const gchar         *operator_id,
+                                        GCancellable        *cancellable,
+                                        GAsyncReadyCallback  callback,
+                                        gpointer             user_data)
+{
+    GTask                    *task;
+    RegisterInNetworkContext *ctx;
+    guint16                   mcc = 0;
+    guint16                   mnc;
+    QmiClient                *client = NULL;
+    GError                   *error = NULL;
+    Private                  *priv = NULL;
+
+    /* Get NAS client */
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_NAS, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, cancellable, callback, user_data);
+
+    ctx = g_slice_new0 (RegisterInNetworkContext);
+    ctx->client = g_object_ref (client);
+    ctx->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
+    g_task_set_task_data (task, ctx, (GDestroyNotify)register_in_network_context_free);
+
+    /* Parse input MCC/MNC */
+    if (operator_id && !mm_3gpp_parse_operator_id (operator_id, &mcc, &mnc, &error)) {
+        g_assert (error != NULL);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    priv = get_private (MM_SHARED_QMI (self));
+    if (priv->feature_nas_system_selection_preference == FEATURE_SUPPORTED)
+        register_in_network_sssp (task, client, cancellable, mcc, mnc);
+    else
+        register_in_network_inr (task, client, cancellable, mcc, mnc);
 }
 
 /*****************************************************************************/
@@ -3088,6 +3161,444 @@ mm_shared_qmi_load_carrier_config (MMIfaceModem        *self,
     ctx->client = g_object_ref (client);
 
     load_carrier_config_step (task);
+}
+
+/*****************************************************************************/
+/* Load SIM slots (modem interface) */
+
+typedef struct {
+    QmiClientUim *client_uim;
+    GPtrArray    *sim_slots;
+    GList        *sorted_sims;
+    MMBaseSim    *current_sim;
+    guint         current_slot_number;
+    guint         active_slot_number;
+    guint         active_logical_id;
+} LoadSimSlotsContext;
+
+static void
+load_sim_slots_context_free (LoadSimSlotsContext *ctx)
+{
+    g_clear_object (&ctx->current_sim);
+    g_list_free_full (ctx->sorted_sims, (GDestroyNotify)g_object_unref);
+    g_clear_pointer (&ctx->sim_slots, g_ptr_array_unref);
+    g_clear_object (&ctx->client_uim);
+    g_slice_free (LoadSimSlotsContext, ctx);
+}
+
+static void
+sim_slot_free (MMBaseSim *sim)
+{
+    if (sim)
+        g_object_unref (sim);
+}
+
+gboolean
+mm_shared_qmi_load_sim_slots_finish (MMIfaceModem  *self,
+                                     GAsyncResult  *res,
+                                     GPtrArray    **sim_slots,
+                                     guint         *primary_sim_slot,
+                                     GError       **error)
+{
+    LoadSimSlotsContext *ctx;
+
+    if (!g_task_propagate_boolean (G_TASK (res), error))
+        return FALSE;
+
+    ctx = g_task_get_task_data (G_TASK (res));
+    if (sim_slots)
+        *sim_slots = g_steal_pointer (&ctx->sim_slots);
+    if (primary_sim_slot)
+        *primary_sim_slot = ctx->active_slot_number;
+    return TRUE;
+}
+
+static void
+active_slot_switch_ready (QmiClientUim *client,
+                          GAsyncResult *res,
+                          GTask        *task)
+{
+    g_autoptr(QmiMessageUimSwitchSlotOutput) output = NULL;
+    g_autoptr(GError)                        error = NULL;
+    MMIfaceModem                            *self;
+    LoadSimSlotsContext                     *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    output = qmi_client_uim_switch_slot_finish (client, res, &error);
+    if ((!output || !qmi_message_uim_switch_slot_output_get_result (output, &error)) &&
+        !g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_NO_EFFECT)) {
+        mm_obj_err (self, "couldn't switch to original slot %u", ctx->active_slot_number);
+        g_task_return_error (task, g_steal_pointer (&error));
+    } else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+reload_active_slot (GTask *task)
+{
+    g_autoptr(QmiMessageUimSwitchSlotInput)  input = NULL;
+    LoadSimSlotsContext                     *ctx;
+    MMIfaceModem                            *self;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    /* If we're already in the original active SIM slot, nothing else to do */
+    if (ctx->current_slot_number == ctx->active_slot_number) {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    mm_obj_dbg (self, "switching to original active SIM at slot %u", ctx->active_slot_number);
+
+    /* Switch to the original active slot */
+    input = qmi_message_uim_switch_slot_input_new ();
+    qmi_message_uim_switch_slot_input_set_logical_slot (input, (guint8) ctx->active_logical_id, NULL);
+    qmi_message_uim_switch_slot_input_set_physical_slot (input, ctx->active_slot_number, NULL);
+    qmi_client_uim_switch_slot (ctx->client_uim,
+                                input,
+                                10,
+                                NULL,
+                                (GAsyncReadyCallback) active_slot_switch_ready,
+                                task);
+}
+
+static void load_next_sim_info (GTask *task);
+
+static void
+next_sim_initialize_ready (MMBaseSim    *sim,
+                           GAsyncResult *res,
+                           GTask        *task)
+{
+    g_autoptr(GError)    error = NULL;
+    MMIfaceModem        *self;
+    LoadSimSlotsContext *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    if (!mm_base_sim_initialize_finish (sim, res, &error))
+        mm_obj_dbg (self, "couldn't initialize SIM at slot %u: won't load additional info",
+                    ctx->current_slot_number);
+    else
+        mm_obj_dbg (self, "initialized SIM at slot %u",
+                    ctx->current_slot_number);
+
+    /* Iterate to next SIM */
+    load_next_sim_info (task);
+}
+
+static void
+next_sim_switch_ready (QmiClientUim *client,
+                       GAsyncResult *res,
+                       GTask        *task)
+{
+    g_autoptr(QmiMessageUimSwitchSlotOutput) output = NULL;
+    g_autoptr(GError)                        error = NULL;
+    MMIfaceModem                            *self;
+    LoadSimSlotsContext                     *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    output = qmi_client_uim_switch_slot_finish (client, res, &error);
+    if (!output || !qmi_message_uim_switch_slot_output_get_result (output, &error)) {
+        mm_obj_dbg (self, "couldn't switch to SIM at slot %u: won't load additional info",
+                    ctx->current_slot_number);
+        load_next_sim_info (task);
+        return;
+    }
+
+    mm_obj_dbg (self, "switched to SIM at slot %u: initializing...",
+                ctx->current_slot_number);
+
+    mm_base_sim_initialize (ctx->current_sim,
+                            NULL,
+                            (GAsyncReadyCallback) next_sim_initialize_ready,
+                            task);
+}
+
+static void
+load_next_sim_info (GTask *task)
+{
+    g_autoptr(QmiMessageUimSwitchSlotInput)  input = NULL;
+    LoadSimSlotsContext                     *ctx;
+    MMIfaceModem                            *self;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    /* All done? */
+    if (!ctx->sorted_sims) {
+        mm_obj_dbg (self, "no more SIMs to load info from");
+        reload_active_slot (task);
+        return;
+    }
+
+    /* Steal SIM from list */
+    g_clear_object (&ctx->current_sim);
+    ctx->current_sim = MM_BASE_SIM (ctx->sorted_sims->data);
+    ctx->sorted_sims = g_list_delete_link (ctx->sorted_sims, ctx->sorted_sims);
+    ctx->current_slot_number = mm_base_sim_get_slot_number (ctx->current_sim);
+
+    mm_obj_dbg (self, "switching to SIM at slot %u: %s",
+                ctx->current_slot_number, mm_base_sim_get_path (ctx->current_sim));
+
+    /* Switch to the next slot */
+    input = qmi_message_uim_switch_slot_input_new ();
+    qmi_message_uim_switch_slot_input_set_logical_slot (input, (guint8) ctx->active_logical_id, NULL);
+    qmi_message_uim_switch_slot_input_set_physical_slot (input, ctx->current_slot_number, NULL);
+    qmi_client_uim_switch_slot (ctx->client_uim,
+                                input,
+                                10,
+                                NULL,
+                                (GAsyncReadyCallback) next_sim_switch_ready,
+                                task);
+}
+
+static void
+uim_get_slot_status_ready (QmiClientUim *client,
+                           GAsyncResult *res,
+                           GTask        *task)
+{
+    g_autoptr(QmiMessageUimGetSlotStatusOutput) output = NULL;
+    LoadSimSlotsContext *ctx;
+    MMIfaceModem              *self;
+    GError                    *error = NULL;
+    GArray                    *physical_slots = NULL;
+    guint                      i;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    output = qmi_client_uim_get_slot_status_finish (client, res, &error);
+    if (!output ||
+        !qmi_message_uim_get_slot_status_output_get_result (output, &error) ||
+        !qmi_message_uim_get_slot_status_output_get_physical_slot_status (output, &physical_slots, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx->sim_slots = g_ptr_array_new_full (physical_slots->len, (GDestroyNotify) sim_slot_free);
+
+    for (i = 0; i < physical_slots->len; i++) {
+        QmiPhysicalSlotStatusSlot *slot_status;
+        MMBaseSim                 *sim;
+        g_autofree gchar          *raw_iccid = NULL;
+        g_autofree gchar          *iccid = NULL;
+        g_autoptr(GError)          inner_error = NULL;
+        gboolean                   sim_active = FALSE;
+
+        /* Store active slot info */
+        slot_status = &g_array_index (physical_slots, QmiPhysicalSlotStatusSlot, i);
+        if (slot_status->physical_slot_status == QMI_UIM_SLOT_STATE_ACTIVE) {
+            sim_active = TRUE;
+            ctx->active_logical_id = slot_status->logical_slot;
+            ctx->active_slot_number = i + 1;
+            ctx->current_slot_number = ctx->active_slot_number;
+        }
+
+        if (!slot_status->iccid->len) {
+            mm_obj_dbg (self, "not creating SIM object: no SIM in slot %u", i + 1);
+            g_ptr_array_add (ctx->sim_slots, NULL);
+            continue;
+        }
+
+        raw_iccid = mm_bcd_to_string ((const guint8 *)slot_status->iccid->data, slot_status->iccid->len);
+        if (!raw_iccid) {
+            mm_obj_warn (self, "not creating SIM object: failed to convert ICCID from BCD");
+            g_ptr_array_add (ctx->sim_slots, NULL);
+            continue;
+        }
+
+        iccid = mm_3gpp_parse_iccid (raw_iccid, &inner_error);
+        if (!iccid) {
+            mm_obj_warn (self, "not creating SIM object: couldn't parse SIM iccid: %s", inner_error->message);
+            g_ptr_array_add (ctx->sim_slots, NULL);
+            continue;
+        }
+
+        sim = mm_sim_qmi_new_initialized (MM_BASE_MODEM (self),
+                                          TRUE, /* consider DMS UIM deprecated if we're creating SIM slots */
+                                          i + 1, /* slot number is the array index starting at 1 */
+                                          sim_active,
+                                          iccid,
+                                          NULL,  /* imsi unknown */
+                                          NULL,  /* operator id unknown */
+                                          NULL,  /* operator name unknown */
+                                          NULL); /* emergency numbers unknown */
+        g_ptr_array_add (ctx->sim_slots, sim);
+
+        if (sim_active)
+            ctx->sorted_sims = g_list_append (ctx->sorted_sims, g_object_ref (sim));
+        else
+            ctx->sorted_sims = g_list_prepend (ctx->sorted_sims, g_object_ref (sim));
+    }
+    g_assert_cmpuint (ctx->sim_slots->len, ==, physical_slots->len);
+
+    /* Now, iterate over all the SIMs, we'll attempt to load info from them by
+     * quickly switching over to them, leaving the active SIM to the end */
+    load_next_sim_info (task);
+}
+
+void
+mm_shared_qmi_load_sim_slots (MMIfaceModem        *self,
+                              GAsyncReadyCallback  callback,
+                              gpointer             user_data)
+{
+    LoadSimSlotsContext *ctx;
+    GTask               *task;
+    QmiClient           *client = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_UIM, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    ctx = g_slice_new0 (LoadSimSlotsContext);
+    ctx->client_uim = g_object_ref (client);
+    g_task_set_task_data (task, ctx, (GDestroyNotify) load_sim_slots_context_free);
+
+    qmi_client_uim_get_slot_status (ctx->client_uim,
+                                    NULL,
+                                    10,
+                                    NULL,
+                                    (GAsyncReadyCallback) uim_get_slot_status_ready,
+                                    task);
+}
+
+/*****************************************************************************/
+/* Set Primary SIM slot (modem interface) */
+
+gboolean
+mm_shared_qmi_set_primary_sim_slot_finish (MMIfaceModem  *self,
+                                           GAsyncResult  *res,
+                                           GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+uim_switch_slot_ready (QmiClientUim *client,
+                       GAsyncResult *res,
+                       GTask        *task)
+{
+    g_autoptr(QmiMessageUimSwitchSlotOutput)  output = NULL;
+    g_autoptr(GError)                         error = NULL;
+    MMIfaceModem                             *self;
+
+    self = g_task_get_source_object (task);
+
+    output = qmi_client_uim_switch_slot_finish (client, res, &error);
+    if (!output || !qmi_message_uim_switch_slot_output_get_result (output, &error)) {
+        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_NO_EFFECT))
+            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_EXISTS,
+                                     "SIM slot switch operation not needed");
+        else
+            g_task_return_error (task, g_steal_pointer (&error));
+    } else {
+        mm_obj_info (self, "SIM slot switch operation request successful");
+        g_task_return_boolean (task, TRUE);
+    }
+    g_object_unref (task);
+}
+
+static void
+uim_switch_get_slot_status_ready (QmiClientUim *client,
+                                  GAsyncResult *res,
+                                  GTask        *task)
+{
+    g_autoptr(QmiMessageUimGetSlotStatusOutput) output = NULL;
+    g_autoptr(QmiMessageUimSwitchSlotInput)     input = NULL;
+    MMIfaceModem *self;
+    GError       *error = NULL;
+    GArray       *physical_slots = NULL;
+    guint         i;
+    guint         active_logical_id = 0;
+    guint         active_slot_number;
+    guint         slot_number;
+
+    self = g_task_get_source_object (task);
+    slot_number = GPOINTER_TO_UINT (g_task_get_task_data (task));
+
+    output = qmi_client_uim_get_slot_status_finish (client, res, &error);
+    if (!output ||
+        !qmi_message_uim_get_slot_status_output_get_result (output, &error) ||
+        !qmi_message_uim_get_slot_status_output_get_physical_slot_status (output, &physical_slots, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    for (i = 0; i < physical_slots->len; i++) {
+        QmiPhysicalSlotStatusSlot *slot_status;
+
+        /* We look for the currently ACTIVE SIM card only! */
+        slot_status = &g_array_index (physical_slots, QmiPhysicalSlotStatusSlot, i);
+        if (slot_status->physical_slot_status != QMI_UIM_SLOT_STATE_ACTIVE)
+            continue;
+
+        active_logical_id = slot_status->logical_slot;
+        active_slot_number = i + 1;
+    }
+
+    if (!active_logical_id) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "couldn't find active slot logical ID");
+        g_object_unref (task);
+        return;
+    }
+
+    if (active_slot_number == slot_number) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_EXISTS,
+                                 "SIM slot switch operation not needed");
+        g_object_unref (task);
+        return;
+    }
+
+    mm_obj_dbg (self, "requesting active logical id %d switch to SIM slot %u", active_logical_id, slot_number);
+
+    input = qmi_message_uim_switch_slot_input_new ();
+    qmi_message_uim_switch_slot_input_set_logical_slot (input, (guint8) active_logical_id, NULL);
+    qmi_message_uim_switch_slot_input_set_physical_slot (input, slot_number, NULL);
+    qmi_client_uim_switch_slot (client,
+                                input,
+                                10,
+                                NULL,
+                                (GAsyncReadyCallback) uim_switch_slot_ready,
+                                task);
+}
+
+void
+mm_shared_qmi_set_primary_sim_slot (MMIfaceModem        *self,
+                                    guint                sim_slot,
+                                    GAsyncReadyCallback  callback,
+                                    gpointer             user_data)
+{
+    GTask     *task;
+    QmiClient *client = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_UIM, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, GUINT_TO_POINTER (sim_slot), NULL);
+
+    qmi_client_uim_get_slot_status (QMI_CLIENT_UIM (client),
+                                    NULL,
+                                    10,
+                                    NULL,
+                                    (GAsyncReadyCallback) uim_switch_get_slot_status_ready,
+                                    task);
 }
 
 /*****************************************************************************/

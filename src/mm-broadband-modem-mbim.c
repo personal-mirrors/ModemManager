@@ -3124,7 +3124,7 @@ basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
                ready_state != MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED)) {
         /* SIM has been removed or reinserted, re-probe to ensure correct interfaces are exposed */
         mm_obj_dbg (self, "SIM hot swap detected");
-        mm_broadband_modem_update_sim_hot_swap_detected (MM_BROADBAND_MODEM (self));
+        mm_broadband_modem_sim_hot_swap_detected (MM_BROADBAND_MODEM (self));
     }
 
     self->priv->last_ready_state = ready_state;
@@ -4460,6 +4460,7 @@ typedef struct {
     MMSignal *gsm;
     MMSignal *umts;
     MMSignal *lte;
+    MMSignal *nr5g;
 } SignalLoadValuesResult;
 
 static void
@@ -4468,6 +4469,7 @@ signal_load_values_result_free (SignalLoadValuesResult *result)
     g_clear_object (&result->gsm);
     g_clear_object (&result->umts);
     g_clear_object (&result->lte);
+    g_clear_object (&result->nr5g);
     g_slice_free (SignalLoadValuesResult, result);
 }
 
@@ -4479,6 +4481,7 @@ modem_signal_load_values_finish (MMIfaceModemSignal  *self,
                                  MMSignal           **gsm,
                                  MMSignal           **umts,
                                  MMSignal           **lte,
+                                 MMSignal           **nr5g,
                                  GError             **error)
 {
     SignalLoadValuesResult *result;
@@ -4487,20 +4490,14 @@ modem_signal_load_values_finish (MMIfaceModemSignal  *self,
     if (!result)
         return FALSE;
 
-    if (gsm && result->gsm) {
-        *gsm = result->gsm;
-        result->gsm = NULL;
-    }
-
-    if (umts && result->umts) {
-        *umts = result->umts;
-        result->umts = NULL;
-    }
-
-    if (lte && result->lte) {
-        *lte = result->lte;
-        result->lte = NULL;
-    }
+    if (gsm)
+        *gsm = g_steal_pointer (&result->gsm);
+    if (umts)
+        *umts = g_steal_pointer (&result->umts);
+    if (lte)
+        *lte = g_steal_pointer (&result->lte);
+    if (nr5g)
+        *nr5g = g_steal_pointer (&result->nr5g);
 
     signal_load_values_result_free (result);
 
@@ -4607,7 +4604,7 @@ parent_signal_load_values_ready (MMIfaceModemSignal *self,
     result = g_slice_new0 (SignalLoadValuesResult);
     if (!iface_modem_signal_parent->load_values_finish (self, res,
                                                         NULL, NULL,
-                                                        &result->gsm, &result->umts, &result->lte,
+                                                        &result->gsm, &result->umts, &result->lte, &result->nr5g,
                                                         &error)) {
         signal_load_values_result_free (result);
         g_task_return_error (task, error);
@@ -5597,6 +5594,12 @@ iface_modem_init (MMIfaceModem *iface)
     /* Create MBIM-specific SIM */
     iface->create_sim = create_sim;
     iface->create_sim_finish = create_sim_finish;
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+    iface->load_sim_slots = mm_shared_qmi_load_sim_slots;
+    iface->load_sim_slots_finish = mm_shared_qmi_load_sim_slots_finish;
+    iface->set_primary_sim_slot = mm_shared_qmi_set_primary_sim_slot;
+    iface->set_primary_sim_slot_finish = mm_shared_qmi_set_primary_sim_slot_finish;
+#endif
 
     /* Create MBIM-specific bearer */
     iface->create_bearer = modem_create_bearer;

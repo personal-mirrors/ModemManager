@@ -13,7 +13,6 @@
  * Copyright (C) 2011 Google, Inc.
  */
 
-
 #include <ModemManager.h>
 #define _LIBMM_INSIDE_MM
 #include <libmm-glib.h>
@@ -26,6 +25,7 @@
 #include "mm-base-modem-at.h"
 #include "mm-base-sim.h"
 #include "mm-bearer-list.h"
+#include "mm-private-boxed-types.h"
 #include "mm-log-object.h"
 #include "mm-context.h"
 
@@ -44,6 +44,82 @@ static GQuark state_update_context_quark;
 static GQuark signal_quality_update_context_quark;
 static GQuark signal_check_context_quark;
 static GQuark restart_initialize_idle_quark;
+
+/*****************************************************************************/
+
+gboolean
+mm_iface_modem_check_for_sim_swap_finish (MMIfaceModem *self,
+                                          GAsyncResult *res,
+                                          GError **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+explicit_check_for_sim_swap_ready (MMIfaceModem *self,
+                                   GAsyncResult *res,
+                                   GTask *task)
+{
+    GError *error = NULL;
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->check_for_sim_swap_finish (self, res, &error)) {
+        mm_obj_warn (self, "SIM swap check failed: %s", error->message);
+        g_task_return_error (task, error);
+    } else {
+        mm_obj_dbg (self, "SIM swap check completed");
+        g_task_return_boolean (task, TRUE);
+    }
+    g_object_unref (task);
+}
+
+void
+mm_iface_modem_check_for_sim_swap (MMIfaceModem *self,
+                                   guint slot_index,
+                                   const gchar *iccid,
+                                   GAsyncReadyCallback callback,
+                                   gpointer user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /*  Slot index 0 is used when slot is not known, assumingly on a modem with just one SIM slot */
+    if (slot_index != 0) {
+        MmGdbusModem *skeleton;
+        guint primary_slot;
+
+        g_object_get (self,
+                      MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
+                      NULL);
+
+        g_assert (skeleton);
+
+        primary_slot = mm_gdbus_modem_get_primary_sim_slot (MM_GDBUS_MODEM (skeleton));
+        g_object_unref (skeleton);
+
+        /* Check that it's really the primary slot whose iccid has changed */
+        if (primary_slot && primary_slot != slot_index) {
+            mm_obj_dbg (self, "checking for SIM swap ignored: status changed in slot %u, but primary is %u", slot_index, primary_slot);
+            g_task_return_boolean (task, TRUE);
+            g_object_unref (task);
+            return;
+        }
+    }
+
+    if (MM_IFACE_MODEM_GET_INTERFACE (self)->check_for_sim_swap &&
+        MM_IFACE_MODEM_GET_INTERFACE (self)->check_for_sim_swap_finish) {
+        mm_obj_dbg (self, "start checking for SIM swap in slot %u", slot_index);
+        MM_IFACE_MODEM_GET_INTERFACE (self)->check_for_sim_swap (
+            self,
+            iccid,
+            (GAsyncReadyCallback)explicit_check_for_sim_swap_ready,
+            task);
+        return;
+    }
+
+    g_task_return_boolean (task, FALSE);
+    g_object_unref (task);
+}
 
 /*****************************************************************************/
 
@@ -957,6 +1033,117 @@ handle_list_bearers (MmGdbusModem *skeleton,
 
 /*****************************************************************************/
 
+typedef struct {
+    MmGdbusModem          *skeleton;
+    GDBusMethodInvocation *invocation;
+    MMIfaceModem          *self;
+    guint                  requested_sim_slot;
+} HandleSetPrimarySimSlotContext;
+
+static void
+handle_set_primary_sim_slot_context_free (HandleSetPrimarySimSlotContext *ctx)
+{
+    g_clear_object (&ctx->skeleton);
+    g_clear_object (&ctx->invocation);
+    g_clear_object (&ctx->self);
+    g_free (ctx);
+}
+
+static void
+set_primary_sim_slot_ready (MMIfaceModem                   *self,
+                            GAsyncResult                   *res,
+                            HandleSetPrimarySimSlotContext *ctx)
+{
+    g_autoptr(GError) error = NULL;
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_primary_sim_slot_finish (self, res, &error)) {
+        /* If the implementation returns EXISTS, we're already in the requested SIM slot,
+         * so we can safely return a success on the operation and skip the reprobing */
+        if (!g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_EXISTS)) {
+            mm_obj_warn (self, "couldn't process primary SIM update request: %s", error->message);
+            g_dbus_method_invocation_take_error (ctx->invocation, g_steal_pointer (&error));
+            handle_set_primary_sim_slot_context_free (ctx);
+            return;
+        }
+        mm_obj_dbg (self, "ignoring SIM update request: %s", error->message);
+    } else {
+        /* Notify about the SIM swap, which will disable and reprobe the device.
+         * There is no need to update the PrimarySimSlot property, as this value will be
+         * reloaded automatically during the reprobe. */
+        mm_base_modem_process_sim_switch (MM_BASE_MODEM (self));
+    }
+
+    mm_gdbus_modem_complete_set_primary_sim_slot (ctx->skeleton, ctx->invocation);
+    handle_set_primary_sim_slot_context_free (ctx);
+}
+
+static void
+handle_set_primary_sim_slot_auth_ready (MMBaseModem                    *self,
+                                        GAsyncResult                   *res,
+                                        HandleSetPrimarySimSlotContext *ctx)
+{
+    GError             *error = NULL;
+    const gchar *const *sim_slot_paths;
+
+    if (!mm_base_modem_authorize_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_set_primary_sim_slot_context_free (ctx);
+        return;
+    }
+
+    /* If SIM switching is not implemented, report an error */
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->set_primary_sim_slot ||
+        !MM_IFACE_MODEM_GET_INTERFACE (self)->set_primary_sim_slot_finish) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot switch sim: "
+                                               "operation not supported");
+        handle_set_primary_sim_slot_context_free (ctx);
+        return;
+    }
+
+    /* Validate SIM slot number */
+    sim_slot_paths = mm_gdbus_modem_get_sim_slots (ctx->skeleton);
+    if (ctx->requested_sim_slot > g_strv_length ((gchar **)sim_slot_paths)) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_INVALID_ARGS,
+                                               "Cannot switch sim: requested SIM slot number is out of bounds");
+        handle_set_primary_sim_slot_context_free (ctx);
+        return;
+    }
+
+    MM_IFACE_MODEM_GET_INTERFACE (self)->set_primary_sim_slot (MM_IFACE_MODEM (self),
+                                                               ctx->requested_sim_slot,
+                                                               (GAsyncReadyCallback)set_primary_sim_slot_ready,
+                                                               ctx);
+}
+
+static gboolean
+handle_set_primary_sim_slot (MmGdbusModem          *skeleton,
+                             GDBusMethodInvocation *invocation,
+                             guint                  sim_slot,
+                             MMIfaceModem          *self)
+{
+    HandleSetPrimarySimSlotContext *ctx;
+
+    ctx = g_new0 (HandleSetPrimarySimSlotContext, 1);
+    ctx->skeleton = g_object_ref (skeleton);
+    ctx->invocation = g_object_ref (invocation);
+    ctx->self = g_object_ref (self);
+    ctx->requested_sim_slot = sim_slot;
+
+    mm_base_modem_authorize (MM_BASE_MODEM (self),
+                             invocation,
+                             MM_AUTHORIZATION_DEVICE_CONTROL,
+                             (GAsyncReadyCallback)handle_set_primary_sim_slot_auth_ready,
+                             ctx);
+    return TRUE;
+}
+
+/*****************************************************************************/
+
 void
 mm_iface_modem_update_access_technologies (MMIfaceModem *self,
                                            MMModemAccessTechnology new_access_tech,
@@ -1509,7 +1696,8 @@ __iface_modem_update_state_internal (MMIfaceModem *self,
 
     /* While connected we don't want registration status changes to change
      * the modem's state away from CONNECTED. */
-    if ((new_state == MM_MODEM_STATE_SEARCHING ||
+    if ((new_state == MM_MODEM_STATE_ENABLED   ||
+         new_state == MM_MODEM_STATE_SEARCHING ||
          new_state == MM_MODEM_STATE_REGISTERED) &&
         bearer_list &&
         old_state > MM_MODEM_STATE_REGISTERED) {
@@ -3928,6 +4116,7 @@ interface_enabling_step (GTask *task)
             MM_IFACE_MODEM_GET_INTERFACE (self)->check_for_sim_swap_finish) {
             MM_IFACE_MODEM_GET_INTERFACE (self)->check_for_sim_swap (
                 self,
+                NULL,
                 (GAsyncReadyCallback)check_for_sim_swap_ready,
                 task);
             return;
@@ -4015,6 +4204,7 @@ typedef enum {
     INITIALIZATION_STEP_SUPPORTED_IP_FAMILIES,
     INITIALIZATION_STEP_POWER_STATE,
     INITIALIZATION_STEP_SIM_HOT_SWAP,
+    INITIALIZATION_STEP_SIM_SLOTS,
     INITIALIZATION_STEP_UNLOCK_REQUIRED,
     INITIALIZATION_STEP_SIM,
     INITIALIZATION_STEP_SETUP_CARRIER_CONFIG,
@@ -4375,6 +4565,98 @@ load_supported_ip_families_ready (MMIfaceModem *self,
 UINT_REPLY_READY_FN (power_state, "power state")
 
 static void
+setup_sim_hot_swap_ready (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          GTask        *task)
+{
+    InitializationContext *ctx;
+    g_autoptr(GError)      error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap_finish (self, res, &error);
+    if (error)
+        mm_obj_warn (self, "SIM hot swap setup failed: %s", error->message);
+    else {
+        mm_obj_dbg (self, "SIM hot swap setup succeeded");
+        g_object_set (self,
+                      MM_IFACE_MODEM_SIM_HOT_SWAP_CONFIGURED, TRUE,
+                      NULL);
+    }
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_initialization_step (task);
+}
+
+static void
+load_sim_slots_ready (MMIfaceModem *self,
+                      GAsyncResult *res,
+                      GTask        *task)
+{
+    InitializationContext *ctx;
+    g_autoptr(GPtrArray)   sim_slots = NULL;
+    g_autoptr(GError)      error = NULL;
+    guint                  primary_sim_slot = 0;
+
+    ctx  = g_task_get_task_data (task);
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots_finish (self,
+                                                                     res,
+                                                                     &sim_slots,
+                                                                     &primary_sim_slot,
+                                                                     &error))
+        mm_obj_warn (self, "couldn't query SIM slots: %s", error->message);
+
+    if (sim_slots) {
+        MMBaseSim     *primary_sim = NULL;
+        GPtrArray     *sim_slot_paths_array;
+        g_auto(GStrv)  sim_slot_paths = NULL;
+        guint          i;
+
+        g_assert (primary_sim_slot);
+        g_assert_cmpuint (primary_sim_slot, <=, sim_slots->len);
+
+        sim_slot_paths_array = g_ptr_array_new ();
+        for (i = 0; i < sim_slots->len; i++) {
+            MMBaseSim   *sim;
+            const gchar *sim_path;
+
+            sim = MM_BASE_SIM (g_ptr_array_index (sim_slots, i));
+            if (!sim) {
+                g_ptr_array_add (sim_slot_paths_array, g_strdup ("/"));
+                continue;
+            }
+
+            sim_path = mm_base_sim_get_path (sim);
+            g_ptr_array_add (sim_slot_paths_array, g_strdup (sim_path));
+        }
+        g_ptr_array_add (sim_slot_paths_array, NULL);
+        sim_slot_paths = (GStrv) g_ptr_array_free (sim_slot_paths_array, FALSE);
+
+        mm_gdbus_modem_set_sim_slots (ctx->skeleton, (const gchar *const *)sim_slot_paths);
+        mm_gdbus_modem_set_primary_sim_slot (ctx->skeleton, primary_sim_slot);
+
+        /* If loading SIM slots is supported, we also expose already the primary active SIM object */
+        if (primary_sim_slot) {
+            primary_sim = g_ptr_array_index (sim_slots, primary_sim_slot - 1);
+            if (primary_sim)
+                g_object_bind_property (primary_sim, MM_BASE_SIM_PATH,
+                                        ctx->skeleton, "sim",
+                                        G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
+        }
+        g_object_set (self,
+                      MM_IFACE_MODEM_SIM,       primary_sim,
+                      MM_IFACE_MODEM_SIM_SLOTS, sim_slots,
+                      NULL);
+    }
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_initialization_step (task);
+}
+
+static void
 modem_update_lock_info_ready (MMIfaceModem *self,
                               GAsyncResult *res,
                               GTask *task)
@@ -4613,34 +4895,6 @@ load_current_bands_ready (MMIfaceModem *self,
     }
 
     /* Done, Go on to next step */
-    ctx->step++;
-    interface_initialization_step (task);
-}
-
-/*****************************************************************************/
-/* Setup SIM hot swap (Modem interface) */
-static void
-setup_sim_hot_swap_ready (MMIfaceModem *self,
-                          GAsyncResult *res,
-                          GTask *task)
-{
-    InitializationContext *ctx;
-    GError *error = NULL;
-
-    ctx = g_task_get_task_data (task);
-
-    MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap_finish (self, res, &error);
-    if (error) {
-        mm_obj_warn (self, "SIM hot swap setup failed: %s", error->message);
-        g_error_free (error);
-    } else {
-        mm_obj_dbg (self, "SIM hot swap setup succeeded");
-        g_object_set (self,
-                      MM_IFACE_MODEM_SIM_HOT_SWAP_CONFIGURED, TRUE,
-                      NULL);
-    }
-
-    /* Go on to next step */
     ctx->step++;
     interface_initialization_step (task);
 }
@@ -5080,14 +5334,36 @@ interface_initialization_step (GTask *task)
         ctx->step++;
         /* fall-through */
 
-    case INITIALIZATION_STEP_SIM_HOT_SWAP:
-        if (MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap &&
+    case INITIALIZATION_STEP_SIM_HOT_SWAP: {
+        gboolean sim_hot_swap_configured = FALSE;
+
+        g_object_get (self,
+                      MM_IFACE_MODEM_SIM_HOT_SWAP_CONFIGURED, &sim_hot_swap_configured,
+                      NULL);
+        if (!sim_hot_swap_configured &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap &&
             MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap_finish) {
             MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap (
                 MM_IFACE_MODEM (self),
                 (GAsyncReadyCallback) setup_sim_hot_swap_ready,
                 task);
                 return;
+        }
+        ctx->step++;
+    } /* fall-through */
+
+        case INITIALIZATION_STEP_SIM_SLOTS:
+        /* If the modem doesn't need any SIM (not implemented by plugin, or not
+         * needed in CDMA-only modems), or if we don't know how to query
+         * for SIM slots */
+        if (!mm_gdbus_modem_get_sim_slots (ctx->skeleton) &&
+            !mm_iface_modem_is_cdma_only (self) &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots_finish) {
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots (MM_IFACE_MODEM (self),
+                                                                 (GAsyncReadyCallback)load_sim_slots_ready,
+                                                                 task);
+            return;
         }
         ctx->step++;
         /* fall-through */
@@ -5280,6 +5556,7 @@ interface_initialization_step (GTask *task)
                           "signal::handle-enable",                   G_CALLBACK (handle_enable),                   self,
                           "signal::handle-set-current-bands",        G_CALLBACK (handle_set_current_bands),        self,
                           "signal::handle-set-current-modes",        G_CALLBACK (handle_set_current_modes),        self,
+                          "signal::handle-set-primary-sim-slot",     G_CALLBACK (handle_set_primary_sim_slot),     self,
                           NULL);
 
         /* Finally, export the new interface, even if we got errors, but only if not
@@ -5685,6 +5962,14 @@ iface_modem_init (gpointer g_iface)
                               "SIM object",
                               MM_TYPE_BASE_SIM,
                               G_PARAM_READWRITE));
+
+    g_object_interface_install_property
+        (g_iface,
+         g_param_spec_boxed (MM_IFACE_MODEM_SIM_SLOTS,
+                             "SIM slots",
+                             "SIM objects in SIM slots",
+                             MM_TYPE_OBJECT_ARRAY,
+                             G_PARAM_READWRITE));
 
     g_object_interface_install_property
         (g_iface,

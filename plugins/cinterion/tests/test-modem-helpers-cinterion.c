@@ -510,23 +510,6 @@ test_scfg_response_2g (void)
 }
 
 static void
-test_scfg_response_2g_ucs2 (void)
-{
-    GArray *expected_bands;
-    MMModemBand single;
-    const gchar *response =
-        "^SCFG: \"Radio/Band\",\"0031\",\"0031\"\r\n"
-        "\r\n";
-
-    expected_bands = g_array_sized_new (FALSE, FALSE, sizeof (MMModemBand), 9);
-    single = MM_MODEM_BAND_EGSM,  g_array_append_val (expected_bands, single);
-
-    common_test_scfg_response (response, MM_MODEM_CHARSET_UCS2, expected_bands, MM_CINTERION_MODEM_FAMILY_DEFAULT, MM_CINTERION_RADIO_BAND_FORMAT_SINGLE);
-
-    g_array_unref (expected_bands);
-}
-
-static void
 test_scfg_response_3g (void)
 {
     GArray *expected_bands;
@@ -1613,6 +1596,71 @@ test_smoni_response_to_signal (void)
     }
 }
 
+/*****************************************************************************/
+/* Test ^SCFG="MEopMode/Prov/Cfg" responses */
+
+typedef struct {
+    const gchar            *str;
+    MMCinterionModemFamily  modem_family;
+    guint                   initial_cid;
+    gdouble                 expected_cid;
+} ProvcfgResponseTest;
+
+
+static const ProvcfgResponseTest provcfg_response_tests[] = {
+    {
+
+        .str          = "^SCFG: \"MEopMode/Prov/Cfg\",\"vdfde\"",
+        .modem_family = MM_CINTERION_MODEM_FAMILY_DEFAULT,
+        .initial_cid  = 1,
+        .expected_cid = 1,
+    },
+    {
+
+        .str          = "* ^SCFG: \"MEopMode/Prov/Cfg\",\"attus\"",
+        .modem_family = MM_CINTERION_MODEM_FAMILY_IMT,
+        .initial_cid  = 1,
+        .expected_cid = 1,
+    },
+    {
+
+        .str          = "* ^SCFG: \"MEopMode/Prov/Cfg\",\"2\"",
+        .modem_family = MM_CINTERION_MODEM_FAMILY_DEFAULT,
+        .initial_cid  = 1,
+        .expected_cid = 3,
+    },
+    {
+
+        .str          = "* ^SCFG: \"MEopMode/Prov/Cfg\",\"vzwdcus\"",
+        .modem_family = MM_CINTERION_MODEM_FAMILY_DEFAULT,
+        .initial_cid  = 1,
+        .expected_cid = 3,
+    },
+    {
+
+        .str          = "* ^SCFG: \"MEopMode/Prov/Cfg\",\"tmode\"",
+        .modem_family = MM_CINTERION_MODEM_FAMILY_DEFAULT,
+        .initial_cid  = 1,
+        .expected_cid = 2,
+    }
+};
+
+static void
+test_provcfg_response (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (provcfg_response_tests); i++) {
+        guint cid = provcfg_response_tests[i].initial_cid;
+
+        mm_cinterion_provcfg_response_to_cid (provcfg_response_tests[i].str,
+                                              provcfg_response_tests[i].modem_family,
+                                              MM_MODEM_CHARSET_GSM,
+                                              NULL,
+                                              &cid);
+        g_assert_cmpuint (cid,  ==, provcfg_response_tests[i].expected_cid);
+    }
+}
 
 /*****************************************************************************/
 
@@ -1629,7 +1677,6 @@ int main (int argc, char **argv)
     g_test_add_func ("/MM/cinterion/scfg/alas5",              test_scfg_alas5);
     g_test_add_func ("/MM/cinterion/scfg/response/3g",        test_scfg_response_3g);
     g_test_add_func ("/MM/cinterion/scfg/response/2g",        test_scfg_response_2g);
-    g_test_add_func ("/MM/cinterion/scfg/response/2g/ucs2",   test_scfg_response_2g_ucs2);
     g_test_add_func ("/MM/cinterion/scfg/response/pls62/gsm", test_scfg_response_pls62_gsm);
     g_test_add_func ("/MM/cinterion/scfg/response/pls62/ucs2",test_scfg_response_pls62_ucs2);
     g_test_add_func ("/MM/cinterion/scfg/response/alas5",     test_scfg_response_alas5);
@@ -1647,6 +1694,7 @@ int main (int argc, char **argv)
     g_test_add_func ("/MM/cinterion/ctzu/urc/full",           test_ctzu_urc_full);
     g_test_add_func ("/MM/cinterion/smoni/query_response",    test_smoni_response);
     g_test_add_func ("/MM/cinterion/smoni/query_response_to_signal", test_smoni_response_to_signal);
+    g_test_add_func ("/MM/cinterion/scfg/provcfg",            test_provcfg_response);
 
     return g_test_run ();
 }

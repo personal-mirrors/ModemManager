@@ -197,18 +197,39 @@ parse_auth_type (MMBearerAllowedAuth mm_auth)
     }
 }
 
-/* AT^SGAUTH=<cid>[, <auth_type>[, <passwd>, <user>]] */
-static gchar *
-build_auth_string (MMBroadbandBearerCinterion *self,
-                   MMBearerProperties         *config,
-                   guint                       cid)
+MMBearerAllowedAuth
+mm_auth_type_from_cinterion_auth_type (guint cinterion_auth)
 {
-    const gchar             *user;
-    const gchar             *passwd;
-    gboolean                 has_user;
-    gboolean                 has_passwd;
+    switch (cinterion_auth) {
+    case BEARER_CINTERION_AUTH_NONE:
+        return MM_BEARER_ALLOWED_AUTH_NONE;
+    case BEARER_CINTERION_AUTH_PAP:
+        return MM_BEARER_ALLOWED_AUTH_PAP;
+    case BEARER_CINTERION_AUTH_CHAP:
+        return MM_BEARER_ALLOWED_AUTH_CHAP;
+    default:
+        return MM_BEARER_ALLOWED_AUTH_UNKNOWN;
+    }
+}
+
+/* Cinterion authentication is done with the command AT^SGAUTH,
+   whose syntax depends on the modem family, as follow:
+   - AT^SGAUTH=<cid>[, <auth_type>[, <user>, <passwd>]] for the IMT family
+   - AT^SGAUTH=<cid>[, <auth_type>[, <passwd>, <user>]] for the rest */
+gchar *
+mm_broadband_bearer_cinterion_build_auth_string (gpointer                    log_object,
+                                                 MMCinterionModemFamily      modem_family,
+                                                 MMBearerProperties         *config,
+                                                 guint                       cid)
+{
     MMBearerAllowedAuth      auth;
     BearerCinterionAuthType  encoded_auth = BEARER_CINTERION_AUTH_UNKNOWN;
+    gboolean                 has_user;
+    gboolean                 has_passwd;
+    const gchar             *user;
+    const gchar             *passwd;
+    g_autofree gchar        *quoted_user = NULL;
+    g_autofree gchar        *quoted_passwd = NULL;
 
     user   = mm_bearer_properties_get_user         (config);
     passwd = mm_bearer_properties_get_password     (config);
@@ -221,7 +242,9 @@ build_auth_string (MMBroadbandBearerCinterion *self,
     /* When 'none' requested, we won't require user/password */
     if (encoded_auth == BEARER_CINTERION_AUTH_NONE) {
         if (has_user || has_passwd)
-            mm_obj_warn (self, "APN user/password given but 'none' authentication requested");
+            mm_obj_warn (log_object, "APN user/password given but 'none' authentication requested");
+        if (modem_family == MM_CINTERION_MODEM_FAMILY_IMT)
+            return g_strdup_printf ("^SGAUTH=%u,%d,\"\",\"\"", cid, encoded_auth);
         return g_strdup_printf ("^SGAUTH=%u,%d", cid, encoded_auth);
     }
 
@@ -231,12 +254,26 @@ build_auth_string (MMBroadbandBearerCinterion *self,
         if (!has_user && !has_passwd)
             return NULL;
 
-        /* If user/passwd given, default to PAP */
-        mm_obj_dbg (self, "APN user/password given but no authentication type explicitly requested: defaulting to 'PAP'");
-        encoded_auth = BEARER_CINTERION_AUTH_PAP;
+        /* If user/passwd given, default to CHAP (more common than PAP) */
+        mm_obj_dbg (log_object, "APN user/password given but no authentication type explicitly requested: defaulting to 'CHAP'");
+        encoded_auth = BEARER_CINTERION_AUTH_CHAP;
     }
 
-    return g_strdup_printf ("^SGAUTH=%u,%d,%s,%s", cid, encoded_auth, passwd, user);
+    quoted_user   = mm_port_serial_at_quote_string (user   ? user   : "");
+    quoted_passwd = mm_port_serial_at_quote_string (passwd ? passwd : "");
+
+    if (modem_family == MM_CINTERION_MODEM_FAMILY_IMT)
+        return g_strdup_printf ("^SGAUTH=%u,%d,%s,%s",
+                                cid,
+                                encoded_auth,
+                                quoted_user,
+                                quoted_passwd);
+
+    return g_strdup_printf ("^SGAUTH=%u,%d,%s,%s",
+                            cid,
+                            encoded_auth,
+                            quoted_passwd,
+                            quoted_user);
 }
 
 /******************************************************************************/
@@ -376,7 +413,6 @@ dial_3gpp_context_step (GTask *task)
     case DIAL_3GPP_CONTEXT_STEP_FIRST: {
         MMBearerIpFamily ip_family;
 
-        /* Only IPv4 supported by this bearer implementation for now */
         ip_family = mm_bearer_properties_get_ip_type (mm_base_bearer_peek_config (MM_BASE_BEARER (ctx->self)));
         if (ip_family == MM_BEARER_IP_FAMILY_NONE || ip_family == MM_BEARER_IP_FAMILY_ANY) {
             gchar *ip_family_str;
@@ -387,20 +423,17 @@ dial_3gpp_context_step (GTask *task)
             g_free (ip_family_str);
         }
 
-        if (ip_family != MM_BEARER_IP_FAMILY_IPV4) {
-            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
-                                     "Only IPv4 is supported by this modem");
-            g_object_unref (task);
-            return;
-        }
-
         ctx->step++;
     } /* fall through */
 
     case DIAL_3GPP_CONTEXT_STEP_AUTH: {
         gchar *command;
 
-        command = build_auth_string (self, mm_base_bearer_peek_config (MM_BASE_BEARER (ctx->self)), ctx->cid);
+        command = mm_broadband_bearer_cinterion_build_auth_string (self,
+                                                                   mm_broadband_modem_cinterion_get_family (MM_BROADBAND_MODEM_CINTERION (ctx->modem)),
+                                                                   mm_base_bearer_peek_config (MM_BASE_BEARER (ctx->self)),
+                                                                   ctx->cid);
+
         if (command) {
             mm_obj_dbg (self, "dial step %u/%u: authenticating...", ctx->step, DIAL_3GPP_CONTEXT_STEP_LAST);
             /* Send SGAUTH write, if User & Pass are provided.
@@ -433,7 +466,7 @@ dial_3gpp_context_step (GTask *task)
         mm_base_modem_at_command_full (ctx->modem,
                                        ctx->primary,
                                        command,
-                                       90,
+                                       180,
                                        FALSE,
                                        FALSE,
                                        NULL,

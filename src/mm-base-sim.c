@@ -45,6 +45,7 @@ enum {
     PROP_PATH,
     PROP_CONNECTION,
     PROP_MODEM,
+    PROP_SLOT_NUMBER,
     PROP_LAST
 };
 
@@ -64,6 +65,10 @@ struct _MMBaseSimPrivate {
     MMBaseModem *modem;
     /* The path where the SIM object is exported */
     gchar *path;
+
+    /* The SIM slot number, which will be 0 always if the system
+     * doesn't support multiple SIMS. */
+     guint slot_number;
 };
 
 static guint signals[SIGNAL_LAST] = { 0 };
@@ -221,11 +226,21 @@ handle_change_pin_auth_ready (MMBaseModem *modem,
         return;
     }
 
+    if (!mm_gdbus_sim_get_active (MM_GDBUS_SIM (ctx->self))) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot change PIN: "
+                                               "SIM not currently active");
+        handle_change_pin_context_free (ctx);
+        return;
+    }
+
     MM_BASE_SIM_GET_CLASS (ctx->self)->change_pin (ctx->self,
-                                              ctx->old_pin,
-                                              ctx->new_pin,
-                                              (GAsyncReadyCallback)handle_change_pin_ready,
-                                              ctx);
+                                                   ctx->old_pin,
+                                                   ctx->new_pin,
+                                                   (GAsyncReadyCallback)handle_change_pin_ready,
+                                                   ctx);
 }
 
 static gboolean
@@ -391,11 +406,21 @@ handle_enable_pin_auth_ready (MMBaseModem *modem,
         return;
     }
 
+    if (!mm_gdbus_sim_get_active (MM_GDBUS_SIM (ctx->self))) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot enable/disable PIN: "
+                                               "SIM not currently active");
+        handle_enable_pin_context_free (ctx);
+        return;
+    }
+
     MM_BASE_SIM_GET_CLASS (ctx->self)->enable_pin (ctx->self,
-                                              ctx->pin,
-                                              ctx->enabled,
-                                              (GAsyncReadyCallback)handle_enable_pin_ready,
-                                              ctx);
+                                                   ctx->pin,
+                                                   ctx->enabled,
+                                                   (GAsyncReadyCallback)handle_enable_pin_ready,
+                                                   ctx);
 }
 
 static gboolean
@@ -782,6 +807,16 @@ handle_send_pin_auth_ready (MMBaseModem *modem,
         return;
     }
 
+    if (!mm_gdbus_sim_get_active (MM_GDBUS_SIM (ctx->self))) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot send PIN: "
+                                               "SIM not currently active");
+        handle_send_pin_context_free (ctx);
+        return;
+    }
+
     mm_base_sim_send_pin (ctx->self,
                           ctx->pin,
                           (GAsyncReadyCallback)handle_send_pin_ready,
@@ -852,6 +887,16 @@ handle_send_puk_auth_ready (MMBaseModem *modem,
 
     if (!mm_base_modem_authorize_finish (modem, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_send_puk_context_free (ctx);
+        return;
+    }
+
+    if (!mm_gdbus_sim_get_active (MM_GDBUS_SIM (ctx->self))) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot send PUK: "
+                                               "SIM not currently active");
         handle_send_puk_context_free (ctx);
         return;
     }
@@ -933,6 +978,12 @@ const gchar *
 mm_base_sim_get_path (MMBaseSim *self)
 {
     return self->priv->path;
+}
+
+guint
+mm_base_sim_get_slot_number (MMBaseSim *self)
+{
+    return self->priv->slot_number;
 }
 
 /*****************************************************************************/
@@ -1415,11 +1466,41 @@ load_operator_name (MMBaseSim *self,
 
 /*****************************************************************************/
 
+MMBaseSim *
+mm_base_sim_new_initialized (MMBaseModem *modem,
+                             guint        slot_number,
+                             gboolean     active,
+                             const gchar *sim_identifier,
+                             const gchar *imsi,
+                             const gchar *operator_identifier,
+                             const gchar *operator_name,
+                             const GStrv  emergency_numbers)
+{
+    MMBaseSim *sim;
+
+    sim = MM_BASE_SIM (g_object_new (MM_TYPE_BASE_SIM,
+                                     MM_BASE_SIM_MODEM,       modem,
+                                     MM_BASE_SIM_SLOT_NUMBER, slot_number,
+                                     "active",                active,
+                                     "sim-identifier",        sim_identifier,
+                                     "imsi",                  imsi,
+                                     "operator-identifier",   operator_identifier,
+                                     "operator-name",         operator_name,
+                                     "emergency-numbers",     emergency_numbers,
+                                     NULL));
+
+    mm_base_sim_export (sim);
+    return sim;
+}
+
+/*****************************************************************************/
+
 typedef struct _InitAsyncContext InitAsyncContext;
 static void interface_initialization_step (GTask *task);
 
 typedef enum {
     INITIALIZATION_STEP_FIRST,
+    INITIALIZATION_STEP_WAIT_READY,
     INITIALIZATION_STEP_SIM_IDENTIFIER,
     INITIALIZATION_STEP_IMSI,
     INITIALIZATION_STEP_OPERATOR_ID,
@@ -1554,6 +1635,23 @@ STR_REPLY_READY_FN (operator_identifier, "operator identifier")
 STR_REPLY_READY_FN (operator_name, "operator name")
 
 static void
+init_wait_sim_ready (MMBaseSim    *self,
+                     GAsyncResult *res,
+                     GTask        *task)
+{
+    InitAsyncContext  *ctx;
+    g_autoptr(GError)  error = NULL;
+
+    if (!MM_BASE_SIM_GET_CLASS (self)->wait_sim_ready_finish (self, res, &error))
+        mm_obj_warn (self, "couldn't wait for SIM to be ready: %s", error->message);
+
+    /* Go on to next step */
+    ctx = g_task_get_task_data (task);
+    ctx->step++;
+    interface_initialization_step (task);
+}
+
+static void
 interface_initialization_step (GTask *task)
 {
     MMBaseSim *self;
@@ -1569,6 +1667,18 @@ interface_initialization_step (GTask *task)
 
     switch (ctx->step) {
     case INITIALIZATION_STEP_FIRST:
+        ctx->step++;
+        /* Fall through */
+
+    case INITIALIZATION_STEP_WAIT_READY:
+        if (MM_BASE_SIM_GET_CLASS (self)->wait_sim_ready &&
+            MM_BASE_SIM_GET_CLASS (self)->wait_sim_ready_finish) {
+            MM_BASE_SIM_GET_CLASS (self)->wait_sim_ready (
+                self,
+                (GAsyncReadyCallback)init_wait_sim_ready,
+                task);
+            return;
+        }
         ctx->step++;
         /* Fall through */
 
@@ -1715,6 +1825,7 @@ mm_base_sim_new (MMBaseModem *modem,
                                 callback,
                                 user_data,
                                 MM_BASE_SIM_MODEM, modem,
+                                "active", TRUE, /* by default always active */
                                 NULL);
 }
 
@@ -1792,6 +1903,9 @@ set_property (GObject *object,
                                     G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
         }
         break;
+    case PROP_SLOT_NUMBER:
+        self->priv->slot_number = g_value_get_uint (value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -1815,6 +1929,9 @@ get_property (GObject *object,
         break;
     case PROP_MODEM:
         g_value_set_object (value, self->priv->modem);
+        break;
+    case PROP_SLOT_NUMBER:
+        g_value_set_uint (value, self->priv->slot_number);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1929,6 +2046,14 @@ mm_base_sim_class_init (MMBaseSimClass *klass)
                              MM_TYPE_BASE_MODEM,
                              G_PARAM_READWRITE);
     g_object_class_install_property (object_class, PROP_MODEM, properties[PROP_MODEM]);
+
+    properties[PROP_SLOT_NUMBER] =
+        g_param_spec_uint (MM_BASE_SIM_SLOT_NUMBER,
+                           "Slot number",
+                           "The slot number where the SIM is inserted",
+                           0, G_MAXUINT, 0,
+                           G_PARAM_READWRITE);
+    g_object_class_install_property (object_class, PROP_SLOT_NUMBER, properties[PROP_SLOT_NUMBER]);
 
     /* Signals */
     signals[SIGNAL_PIN_LOCK_ENABLED] =

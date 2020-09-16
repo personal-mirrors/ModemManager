@@ -1839,3 +1839,232 @@ mm_firmware_unique_id_to_qmi_unique_id (const gchar  *unique_id,
                  "Unexpected unique id length: %u", len);
     return NULL;
 }
+
+/*****************************************************************************/
+
+gboolean
+mm_qmi_uim_get_card_status_output_parse (gpointer                           log_object,
+                                         QmiMessageUimGetCardStatusOutput  *output,
+                                         MMModemLock                       *o_lock,
+                                         guint                             *o_pin1_retries,
+                                         guint                             *o_puk1_retries,
+                                         guint                             *o_pin2_retries,
+                                         guint                             *o_puk2_retries,
+                                         GError                           **error)
+{
+    QmiMessageUimGetCardStatusOutputCardStatusCardsElement                    *card;
+    QmiMessageUimGetCardStatusOutputCardStatusCardsElementApplicationsElement *app;
+    GArray      *cards;
+    guint16      index_gw_primary = 0xFFFF;
+    guint8       gw_primary_slot_i = 0;
+    guint8       gw_primary_application_i = 0;
+    MMModemLock  lock = MM_MODEM_LOCK_UNKNOWN;
+
+    /* This command supports MULTIPLE cards with MULTIPLE applications each. For our
+     * purposes, we're going to consider as the SIM to use the one identified as
+     * 'primary GW' exclusively. We don't really support Dual Sim Dual Standby yet. */
+
+    if (!qmi_message_uim_get_card_status_output_get_result (output, error)) {
+        g_prefix_error (error, "QMI operation failed: ");
+        return FALSE;
+    }
+
+    qmi_message_uim_get_card_status_output_get_card_status (
+        output,
+        &index_gw_primary,
+        NULL, /* index_1x_primary */
+        NULL, /* index_gw_secondary */
+        NULL, /* index_1x_secondary */
+        &cards,
+        NULL);
+
+    if (cards->len == 0) {
+        g_set_error (error, QMI_CORE_ERROR, QMI_CORE_ERROR_FAILED,
+                     "No cards reported");
+        return FALSE;
+    }
+
+    /* Look for the primary GW slot and application.
+     * If we don't have valid GW primary slot index and application index, assume
+     * we're missing the SIM altogether */
+    gw_primary_slot_i        = ((index_gw_primary & 0xFF00) >> 8);
+    gw_primary_application_i = ((index_gw_primary & 0x00FF));
+
+    if (gw_primary_slot_i == 0xFF) {
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED,
+                     "GW primary session index unknown");
+        return FALSE;
+    }
+    mm_obj_dbg (log_object, "GW primary session index: %u",     gw_primary_slot_i);
+
+    if (gw_primary_application_i == 0xFF) {
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED,
+                     "GW primary application index unknown");
+        return FALSE;
+    }
+    mm_obj_dbg (log_object, "GW primary application index: %u", gw_primary_application_i);
+
+    /* Validate slot index */
+    if (gw_primary_slot_i >= cards->len) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Invalid GW primary session index: %u",
+                     gw_primary_slot_i);
+        return FALSE;
+    }
+
+    /* Get card at slot */
+    card = &g_array_index (cards, QmiMessageUimGetCardStatusOutputCardStatusCardsElement, gw_primary_slot_i);
+
+    if (card->card_state == QMI_UIM_CARD_STATE_ABSENT) {
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED,
+                     "No card found");
+        return FALSE;
+    }
+
+    if (card->card_state == QMI_UIM_CARD_STATE_ERROR) {
+        const gchar *card_error;
+
+        card_error = qmi_uim_card_error_get_string (card->error_code);
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
+                     "Card error: %s", card_error ? card_error : "unknown error");
+        return FALSE;
+    }
+
+    if (card->card_state != QMI_UIM_CARD_STATE_PRESENT) {
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
+                     "Card error: unexpected card state: 0x%x", card->card_state);
+        return FALSE;
+    }
+
+    /* Card is present */
+
+    if (card->applications->len == 0) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "No applications reported in card");
+        return FALSE;
+    }
+
+    /* Validate application index */
+    if (gw_primary_application_i >= card->applications->len) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Invalid GW primary application index: %u",
+                     gw_primary_application_i);
+        return FALSE;
+    }
+
+    app = &g_array_index (card->applications, QmiMessageUimGetCardStatusOutputCardStatusCardsElementApplicationsElement, gw_primary_application_i);
+    if ((app->type != QMI_UIM_CARD_APPLICATION_TYPE_SIM) && (app->type != QMI_UIM_CARD_APPLICATION_TYPE_USIM)) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Unsupported application type found in GW primary application index: %s",
+                     qmi_uim_card_application_type_get_string (app->type));
+        return FALSE;
+    }
+
+    /* If card not ready yet, return RETRY error.
+     * If the application state reports needing PIN/PUk, consider that ready as
+     * well, and let the logic fall down to check PIN1/PIN2. */
+    if (app->state != QMI_UIM_CARD_APPLICATION_STATE_READY &&
+        app->state != QMI_UIM_CARD_APPLICATION_STATE_PIN1_OR_UPIN_PIN_REQUIRED &&
+        app->state != QMI_UIM_CARD_APPLICATION_STATE_PUK1_OR_UPIN_PUK_REQUIRED &&
+        app->state != QMI_UIM_CARD_APPLICATION_STATE_PIN1_BLOCKED) {
+        mm_obj_dbg (log_object, "neither SIM nor USIM are ready");
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_RETRY,
+                     "SIM not ready yet (retry)");
+        return FALSE;
+    }
+
+    /* Report retries if requested to do so */
+    if (o_pin1_retries)
+        *o_pin1_retries = app->pin1_retries;
+    if (o_puk1_retries)
+        *o_puk1_retries = app->puk1_retries;
+    if (o_pin2_retries)
+        *o_pin2_retries = app->pin2_retries;
+    if (o_puk2_retries)
+        *o_puk2_retries = app->puk2_retries;
+
+    /* Early bail out if lock status isn't wanted at this point, so that we
+     * don't fail with an error the unlock retries check */
+    if (!o_lock)
+        return TRUE;
+
+    /* Card is ready, what's the lock status? */
+
+    /* PIN1 */
+    switch (app->pin1_state) {
+    case QMI_UIM_PIN_STATE_NOT_INITIALIZED:
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
+                     "SIM PIN/PUK status not known yet");
+        return FALSE;
+
+    case QMI_UIM_PIN_STATE_PERMANENTLY_BLOCKED:
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
+                     "SIM PIN/PUK permanently blocked");
+        return FALSE;
+
+    case QMI_UIM_PIN_STATE_ENABLED_NOT_VERIFIED:
+        lock = MM_MODEM_LOCK_SIM_PIN;
+        break;
+
+    case QMI_UIM_PIN_STATE_BLOCKED:
+        lock = MM_MODEM_LOCK_SIM_PUK;
+        break;
+
+    case QMI_UIM_PIN_STATE_DISABLED:
+    case QMI_UIM_PIN_STATE_ENABLED_VERIFIED:
+        lock = MM_MODEM_LOCK_NONE;
+        break;
+
+    default:
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
+                     "Unknown SIM PIN/PUK status");
+        return FALSE;
+    }
+
+    /* PIN2 */
+    if (lock == MM_MODEM_LOCK_NONE) {
+        switch (app->pin2_state) {
+        case QMI_UIM_PIN_STATE_NOT_INITIALIZED:
+            mm_obj_warn (log_object, "SIM PIN2/PUK2 status not known yet");
+            break;
+
+        case QMI_UIM_PIN_STATE_ENABLED_NOT_VERIFIED:
+            lock = MM_MODEM_LOCK_SIM_PIN2;
+            break;
+
+        case QMI_UIM_PIN_STATE_PERMANENTLY_BLOCKED:
+            mm_obj_warn (log_object, "PUK2 permanently blocked");
+            /* Fall through */
+        case QMI_UIM_PIN_STATE_BLOCKED:
+            lock = MM_MODEM_LOCK_SIM_PUK2;
+            break;
+
+        case QMI_UIM_PIN_STATE_DISABLED:
+        case QMI_UIM_PIN_STATE_ENABLED_VERIFIED:
+            break;
+
+        default:
+            mm_obj_warn (log_object, "unknown SIM PIN2/PUK2 status");
+            break;
+        }
+    }
+
+    *o_lock = lock;
+    return TRUE;
+}

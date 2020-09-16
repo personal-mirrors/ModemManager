@@ -680,249 +680,6 @@ modem_load_unlock_required_finish (MMIfaceModem *self,
 
 static void load_unlock_required_context_step (GTask *task);
 
-/* Used also when loading unlock retries left */
-static gboolean
-uim_get_card_status_output_parse (MMBroadbandModemQmi               *self,
-                                  QmiMessageUimGetCardStatusOutput  *output,
-                                  MMModemLock                       *o_lock,
-                                  guint                             *o_pin1_retries,
-                                  guint                             *o_puk1_retries,
-                                  guint                             *o_pin2_retries,
-                                  guint                             *o_puk2_retries,
-                                  GError                           **error)
-{
-    GArray *cards;
-    QmiMessageUimGetCardStatusOutputCardStatusCardsElement *card;
-    QmiMessageUimGetCardStatusOutputCardStatusCardsElementApplicationsElement *app;
-    MMModemLock lock = MM_MODEM_LOCK_UNKNOWN;
-    guint i;
-    gint card_i = -1;
-    gint application_j = -1;
-    guint n_absent = 0;
-    guint n_error = 0;
-    guint n_invalid = 0;
-
-    /* This command supports MULTIPLE cards with MULTIPLE applications each. For our
-     * purposes, we're going to consider as the SIM to use the first card present
-     * with a SIM/USIM application. */
-
-    if (!qmi_message_uim_get_card_status_output_get_result (output, error)) {
-        g_prefix_error (error, "QMI operation failed: ");
-        return FALSE;
-    }
-
-    qmi_message_uim_get_card_status_output_get_card_status (
-        output,
-        NULL, /* index_gw_primary */
-        NULL, /* index_1x_primary */
-        NULL, /* index_gw_secondary */
-        NULL, /* index_1x_secondary */
-        &cards,
-        NULL);
-
-    if (cards->len == 0) {
-        g_set_error (error, QMI_CORE_ERROR, QMI_CORE_ERROR_FAILED,
-                     "No cards reported");
-        return FALSE;
-    }
-
-    if (cards->len > 1)
-        mm_obj_dbg (self, "multiple cards reported: %u", cards->len);
-
-    /* All KNOWN applications in all cards will need to be in READY state for us
-     * to consider UNLOCKED */
-    for (i = 0; i < cards->len; i++) {
-        card = &g_array_index (cards, QmiMessageUimGetCardStatusOutputCardStatusCardsElement, i);
-
-        switch (card->card_state) {
-        case QMI_UIM_CARD_STATE_PRESENT: {
-            guint j;
-            gboolean sim_usim_found = FALSE;
-
-            if (card->applications->len == 0) {
-                mm_obj_dbg (self, "no applications reported in card [%u]", i);
-                n_invalid++;
-                break;
-            }
-
-            if (card->applications->len > 1)
-                mm_obj_dbg (self, "multiple applications reported in card [%u]: %u", i, card->applications->len);
-
-            for (j = 0; j < card->applications->len; j++) {
-                app = &g_array_index (card->applications, QmiMessageUimGetCardStatusOutputCardStatusCardsElementApplicationsElement, j);
-
-                if (app->type == QMI_UIM_CARD_APPLICATION_TYPE_UNKNOWN) {
-                    mm_obj_dbg (self, "mnknown application [%u] found in card [%u]: %s; ignored.",
-                            j, i, qmi_uim_card_application_state_get_string (app->state));
-                    continue;
-                }
-
-                mm_obj_dbg (self, "application '%s' [%u] in card [%u]: %s",
-                        qmi_uim_card_application_type_get_string (app->type), j, i, qmi_uim_card_application_state_get_string (app->state));
-
-                if (app->type == QMI_UIM_CARD_APPLICATION_TYPE_SIM || app->type == QMI_UIM_CARD_APPLICATION_TYPE_USIM) {
-                    /* We found the card/app pair to use! Only keep the first found,
-                     * but still, keep on looping to log about the remaining ones */
-                    if (card_i < 0 && application_j < 0) {
-                        card_i = i;
-                        application_j = j;
-                    }
-
-                    sim_usim_found = TRUE;
-                }
-            }
-
-            if (!sim_usim_found) {
-                mm_obj_dbg (self, "no SIM/USIM application found in card [%u]", i);
-                n_invalid++;
-            }
-
-            break;
-        }
-
-        case QMI_UIM_CARD_STATE_ABSENT:
-            mm_obj_dbg (self, "card '%u' is absent", i);
-            n_absent++;
-            break;
-
-        case QMI_UIM_CARD_STATE_ERROR:
-        default:
-            n_error++;
-            if (qmi_uim_card_error_get_string (card->error_code) != NULL)
-                mm_obj_warn (self, "card '%u' is unusable: %s", i, qmi_uim_card_error_get_string (card->error_code));
-            else
-                mm_obj_warn (self, "card '%u' is unusable: unknown error", i);
-            break;
-        }
-
-        /* go on to next card */
-    }
-
-    /* If we found no card/app to use, we need to report an error */
-    if (card_i < 0 || application_j < 0) {
-        /* If not a single card found, report SIM not inserted */
-        if (n_absent > 0 && !n_error && !n_invalid)
-            g_set_error (error,
-                         MM_MOBILE_EQUIPMENT_ERROR,
-                         MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED,
-                         "No card found");
-        else if (n_error > 0)
-            g_set_error (error,
-                         MM_MOBILE_EQUIPMENT_ERROR,
-                         MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
-                         "Card error");
-        else
-            g_set_error (error,
-                         MM_MOBILE_EQUIPMENT_ERROR,
-                         MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE,
-                         "Card failure: %u absent, %u errors, %u invalid",
-                         n_absent, n_error, n_invalid);
-        return FALSE;
-    }
-
-    /* Get card/app to use */
-    card = &g_array_index (cards, QmiMessageUimGetCardStatusOutputCardStatusCardsElement, card_i);
-    app = &g_array_index (card->applications, QmiMessageUimGetCardStatusOutputCardStatusCardsElementApplicationsElement, application_j);
-
-    /* If card not ready yet, return RETRY error.
-     * If the application state reports needing PIN/PUk, consider that ready as
-     * well, and let the logic fall down to check PIN1/PIN2. */
-    if (app->state != QMI_UIM_CARD_APPLICATION_STATE_READY &&
-        app->state != QMI_UIM_CARD_APPLICATION_STATE_PIN1_OR_UPIN_PIN_REQUIRED &&
-        app->state != QMI_UIM_CARD_APPLICATION_STATE_PUK1_OR_UPIN_PUK_REQUIRED &&
-        app->state != QMI_UIM_CARD_APPLICATION_STATE_PIN1_BLOCKED) {
-        mm_obj_dbg (self, "neither SIM nor USIM are ready");
-        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_RETRY,
-                     "SIM not ready yet (retry)");
-        return FALSE;
-    }
-
-    /* Report retries if requested to do so */
-    if (o_pin1_retries)
-        *o_pin1_retries = app->pin1_retries;
-    if (o_puk1_retries)
-        *o_puk1_retries = app->puk1_retries;
-    if (o_pin2_retries)
-        *o_pin2_retries = app->pin2_retries;
-    if (o_puk2_retries)
-        *o_puk2_retries = app->puk2_retries;
-
-    /* Early bail out if lock status isn't wanted at this point, so that we
-     * don't fail with an error the unlock retries check */
-    if (!o_lock)
-        return TRUE;
-
-    /* Card is ready, what's the lock status? */
-
-    /* PIN1 */
-    switch (app->pin1_state) {
-    case QMI_UIM_PIN_STATE_NOT_INITIALIZED:
-        g_set_error (error,
-                     MM_MOBILE_EQUIPMENT_ERROR,
-                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
-                     "SIM PIN/PUK status not known yet");
-        return FALSE;
-
-    case QMI_UIM_PIN_STATE_PERMANENTLY_BLOCKED:
-        g_set_error (error,
-                     MM_MOBILE_EQUIPMENT_ERROR,
-                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
-                     "SIM PIN/PUK permanently blocked");
-        return FALSE;
-
-    case QMI_UIM_PIN_STATE_ENABLED_NOT_VERIFIED:
-        lock = MM_MODEM_LOCK_SIM_PIN;
-        break;
-
-    case QMI_UIM_PIN_STATE_BLOCKED:
-        lock = MM_MODEM_LOCK_SIM_PUK;
-        break;
-
-    case QMI_UIM_PIN_STATE_DISABLED:
-    case QMI_UIM_PIN_STATE_ENABLED_VERIFIED:
-        lock = MM_MODEM_LOCK_NONE;
-        break;
-
-    default:
-        g_set_error (error,
-                     MM_MOBILE_EQUIPMENT_ERROR,
-                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
-                     "Unknown SIM PIN/PUK status");
-        return FALSE;
-    }
-
-    /* PIN2 */
-    if (lock == MM_MODEM_LOCK_NONE) {
-        switch (app->pin2_state) {
-        case QMI_UIM_PIN_STATE_NOT_INITIALIZED:
-            mm_obj_warn (self, "SIM PIN2/PUK2 status not known yet");
-            break;
-
-        case QMI_UIM_PIN_STATE_ENABLED_NOT_VERIFIED:
-            lock = MM_MODEM_LOCK_SIM_PIN2;
-            break;
-
-        case QMI_UIM_PIN_STATE_PERMANENTLY_BLOCKED:
-            mm_obj_warn (self, "PUK2 permanently blocked");
-            /* Fall through */
-        case QMI_UIM_PIN_STATE_BLOCKED:
-            lock = MM_MODEM_LOCK_SIM_PUK2;
-            break;
-
-        case QMI_UIM_PIN_STATE_DISABLED:
-        case QMI_UIM_PIN_STATE_ENABLED_VERIFIED:
-            break;
-
-        default:
-            mm_obj_warn (self, "unknown SIM PIN2/PUK2 status");
-            break;
-        }
-    }
-
-    *o_lock = lock;
-    return TRUE;
-}
-
 static void
 unlock_required_uim_get_card_status_ready (QmiClientUim *client,
                                            GAsyncResult *res,
@@ -945,11 +702,11 @@ unlock_required_uim_get_card_status_ready (QmiClientUim *client,
         return;
     }
 
-    if (!uim_get_card_status_output_parse (self,
-                                           output,
-                                           &lock,
-                                           NULL, NULL, NULL, NULL,
-                                           &error)) {
+    if (!mm_qmi_uim_get_card_status_output_parse (self,
+                                                  output,
+                                                  &lock,
+                                                  NULL, NULL, NULL, NULL,
+                                                  &error)) {
         /* The device may report a SIM NOT INSERTED error if we're querying the
          * card status soon after power on. We'll let the Modem interface generic
          * logic retry loading the info a bit later if that's the case. This will
@@ -1197,12 +954,12 @@ unlock_retries_uim_get_card_status_ready (QmiClientUim *client,
         return;
     }
 
-    if (!uim_get_card_status_output_parse (self,
-                                           output,
-                                           NULL,
-                                           &pin1_retries, &puk1_retries,
-                                           &pin2_retries, &puk2_retries,
-                                           &error)) {
+    if (!mm_qmi_uim_get_card_status_output_parse (self,
+                                                  output,
+                                                  NULL,
+                                                  &pin1_retries, &puk1_retries,
+                                                  &pin2_retries, &puk2_retries,
+                                                  &error)) {
         g_task_return_error (task, error);
         g_object_unref (task);
         return;
@@ -1445,7 +1202,8 @@ load_signal_quality_finish (MMIfaceModem *self,
 #if defined WITH_NEWEST_QMI_COMMANDS
 
 static gboolean
-common_signal_info_get_quality (gint8 cdma1x_rssi,
+common_signal_info_get_quality (MMBroadbandModemQmi *self,
+                                gint8 cdma1x_rssi,
                                 gint8 evdo_rssi,
                                 gint8 gsm_rssi,
                                 gint8 wcdma_rssi,
@@ -1535,7 +1293,7 @@ signal_info_get_quality (MMBroadbandModemQmi *self,
     qmi_message_nas_get_signal_info_output_get_wcdma_signal_strength (output, &wcdma_rssi, NULL, NULL);
     qmi_message_nas_get_signal_info_output_get_lte_signal_strength (output, &lte_rssi, NULL, NULL, NULL, NULL);
 
-    return common_signal_info_get_quality (cdma1x_rssi, evdo_rssi, gsm_rssi, wcdma_rssi, lte_rssi, out_quality, out_act);
+    return common_signal_info_get_quality (self, cdma1x_rssi, evdo_rssi, gsm_rssi, wcdma_rssi, lte_rssi, out_quality, out_act);
 }
 
 static void
@@ -1588,7 +1346,7 @@ get_signal_info_ready (QmiClientNas *client,
     qmi_message_nas_get_signal_info_output_unref (output);
 }
 
-#endif /* WITH_NEWEST_QMI_COMMANDS */
+#else /* WITH_NEWEST_QMI_COMMANDS */
 
 static gboolean
 signal_strength_get_quality_and_access_tech (MMBroadbandModemQmi *self,
@@ -1696,6 +1454,8 @@ get_signal_strength_ready (QmiClientNas *client,
 
     qmi_message_nas_get_signal_strength_output_unref (output);
 }
+
+#endif /* WITH_NEWEST_QMI_COMMANDS */
 
 static void
 load_signal_quality (MMIfaceModem *self,
@@ -2802,6 +2562,8 @@ modem_3gpp_run_registration_checks_finish (MMIfaceModem3gpp *self,
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
+#if !defined WITH_NEWEST_QMI_COMMANDS
+
 static void
 common_process_serving_system_3gpp (MMBroadbandModemQmi *self,
                                     QmiMessageNasGetServingSystemOutput *response_output,
@@ -3058,7 +2820,7 @@ get_serving_system_3gpp_ready (QmiClientNas *client,
     qmi_message_nas_get_serving_system_output_unref (output);
 }
 
-#if defined WITH_NEWEST_QMI_COMMANDS
+#else /* WITH_NEWEST_QMI_COMMANDS */
 
 static gboolean
 process_common_info (QmiNasServiceStatus service_status,
@@ -3106,8 +2868,9 @@ process_common_info (QmiNasServiceStatus service_status,
             apply_ps = FALSE;
         else if (domain == QMI_NAS_NETWORK_SERVICE_DOMAIN_PS)
             apply_cs = FALSE;
-        else if (domain == QMI_NAS_NETWORK_SERVICE_DOMAIN_CS_PS)
+        else if (domain == QMI_NAS_NETWORK_SERVICE_DOMAIN_CS_PS) {
             /* both apply */ ;
+        }
 
         /* Check if we really are roaming or forbidden */
         if (forbidden_valid && forbidden)
@@ -3136,7 +2899,7 @@ process_common_info (QmiNasServiceStatus service_status,
     if (network_id_valid) {
         *mm_operator_id = g_malloc (7);
         memcpy (*mm_operator_id, mcc, 3);
-        if (mnc[2] == 0xFF) {
+        if ((guint8)mnc[2] == 0xFF) {
             memcpy (&((*mm_operator_id)[3]), mnc, 2);
             (*mm_operator_id)[5] = '\0';
         } else {
@@ -3149,7 +2912,8 @@ process_common_info (QmiNasServiceStatus service_status,
 }
 
 static gboolean
-process_gsm_info (QmiMessageNasGetSystemInfoOutput *response_output,
+process_gsm_info (MMBroadbandModemQmi *self,
+                  QmiMessageNasGetSystemInfoOutput *response_output,
                   QmiIndicationNasSystemInfoOutput *indication_output,
                   MMModem3gppRegistrationState *mm_cs_registration_state,
                   MMModem3gppRegistrationState *mm_ps_registration_state,
@@ -3254,7 +3018,8 @@ process_gsm_info (QmiMessageNasGetSystemInfoOutput *response_output,
 }
 
 static gboolean
-process_wcdma_info (QmiMessageNasGetSystemInfoOutput *response_output,
+process_wcdma_info (MMBroadbandModemQmi *self,
+                    QmiMessageNasGetSystemInfoOutput *response_output,
                     QmiIndicationNasSystemInfoOutput *indication_output,
                     MMModem3gppRegistrationState *mm_cs_registration_state,
                     MMModem3gppRegistrationState *mm_ps_registration_state,
@@ -3363,7 +3128,8 @@ process_wcdma_info (QmiMessageNasGetSystemInfoOutput *response_output,
 }
 
 static gboolean
-process_lte_info (QmiMessageNasGetSystemInfoOutput *response_output,
+process_lte_info (MMBroadbandModemQmi *self,
+                  QmiMessageNasGetSystemInfoOutput *response_output,
                   QmiIndicationNasSystemInfoOutput *indication_output,
                   MMModem3gppRegistrationState *mm_cs_registration_state,
                   MMModem3gppRegistrationState *mm_ps_registration_state,
@@ -3493,7 +3259,7 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
      *   LTE > WCDMA > GSM
      * The first one giving results will be the one reported.
      */
-    has_lte_info = process_lte_info (response_output, indication_output,
+    has_lte_info = process_lte_info (self, response_output, indication_output,
                                      &cs_registration_state,
                                      &ps_registration_state,
                                      &lac,
@@ -3501,13 +3267,13 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
                                      &cid,
                                      &operator_id);
     if (!has_lte_info &&
-        !process_wcdma_info (response_output, indication_output,
+        !process_wcdma_info (self, response_output, indication_output,
                              &cs_registration_state,
                              &ps_registration_state,
                              &lac,
                              &cid,
                              &operator_id) &&
-        !process_gsm_info (response_output, indication_output,
+        !process_gsm_info (self, response_output, indication_output,
                            &cs_registration_state,
                            &ps_registration_state,
                            &lac,
@@ -3676,6 +3442,8 @@ ri_serving_system_or_system_info_ready (QmiClientNas *client,
     g_object_unref (task);
 }
 
+#if !defined WITH_NEWEST_QMI_COMMANDS
+
 static void
 common_enable_disable_unsolicited_registration_events_serving_system (GTask *task)
 {
@@ -3694,7 +3462,8 @@ common_enable_disable_unsolicited_registration_events_serving_system (GTask *tas
         task);
 }
 
-#if defined WITH_NEWEST_QMI_COMMANDS
+#else /* WITH_NEWEST_QMI_COMMANDS */
+
 static void
 common_enable_disable_unsolicited_registration_events_system_info (GTask *task)
 {
@@ -3712,6 +3481,7 @@ common_enable_disable_unsolicited_registration_events_system_info (GTask *task)
         (GAsyncReadyCallback)ri_serving_system_or_system_info_ready,
         task);
 }
+
 #endif /* WITH_NEWEST_QMI_COMMANDS */
 
 static void
@@ -4734,7 +4504,8 @@ system_info_indication_cb (QmiClientNas *client,
     if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (self)))
         common_process_system_info_3gpp (self, NULL, output);
 }
-#endif
+
+#else /* WITH_NEWEST_QMI_COMMANDS */
 
 static void
 serving_system_indication_cb (QmiClientNas *client,
@@ -4746,6 +4517,8 @@ serving_system_indication_cb (QmiClientNas *client,
     else if (mm_iface_modem_is_cdma (MM_IFACE_MODEM (self)))
         common_process_serving_system_cdma (self, NULL, output);
 }
+
+#endif
 
 static void
 common_setup_cleanup_unsolicited_registration_events (MMBroadbandModemQmi *self,
@@ -4926,6 +4699,8 @@ common_enable_disable_unsolicited_events_finish (MMBroadbandModemQmi  *self,
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
+#if !defined WITH_NEWEST_QMI_COMMANDS
+
 static void
 ser_signal_strength_ready (QmiClientNas *client,
                            GAsyncResult *res,
@@ -4983,7 +4758,7 @@ common_enable_disable_unsolicited_events_signal_strength (GTask *task)
         task);
 }
 
-#if defined WITH_NEWEST_QMI_COMMANDS
+#else /* WITH_NEWEST_QMI_COMMANDS */
 
 static void
 ri_signal_info_ready (QmiClientNas *client,
@@ -5031,8 +4806,11 @@ config_signal_info_ready (QmiClientNas *client,
                           GAsyncResult *res,
                           GTask        *task)
 {
-    g_autoptr(QmiMessageNasConfigSignalInfoOutput) output = NULL;
-    g_autoptr(GError)                              error = NULL;
+    MMBroadbandModemQmi                            *self;
+    g_autoptr(QmiMessageNasConfigSignalInfoOutput)  output = NULL;
+    g_autoptr(GError)                               error = NULL;
+
+    self = g_task_get_source_object (task);
 
     output = qmi_client_nas_config_signal_info_finish (client, res, &error);
     if (!output || !qmi_message_nas_config_signal_info_output_get_result (output, &error))
@@ -5256,7 +5034,8 @@ signal_info_indication_cb (QmiClientNas *client,
     qmi_indication_nas_signal_info_output_get_wcdma_signal_strength (output, &wcdma_rssi, NULL, NULL);
     qmi_indication_nas_signal_info_output_get_lte_signal_strength (output, &lte_rssi, NULL, NULL, NULL, NULL);
 
-    if (common_signal_info_get_quality (cdma1x_rssi,
+    if (common_signal_info_get_quality (self,
+                                        cdma1x_rssi,
                                         evdo_rssi,
                                         gsm_rssi,
                                         wcdma_rssi,
@@ -7455,7 +7234,7 @@ ussd_indication_cb (QmiClientVoice               *client,
 
     qmi_indication_voice_ussd_output_get_user_action (output, &user_action, NULL);
     if (qmi_indication_voice_ussd_output_get_uss_data_utf16 (output, &uss_data, NULL) && uss_data)
-        utf8 = g_convert ((const gchar *) uss_data->data, (2 * uss_data->len), "UTF-8", "UTF16-LE", NULL, NULL, &error);
+        utf8 = g_convert ((const gchar *) uss_data->data, (2 * uss_data->len), "UTF-8", "UTF-16LE", NULL, NULL, &error);
     else if (qmi_indication_voice_ussd_output_get_uss_data (output, &scheme, &uss_data, NULL) && uss_data)
         utf8 = ussd_decode(scheme, uss_data, &error);
 
@@ -8680,6 +8459,7 @@ typedef struct {
     MMSignal *gsm;
     MMSignal *umts;
     MMSignal *lte;
+    MMSignal *nr5g;
 } SignalLoadValuesResult;
 
 typedef struct {
@@ -8726,14 +8506,15 @@ get_db_from_sinr_level (MMBroadbandModemQmi *self,
 }
 
 static gboolean
-signal_load_values_finish (MMIfaceModemSignal  *self,
-                           GAsyncResult        *res,
-                           MMSignal           **cdma,
-                           MMSignal           **evdo,
-                           MMSignal           **gsm,
-                           MMSignal           **umts,
-                           MMSignal           **lte,
-                           GError             **error)
+signal_load_values_finish (MMIfaceModemSignal *self,
+                           GAsyncResult       *res,
+                           MMSignal          **cdma,
+                           MMSignal          **evdo,
+                           MMSignal          **gsm,
+                           MMSignal          **umts,
+                           MMSignal          **lte,
+                           MMSignal          **nr5g,
+                           GError            **error)
 {
     SignalLoadValuesResult *values_result;
 
@@ -8746,6 +8527,7 @@ signal_load_values_finish (MMIfaceModemSignal  *self,
     *gsm  = values_result->gsm  ? g_object_ref (values_result->gsm)  : NULL;
     *umts = values_result->umts ? g_object_ref (values_result->umts) : NULL;
     *lte  = values_result->lte  ? g_object_ref (values_result->lte)  : NULL;
+    *nr5g = values_result->nr5g ? g_object_ref (values_result->nr5g) : NULL;
     signal_load_values_result_free (values_result);
     return TRUE;
 }
@@ -8910,16 +8692,17 @@ signal_load_values_get_signal_info_ready (QmiClientNas *client,
                                           GAsyncResult *res,
                                           GTask        *task)
 {
-    MMBroadbandModemQmi                         *self;
-    SignalLoadValuesContext                     *ctx;
-    gint8                                        rssi;
-    gint16                                       ecio;
-    QmiNasEvdoSinrLevel                          sinr_level;
-    gint32                                       io;
-    gint8                                        rsrq;
-    gint16                                       rsrp;
-    gint16                                       snr;
-    g_autoptr(QmiMessageNasGetSignalInfoOutput)  output = NULL;
+    MMBroadbandModemQmi     *self;
+    SignalLoadValuesContext *ctx;
+    gint8                    rssi;
+    gint16                   ecio;
+    QmiNasEvdoSinrLevel      sinr_level;
+    gint32                   io;
+    gint8                    rsrq;
+    gint16                   rsrp;
+    gint16                   snr;
+    gint16                   rsrq_5g;
+    g_autoptr(QmiMessageNasGetSignalInfoOutput) output = NULL;
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data     (task);
@@ -8989,6 +8772,22 @@ signal_load_values_get_signal_info_ready (QmiClientNas *client,
         mm_signal_set_rsrq (ctx->values_result->lte, (gdouble)rsrq);
         mm_signal_set_rsrp (ctx->values_result->lte, (gdouble)rsrp);
         mm_signal_set_snr (ctx->values_result->lte, (0.1) * ((gdouble)snr));
+    }
+
+    /* 5G */
+    if (qmi_message_nas_get_signal_info_output_get_5g_signal_strength (output,
+                                                                       &rsrp,
+                                                                       &snr,
+                                                                       NULL)) {
+        ctx->values_result->nr5g = mm_signal_new ();
+        mm_signal_set_rsrp (ctx->values_result->nr5g, (gdouble)rsrp);
+        mm_signal_set_snr (ctx->values_result->nr5g, (gdouble)snr);
+    }
+
+    if (qmi_message_nas_get_signal_info_output_get_5g_signal_strength_extended (output,
+                                                                                &rsrq_5g,
+                                                                                NULL)) {
+        mm_signal_set_rsrq (ctx->values_result->nr5g, (gdouble)rsrq_5g);
     }
 
     /* Keep on */
@@ -9691,6 +9490,10 @@ iface_modem_init (MMIfaceModem *iface)
     /* Create QMI-specific SIM */
     iface->create_sim = create_sim;
     iface->create_sim_finish = create_sim_finish;
+    iface->load_sim_slots = mm_shared_qmi_load_sim_slots;
+    iface->load_sim_slots_finish = mm_shared_qmi_load_sim_slots_finish;
+    iface->set_primary_sim_slot = mm_shared_qmi_set_primary_sim_slot;
+    iface->set_primary_sim_slot_finish = mm_shared_qmi_set_primary_sim_slot_finish;
 
     /* Create QMI-specific bearer */
     iface->create_bearer = modem_create_bearer;

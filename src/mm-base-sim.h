@@ -36,9 +36,10 @@ typedef struct _MMBaseSimClass MMBaseSimClass;
 typedef struct _MMBaseSimPrivate MMBaseSimPrivate;
 
 /* Properties */
-#define MM_BASE_SIM_PATH       "sim-path"
-#define MM_BASE_SIM_CONNECTION "sim-connection"
-#define MM_BASE_SIM_MODEM      "sim-modem"
+#define MM_BASE_SIM_PATH        "sim-path"
+#define MM_BASE_SIM_CONNECTION  "sim-connection"
+#define MM_BASE_SIM_MODEM       "sim-modem"
+#define MM_BASE_SIM_SLOT_NUMBER "sim-slot-number"
 
 /* Signals */
 #define MM_BASE_SIM_PIN_LOCK_ENABLED "sim-pin-lock-enabled"
@@ -50,6 +51,14 @@ struct _MMBaseSim {
 
 struct _MMBaseSimClass {
     MmGdbusSimSkeletonClass parent;
+
+    /* Wait SIM ready (async) */
+    void     (* wait_sim_ready)        (MMBaseSim            *self,
+                                        GAsyncReadyCallback   callback,
+                                        gpointer              user_data);
+    gboolean (* wait_sim_ready_finish) (MMBaseSim            *self,
+                                        GAsyncResult         *res,
+                                        GError              **error);
 
     /* Load SIM identifier (async) */
     void    (* load_sim_identifier)        (MMBaseSim *self,
@@ -152,6 +161,15 @@ gboolean     mm_base_sim_initialize_finish          (MMBaseSim *self,
                                                      GAsyncResult *result,
                                                      GError **error);
 
+MMBaseSim   *mm_base_sim_new_initialized            (MMBaseModem *modem,
+                                                     guint        slot_number,
+                                                     gboolean     active,
+                                                     const gchar *sim_identifier,
+                                                     const gchar *imsi,
+                                                     const gchar *operator_identifier,
+                                                     const gchar *operator_name,
+                                                     const GStrv  emergency_numbers);
+
 void         mm_base_sim_send_pin                   (MMBaseSim *self,
                                                      const gchar *pin,
                                                      GAsyncReadyCallback callback,
@@ -172,6 +190,8 @@ gboolean     mm_base_sim_send_puk_finish            (MMBaseSim *self,
 void         mm_base_sim_export                     (MMBaseSim *self);
 
 const gchar *mm_base_sim_get_path                   (MMBaseSim *sim);
+
+guint        mm_base_sim_get_slot_number            (MMBaseSim *self);
 
 void         mm_base_sim_load_sim_identifier        (MMBaseSim *self,
                                                      GAsyncReadyCallback callback,
