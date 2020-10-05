@@ -49,6 +49,7 @@ struct _MMSharedQmi {
 };
 
 GType mm_shared_qmi_get_type (void);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMSharedQmi, g_object_unref)
 
 QmiClient *mm_shared_qmi_peek_client   (MMSharedQmi          *self,
                                         QmiService            service,
@@ -178,6 +179,12 @@ void               mm_shared_qmi_set_primary_sim_slot               (MMIfaceMode
 gboolean           mm_shared_qmi_set_primary_sim_slot_finish        (MMIfaceModem         *self,
                                                                      GAsyncResult         *res,
                                                                      GError              **error);
+void               mm_shared_qmi_setup_sim_hot_swap                 (MMIfaceModem *self,
+                                                                     GAsyncReadyCallback callback,
+                                                                     gpointer user_data);
+gboolean           mm_shared_qmi_setup_sim_hot_swap_finish          (MMIfaceModem *self,
+                                                                     GAsyncResult *res,
+                                                                     GError **error);
 
 /* Shared QMI location support */
 

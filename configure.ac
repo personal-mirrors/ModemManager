@@ -25,7 +25,10 @@ m4_define([mm_glib_lt_age],      [6])
 dnl-----------------------------------------------------------------------------
 dnl autoconf, automake, libtool initialization
 dnl
-AC_INIT([ModemManager],[mm_version],[modemmanager-devel@lists.freedesktop.org],[ModemManager])
+AC_INIT([ModemManager],
+        [mm_version],
+        [https://gitlab.freedesktop.org/mobile-broadband/ModemManager/issues],
+        [ModemManager])
 AM_INIT_AUTOMAKE([1.11.2 subdir-objects tar-ustar no-dist-gzip dist-xz -Wno-portability])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 
@@ -464,6 +467,7 @@ MM_ENABLE_PLUGIN([fibocom],
                  [with_shared_xmm])
 MM_ENABLE_PLUGIN([foxconn],
                  [with_shared_foxconn])
+MM_ENABLE_PLUGIN([gosuncn])
 MM_ENABLE_PLUGIN([haier])
 MM_ENABLE_PLUGIN([huawei])
 MM_ENABLE_PLUGIN([iridium])
@@ -603,6 +607,7 @@ echo "
       dlink:                   ${enable_plugin_dlink}
       fibocom:                 ${enable_plugin_fibocom}
       foxconn:                 ${enable_plugin_foxconn}
+      gosuncn:                 ${enable_plugin_gosuncn}
       haier:                   ${enable_plugin_haier}
       huawei:                  ${enable_plugin_huawei}
       iridium:                 ${enable_plugin_iridium}
