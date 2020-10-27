@@ -138,7 +138,7 @@ add_port_driver (MMDevice       *self,
     guint n_items;
     guint i;
 
-    driver = mm_kernel_device_get_driver (kernel_port);
+    driver = mm_device_is_virtual(self)? "virtual": mm_kernel_device_get_driver (kernel_port);
     if (!driver)
         return;
 
@@ -161,6 +161,20 @@ add_port_driver (MMDevice       *self,
     self->priv->drivers[n_items + 1] = NULL;
 }
 
+static void
+mm_device_add_virtual_port(MMDevice       *self,
+                 MMKernelDevice *kernel_port)
+{
+    guint n_items;
+
+    n_items = (self->priv->virtual_ports ? g_strv_length (self->priv->virtual_ports) : 0);
+
+    /*kepp virtual port names*/
+    self->priv->virtual_ports = g_realloc (self->priv->virtual_ports, (n_items + 2) * sizeof (gchar *));
+    self->priv->virtual_ports[n_items] = g_strdup (mm_kernel_device_get_name(kernel_port));
+    self->priv->virtual_ports[n_items + 1] = NULL;
+}
+
 void
 mm_device_grab_port (MMDevice       *self,
                      MMKernelDevice *kernel_port)
@@ -173,10 +187,14 @@ mm_device_grab_port (MMDevice       *self,
     /* Get the vendor/product IDs out of the first one that gives us
      * some valid value (it seems we may get NULL reported for VID in QMI
      * ports, e.g. Huawei E367) */
-    if (!self->priv->vendor && !self->priv->product) {
+    if (!self->priv->vendor && !self->priv->product && !mm_device_is_virtual(self)) {
         self->priv->vendor  = mm_kernel_device_get_physdev_vid (kernel_port);
         self->priv->product = mm_kernel_device_get_physdev_pid (kernel_port);
     }
+
+    /*If the device is virtual,we keep the port name.*/
+    if(mm_device_is_virtual(self))
+         mm_device_add_virtual_port(self, kernel_port);
 
     /* Add new port driver */
     add_port_driver (self, kernel_port);

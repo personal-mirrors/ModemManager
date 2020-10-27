@@ -24,3 +24,14 @@ ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="0104", ENV{.MM_USBIFNUM}=="02", ENV{
 ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="0104", ENV{.MM_USBIFNUM}=="03", ENV{ID_MM_PORT_IGNORE}="1"
 
 LABEL="mm_fibocom_port_types_end"
+
+ACTION!="add|change|move|bind", GOTO="mm_fibocom_virual_port_types_end"
+SUBSYSTEMS=="net", GOTO="mm_fibocom_virtual_port_types"
+
+LABEL="mm_fibocom_virtual_port_types"
+
+DEVPATH=="/devices/virtual/*", SUBSYSTEMS=="net", KERNEL=="wwan?.iat0_0", ENV{ID_MM_PHYSDEV_UID}="/virtual/fibocom", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_VIRTUAL_NAME}="iat", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1", ENV{ID_MM_VIRTUAL_SUBSYSTEMS}="tty"
+DEVPATH=="/devices/virtual/*", SUBSYSTEMS=="net", KERNEL=="wwan?.gnss0", ENV{ID_MM_PHYSDEV_UID}="/virtual/fibocom", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_VIRTUAL_NAME}="gnss", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1", ENV{ID_MM_VIRTUAL_SUBSYSTEMS}="tty"
+DEVPATH=="/devices/virtual/*", SUBSYSTEMS=="net", KERNEL=="inm0", ENV{ID_MM_PHYSDEV_UID}="/virtual/fibocom", ENV{ID_MM_DEVICE_PROCESS}="1"
+
+LABEL="mm_fibocom_virual_port_types_end"

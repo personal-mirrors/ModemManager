@@ -102,8 +102,9 @@ G_MODULE_EXPORT MMPlugin *
 mm_plugin_create (void)
 {
     static const gchar *subsystems[] = { "tty", "net", "usb", NULL };
-    static const guint16 vendor_ids[] = { 0x2cb7, 0 };
-    static const gchar *drivers[] = { "cdc_mbim", "qmi_wwan", NULL };
+    static const guint16 vendor_ids[] = { 0x2cb5, 0 };
+    static const gchar *drivers[] = { "cdc_mbim", "qmi_wwan", "virtual", NULL };
+    static const gchar *virtual_phyuid[] = { "/virtual/fibocom", NULL };
 
     return MM_PLUGIN (
         g_object_new (MM_TYPE_PLUGIN_FIBOCOM,
@@ -114,6 +115,7 @@ mm_plugin_create (void)
                       MM_PLUGIN_ALLOWED_AT,         TRUE,
                       MM_PLUGIN_ALLOWED_MBIM,       TRUE,
                       MM_PLUGIN_XMM_PROBE,          TRUE,
+                      MM_PLUGIN_ALLOWED_VIRTUAL_PHY_UID_TAG, virtual_phyuid,
                       NULL));
 }
 

@@ -37,6 +37,7 @@
 #include "mm-port-enums-types.h"
 #include "mm-helper-enums-types.h"
 
+#define INVALID_CID G_MAXUINT
 static void async_initable_iface_init (GAsyncInitableIface *iface);
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandBearer, mm_broadband_bearer, MM_TYPE_BASE_BEARER, 0,
@@ -262,19 +263,34 @@ dial_cdma_ready (MMBaseModem  *modem,
 static void
 cdma_connect_context_dial (GTask *task)
 {
+    MMBroadbandBearer      *self;
     DetailedConnectContext *ctx;
+    gchar *command;
+    const gchar *number;
 
+    self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
+
+    number = mm_bearer_properties_get_number (mm_base_bearer_peek_config (MM_BASE_BEARER (self)));
+
+    /* If a number was given when creating the bearer, use that one.
+     * Otherwise, use the default one, #777
+     */
+    if (number)
+        command = g_strconcat ("DT", number, NULL);
+    else
+        command = g_strdup ("DT#777");
 
     mm_base_modem_at_command_full (ctx->modem,
                                    MM_PORT_SERIAL_AT (ctx->data),
-                                   "DT#777",
+                                   command,
                                    90,
                                    FALSE,
                                    FALSE,
                                    NULL,
                                    (GAsyncReadyCallback)dial_cdma_ready,
                                    task);
+    g_free (command);
 }
 
 static void
@@ -639,9 +655,9 @@ cid_selection_3gpp_finish (MMBroadbandBearer  *self,
 {
     gssize cid;
 
-    /* We return 0 as an invalid CID, not -1 */
+    /* We return INVALID_CID as an invalid CID, not -1 or 0 */
     cid = g_task_propagate_int (G_TASK (res), error);
-    return (guint) (cid < 0 ? 0 : cid);
+    return (guint) (cid < 0 ? INVALID_CID : cid);
 }
 
 static void cid_selection_3gpp_context_step (GTask *task);
@@ -681,7 +697,7 @@ cid_selection_3gpp_initialize_context (GTask *task)
 
     self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
-    g_assert (ctx->cid != 0);
+    g_assert (ctx->cid != INVALID_CID);
     g_assert (!ctx->cid_reused);
 
     /* Initialize a PDP context with our APN and PDP type */
@@ -690,7 +706,12 @@ cid_selection_3gpp_initialize_context (GTask *task)
                 ctx->cid_overwritten ? "overwriting" : "initializing",
                 apn, ctx->pdp_type);
     quoted_apn = mm_port_serial_at_quote_string (apn);
-    cmd = g_strdup_printf ("+CGDCONT=%u,\"%s\",%s", ctx->cid, ctx->pdp_type, quoted_apn);
+
+    if (ctx->cid >= 31) {
+        cmd = g_strdup_printf ("+CGDCONT=%u,\"%s\",%s", 0, ctx->pdp_type, quoted_apn);
+    } else {
+    	cmd = g_strdup_printf ("+CGDCONT=%u,\"%s\",%s", ctx->cid, ctx->pdp_type, quoted_apn);
+	}
     g_free (quoted_apn);
 
     mm_base_modem_at_command_full (ctx->modem,
@@ -710,6 +731,7 @@ cid_selection_3gpp_select_context (GTask *task)
 {
     MMBroadbandBearer       *self;
     CidSelection3gppContext *ctx;
+	guint   cid;
 
     self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
@@ -722,6 +744,7 @@ cid_selection_3gpp_select_context (GTask *task)
                                         &ctx->cid_reused,
                                         &ctx->cid_overwritten);
 
+    cid = INVALID_CID;
     /* At this point, CID must ALWAYS be set */
     g_assert (ctx->cid);
 
@@ -1012,7 +1035,7 @@ dial_3gpp_ready (MMBroadbandBearer *self,
     ctx->data = MM_BROADBAND_BEARER_GET_CLASS (self)->dial_3gpp_finish (self, res, &error);
     if (!ctx->data) {
         /* Clear CID when it failed to connect. */
-        self->priv->cid = 0;
+        self->priv->cid = INVALID_CID;
         g_task_return_error (task, error);
         g_object_unref (task);
         return;
@@ -1086,7 +1109,7 @@ cid_selection_3gpp_ready (MMBroadbandBearer *self,
     /* Keep CID around after initializing the PDP context in order to
      * handle corresponding unsolicited PDP activation responses. */
     self->priv->cid = MM_BROADBAND_BEARER_GET_CLASS (self)->cid_selection_3gpp_finish (self, res, &error);
-    if (!self->priv->cid) {
+    if (INVALID_CID == self->priv->cid) {
         g_task_return_error (task, error);
         g_object_unref (task);
         return;
@@ -1115,8 +1138,8 @@ connect_3gpp (MMBroadbandBearer   *self,
 
     g_assert (primary != NULL);
 
-    /* Clear CID on every connection attempt */
-    self->priv->cid = 0;
+    /* Reset CID on every connection attempt */
+    self->priv->cid = INVALID_CID;
 
     ctx = detailed_connect_context_new (self, modem, primary, secondary);
 
@@ -1812,8 +1835,8 @@ disconnect_3gpp_ready (MMBroadbandBearer *self,
         g_task_return_error (task, error);
     else {
         /* Clear CID if we got any set */
-        if (self->priv->cid)
-            self->priv->cid = 0;
+        if (self->priv->cid != INVALID_CID)
+            self->priv->cid = INVALID_CID;
 
         /* Cleanup all connection related data */
         reset_bearer_connection (self);
@@ -1981,7 +2004,7 @@ load_connection_status (MMBaseBearer        *self,
     }
 
     /* If CID not defined, error out */
-    if (!MM_BROADBAND_BEARER (self)->priv->cid) {
+    if (INVALID_CID == MM_BROADBAND_BEARER (self)->priv->cid) {
         g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                                  "Couldn't load connection status: cid not defined");
         g_object_unref (task);

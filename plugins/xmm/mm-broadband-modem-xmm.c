@@ -22,24 +22,168 @@
 #include <ctype.h>
 
 #include "ModemManager.h"
+#include "mm-log.h"
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-location.h"
 #include "mm-broadband-modem-xmm.h"
 #include "mm-shared-xmm.h"
+#include "mm-broadband-bearer-xmm-lte.h"
+#include "mm-iface-modem-3gpp.h"
+#include "mm-base-modem-at.h"
 
 
 static void iface_modem_init (MMIfaceModem *iface);
 static void shared_xmm_init  (MMSharedXmm  *iface);
 static void iface_modem_signal_init (MMIfaceModemSignal *iface);
 static void iface_modem_location_init (MMIfaceModemLocation *iface);
+static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
 
 static MMIfaceModemLocation *iface_modem_location_parent;
 
+static MMIfaceModem3gpp *iface_modem_3gpp_parent;
+
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemXmm, mm_broadband_modem_xmm, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_LOCATION, iface_modem_location_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_SHARED_XMM,  shared_xmm_init))
+
+/*****************************************************************************/
+/*****************************************************************************/
+/* Register in network (3GPP interface) */
+
+static gboolean
+register_in_3gpp_network_finish (MMIfaceModem3gpp  *self,
+                            GAsyncResult      *res,
+                            GError           **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+parent_registration_ready (MMIfaceModem3gpp *self,
+                           GAsyncResult     *res,
+                           GTask            *task)
+{
+    GError *error = NULL;
+
+    if (!iface_modem_3gpp_parent->register_in_network_finish (self, res, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+run_parent_registration (GTask *task)
+{
+    MMBroadbandModemXmm*self;
+    const gchar             *operator_id;
+
+    self = g_task_get_source_object (task);
+    operator_id = g_task_get_task_data (task);
+
+    iface_modem_3gpp_parent->register_in_network (
+        MM_IFACE_MODEM_3GPP (self),
+        operator_id,
+        g_task_get_cancellable (task),
+        (GAsyncReadyCallback)parent_registration_ready,
+        task);
+}
+
+static void
+xdns_ready (MMBaseModem  *self,
+            GAsyncResult *res,
+            GTask        *task)
+{
+    GError      *error = NULL;
+
+    if( !mm_base_modem_at_command_finish (self, res, &error))
+    {
+         g_task_return_error (task, error);
+         g_object_unref (task);
+         return;
+    }
+
+    run_parent_registration (task);
+    return;
+}
+
+static void
+register_in_3gpp_network (MMIfaceModem3gpp    *self,
+                     const gchar         *operator_id,
+                     GCancellable        *cancellable,
+                     GAsyncReadyCallback  callback,
+                     gpointer             user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, cancellable, callback, user_data);
+
+    /* Store operator id as task data */
+    g_task_set_task_data (task, g_strdup (operator_id), g_free);
+
+    /* Before go to auto register, we should set the init PDP dynamic DNS. */
+    if (operator_id == NULL || operator_id[0] == '\0') {
+        /* Check which is the current operator selection status */
+        mm_base_modem_at_command (MM_BASE_MODEM (self),
+                                  "+XDNS=0,1",
+                                  3,
+                                  FALSE,
+                                  (GAsyncReadyCallback)xdns_ready,
+                                  task);
+        return;
+    }
+
+    /* Otherwise, run parent's implementation right away */
+    run_parent_registration (task);
+}
+
+/*****************************************************************************/
+/* Create Bearer (Modem interface) */
+
+static MMBaseBearer *
+modem_create_bearer_finish (MMIfaceModem *self,
+                            GAsyncResult *res,
+                            GError **error)
+{
+    return g_task_propagate_pointer (G_TASK (res), error);
+}
+
+static void
+broadband_bearer_new_ready (GObject *source,
+                            GAsyncResult *res,
+                            GTask *task)
+{
+    MMBaseBearer *bearer = NULL;
+    GError *error = NULL;
+
+    bearer = mm_broadband_bearer_xmm_lte_new_finish (res, &error);
+    if (!bearer)
+        g_task_return_error (task, error);
+    else
+        g_task_return_pointer (task, bearer, g_object_unref);
+    g_object_unref (task);
+}
+
+static void
+modem_create_bearer (MMIfaceModem *self,
+                     MMBearerProperties *properties,
+                     GAsyncReadyCallback callback,
+                     gpointer user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    /* We  create a xmm MMBroadbandBearer */
+    mm_broadband_bearer_xmm_lte_new (MM_BROADBAND_MODEM_XMM(self),
+                                        properties,
+                                        NULL, /* cancellable */
+                                        (GAsyncReadyCallback)broadband_bearer_new_ready,
+                                        task);
+}
+
 
 /*****************************************************************************/
 
@@ -91,6 +235,10 @@ iface_modem_init (MMIfaceModem *iface)
     iface->modem_power_off_finish  = mm_shared_xmm_power_off_finish;
     iface->reset                   = mm_shared_xmm_reset;
     iface->reset_finish            = mm_shared_xmm_reset_finish;
+
+    iface->create_bearer = modem_create_bearer;
+    iface->create_bearer_finish = modem_create_bearer_finish;
+
 }
 
 
@@ -138,6 +286,16 @@ shared_xmm_init (MMSharedXmm *iface)
     iface->peek_parent_broadband_modem_class = peek_parent_broadband_modem_class;
     iface->peek_parent_location_interface    = peek_parent_location_interface;
 }
+
+static void
+iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
+{
+    iface_modem_3gpp_parent = g_type_interface_peek_parent (iface);
+
+    iface->register_in_network = register_in_3gpp_network;
+    iface->register_in_network_finish = register_in_3gpp_network_finish;
+}
+
 
 static void
 mm_broadband_modem_xmm_class_init (MMBroadbandModemXmmClass *klass)

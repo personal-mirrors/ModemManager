@@ -76,7 +76,9 @@ struct _MMPluginPrivate {
     mm_uint16_pair *product_ids;
     mm_uint16_pair *forbidden_product_ids;
     gchar **udev_tags;
-
+	//Fibocom start
+    gchar **virtual_phy_uid;
+	//Fibocom end
     /* Post probing filters */
     gchar **vendor_strings;
     mm_str_pair *product_strings;
@@ -135,6 +137,9 @@ enum {
     PROP_SEND_DELAY,
     PROP_REMOVE_ECHO,
     PROP_SEND_LF,
+	//Fibocom start
+    PROP_ALLOWED_VIRTUAL_PHY_UID_TAG,
+	//Fibocom end
     LAST_PROP
 };
 
@@ -244,7 +249,9 @@ apply_pre_probing_filters (MMPlugin       *self,
     gboolean product_filtered = FALSE;
     gboolean vendor_filtered = FALSE;
     guint i;
-
+	//Fibocom start
+    gboolean found = FALSE;
+	//Fibocom end
     *need_vendor_probing = FALSE;
     *need_product_probing = FALSE;
 
@@ -286,8 +293,9 @@ apply_pre_probing_filters (MMPlugin       *self,
 
         /* Filtering by allowed drivers */
         if (self->priv->drivers) {
-            gboolean found = FALSE;
-
+		//Fibocom start
+            //gboolean found = FALSE;
+		//Fibocom end
             for (i = 0; self->priv->drivers[i] && !found; i++) {
                 guint j;
 
@@ -345,7 +353,35 @@ apply_pre_probing_filters (MMPlugin       *self,
             }
         }
     }
+//Fibocom start
+	/*if the device is a virtual device, there is no parent device so just match the udev phy uid flag*/  
+      if (mm_device_is_virtual (device) ){
+ 		if(!found){
+		 mm_obj_dbg (self,"unvirtual (%s) [%s] filtered by virtual dirver",
+				 self->priv->name,
+				 mm_kernel_device_get_name (port));
+		
+		return TRUE;
+	}
+		
+			 if ( self->priv->virtual_phy_uid) {
+				  for (i = 0; self->priv->virtual_phy_uid[i]; i++) {
+					  /* Check if the port or device was tagged */
+					  if (!strcmp(mm_kernel_device_get_physdev_uid (port), self->priv->virtual_phy_uid[i]))
+						  return FALSE;
 
+			       	}
+			  }
+	 
+	 /* If we didn't match  phy uid  tag: unsupported  */
+			 mm_obj_dbg (self,"(%s) [%s] filtered by virtual phy UID Flags",
+					 self->priv->name,
+					 mm_kernel_device_get_name (port));
+
+			return TRUE;
+   }
+//Fibocom end
+   
     vendor = mm_device_get_vendor (device);
     product = mm_device_get_product (device);
 
@@ -896,7 +932,7 @@ mm_plugin_create_modem (MMPlugin  *self,
     GList *port_probes = NULL;
     const gchar **virtual_ports = NULL;
 
-    if (!mm_device_is_virtual (device))
+    if (!mm_device_is_virtual (device) || mm_device_get_drivers(device))
         port_probes = mm_device_peek_port_probe_list (device);
     else
         virtual_ports = mm_device_virtual_peek_ports (device);
@@ -1232,6 +1268,12 @@ set_property (GObject *object,
         /* Construct only */
         self->priv->send_lf = g_value_get_boolean (value);
         break;
+//Fibocom start		
+case PROP_ALLOWED_VIRTUAL_PHY_UID_TAG:
+	/* Construct only */
+	self->priv->virtual_phy_uid = g_value_dup_boxed (value);
+	break;
+//Fibocom end
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -1331,6 +1373,11 @@ get_property (GObject *object,
     case PROP_SEND_LF:
         g_value_set_boolean (value, self->priv->send_lf);
         break;
+//Fibocom start		
+    case PROP_ALLOWED_VIRTUAL_PHY_UID_TAG:
+        g_value_set_boxed (value, self->priv->virtual_phy_uid);
+        break;		
+//Fibocom end		
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -1619,4 +1666,15 @@ mm_plugin_class_init (MMPluginClass *klass)
                                "Send line-feed at the end of each AT command sent",
                                FALSE,
                                G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+//Fibocom start	
+    g_object_class_install_property
+        (object_class, PROP_ALLOWED_VIRTUAL_PHY_UID_TAG,
+         g_param_spec_boxed (MM_PLUGIN_ALLOWED_VIRTUAL_PHY_UID_TAG,
+                             "Allowed Virtual PhyDev  tags",
+                             "The ID_MM_PHYSDEV_UID udev flag set to match virtual device "
+                             "should be an array of strings finished with 'NULL'",
+                             G_TYPE_STRV,
+                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
 }
+//Fibocom end

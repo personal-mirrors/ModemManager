@@ -305,10 +305,14 @@ static const gchar *
 kernel_device_get_subsystem (MMKernelDevice *_self)
 {
     MMKernelDeviceUdev *self;
+    const gchar *subsystem = NULL;
 
     g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), NULL);
 
     self = MM_KERNEL_DEVICE_UDEV (_self);
+    /* Try to load from properties set on the physical device */
+    if ((subsystem = mm_kernel_device_get_global_property (MM_KERNEL_DEVICE (self), ID_MM_VIRTUAL_SUBSYSTEMS)) != NULL)
+        return subsystem;
 
     if (self->priv->device)
         return g_udev_device_get_subsystem (self->priv->device);
@@ -321,10 +325,15 @@ static const gchar *
 kernel_device_get_name (MMKernelDevice *_self)
 {
     MMKernelDeviceUdev *self;
+    const gchar *name = NULL;
 
     g_return_val_if_fail (MM_IS_KERNEL_DEVICE_UDEV (_self), NULL);
 
     self = MM_KERNEL_DEVICE_UDEV (_self);
+    /* Try to load from properties set on the physical device */
+    if ((name = mm_kernel_device_get_global_property (MM_KERNEL_DEVICE (self), ID_MM_VIRTUAL_NAME)) != NULL)
+        return name;
+
 
     if (self->priv->device)
         return g_udev_device_get_name (self->priv->device);

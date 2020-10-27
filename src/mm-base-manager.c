@@ -21,7 +21,7 @@
 
 #include <string.h>
 #include <ctype.h>
-
+#include <stdlib.h>
 #include <gmodule.h>
 
 #if defined WITH_UDEV
@@ -358,15 +358,22 @@ device_added (MMBaseManager  *self,
         return;
     }
 
+    /* Get the port's physical device's uid. All ports of the same physical
+     * device will share the same uid. */
+    physdev_uid = mm_kernel_device_get_physdev_uid (port);
+    g_assert (physdev_uid);
+
     /* See if we already created an object to handle ports in this device */
     device = find_device_by_physdev_uid (self, physdev_uid);
     if (!device) {
         FindDeviceSupportContext *ctx;
+		gboolean IsVirtual = FALSE;
 
         mm_obj_dbg (self, "port %s is first in device %s", name, physdev_uid);
 
+		if(!strncmp(physdev_uid,"/virtual",8)) IsVirtual = TRUE;
         /* Keep the device listed in the Manager */
-        device = mm_device_new (physdev_uid, hotplugged, FALSE, self->priv->object_manager);
+        device = mm_device_new (physdev_uid, hotplugged, IsVirtual, self->priv->object_manager);
         g_hash_table_insert (self->priv->devices,
                              g_strdup (physdev_uid),
                              device);

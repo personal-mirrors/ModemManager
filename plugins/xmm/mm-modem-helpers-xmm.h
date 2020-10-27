@@ -72,4 +72,16 @@ gboolean mm_xmm_parse_xlcsslp_query_response (const gchar  *response,
                                               gchar       **supl_address,
                                               GError      **error);
 
+gboolean
+mm_xmm_parse_cgcontrdp_response (const gchar  *response,
+                                  gboolean     is_ipv6,
+                                  guint        *out_cid,
+                                  guint        *out_bearer_id,
+                                  gchar       **out_apn,
+                                  gchar       **out_local_address,
+                                  guint       *out_subnet_num,
+                                  gchar       **out_gateway_address,
+                                  gchar       **out_dns_primary_address,
+                                  gchar       **out_dns_secondary_address,
+                                  GError      **error);
 #endif  /* MM_MODEM_HELPERS_XMM_H */

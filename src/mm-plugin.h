@@ -74,6 +74,7 @@
 #define MM_PLUGIN_SEND_DELAY                "send-delay"
 #define MM_PLUGIN_REMOVE_ECHO               "remove-echo"
 #define MM_PLUGIN_SEND_LF                   "send-lf"
+#define MM_PLUGIN_ALLOWED_VIRTUAL_PHY_UID_TAG         "allowed-viurtual-phy-uid"
 
 typedef enum {
     MM_PLUGIN_SUPPORTS_PORT_UNKNOWN = -1,

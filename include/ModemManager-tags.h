@@ -245,4 +245,32 @@
  */
 #define ID_MM_TTY_FLOW_CONTROL "ID_MM_TTY_FLOW_CONTROL"
 
+/**
+ * ID_MM_VIRTUAL_NAME:
+ *
+ * This is a device-specific tag that allows users to 'name' modem
+ * devices with a predefined 'Virtual Name' string.
+ *
+ * When this tag is given per-port, the daemon will consider the name
+ * of the device be the value of the tag 
+ *
+ * The Tag could use for some virtual device change name in /dev path
+ */
+#define ID_MM_VIRTUAL_NAME  "ID_MM_VIRTUAL_NAME"
+
+/**
+ * ID_MM_VIRTUAL_SUBSYSTEMS:
+ *
+ * This is a device-specific tag that allows users to 'subsystem' modem
+ * devices with a predefined 'subsystem string.
+ *
+ * When this tag is given per-port, the daemon will consider the subsystem
+ * of the device be the value of the tag 
+ *
+ * The Tag could use for some virtual device should be treat as a specified
+ *subsystem device. eg the a net virtual device socat to a serial at port, the 
+ * subsystem should be "tty" not "net"
+ */
+#define ID_MM_VIRTUAL_SUBSYSTEMS  "ID_MM_VIRTUAL_SUBSYSTEMS"
+
 #endif /* MM_TAGS_H */
