@@ -264,9 +264,9 @@ dial_cdma_ready (MMBaseModem  *modem,
 static void
 cdma_connect_context_dial (GTask *task)
 {
-//    MMBroadbandBearer      *self;
+    MMBroadbandBearer      *self;
     DetailedConnectContext *ctx;
-    gchar *command;
+ //   gchar *command;
  //   const gchar *number;
 
     self = g_task_get_source_object (task);
