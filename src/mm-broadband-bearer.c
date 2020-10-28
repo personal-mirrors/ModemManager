@@ -36,6 +36,7 @@
 #include "mm-modem-helpers.h"
 #include "mm-port-enums-types.h"
 #include "mm-helper-enums-types.h"
+#include "mm-bearer-properties.h"
 
 #define INVALID_CID G_MAXUINT
 static void async_initable_iface_init (GAsyncInitableIface *iface);
