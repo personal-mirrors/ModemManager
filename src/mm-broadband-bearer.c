@@ -732,7 +732,7 @@ cid_selection_3gpp_select_context (GTask *task)
 {
     MMBroadbandBearer       *self;
     CidSelection3gppContext *ctx;
-	guint   cid;
+//	guint   cid;
 
     self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
@@ -745,7 +745,7 @@ cid_selection_3gpp_select_context (GTask *task)
                                         &ctx->cid_reused,
                                         &ctx->cid_overwritten);
 
-    cid = INVALID_CID;
+ //   cid = INVALID_CID;
     /* At this point, CID must ALWAYS be set */
     g_assert (ctx->cid);
 
