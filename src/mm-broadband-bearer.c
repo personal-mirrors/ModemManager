@@ -36,7 +36,7 @@
 #include "mm-modem-helpers.h"
 #include "mm-port-enums-types.h"
 #include "mm-helper-enums-types.h"
-#include "mm-bearer-properties.h"
+//#include "mm-bearer-properties.h"
 
 #define INVALID_CID G_MAXUINT
 static void async_initable_iface_init (GAsyncInitableIface *iface);
@@ -272,19 +272,19 @@ cdma_connect_context_dial (GTask *task)
     self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
 
-    number = mm_bearer_properties_get_number (mm_base_bearer_peek_config (MM_BASE_BEARER (self)));
+ //   number = mm_bearer_properties_get_number (mm_base_bearer_peek_config (MM_BASE_BEARER (self)));
 
     /* If a number was given when creating the bearer, use that one.
      * Otherwise, use the default one, #777
      */
-    if (number)
-        command = g_strconcat ("DT", number, NULL);
-    else
-        command = g_strdup ("DT#777");
+ //   if (number)
+ //       command = g_strconcat ("DT", number, NULL);
+ //   else
+ //       command = g_strdup ("DT#777");
 
     mm_base_modem_at_command_full (ctx->modem,
                                    MM_PORT_SERIAL_AT (ctx->data),
-                                   command,
+                                   "DT#777",
                                    90,
                                    FALSE,
                                    FALSE,
