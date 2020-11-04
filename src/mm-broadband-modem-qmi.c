@@ -2885,7 +2885,7 @@ common_process_serving_system_3gpp (MMBroadbandModemQmi *self,
         qmi_indication_nas_serving_system_output_get_cid_3gpp (indication_output, &cid, NULL);
     }
     /* Only update info in the interface if we get something */
-    if (cid && (lac || tac))
+    if (cid || lac || tac)
         mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, tac, cid);
 
     /* request to reload operator info explicitly, so that the new
@@ -9285,25 +9285,31 @@ qmi_device_removed_cb (QmiDevice *device,
     mm_base_modem_set_valid (MM_BASE_MODEM (self), FALSE);
 }
 
-static void
-track_qmi_device_removed (MMBroadbandModemQmi *self,
-                          MMPortQmi* qmi)
+static gboolean
+track_qmi_device_removed (MMBroadbandModemQmi  *self,
+                          MMPortQmi            *qmi,
+                          GError              **error)
 {
     QmiDevice *device;
 
     device = mm_port_qmi_peek_device (qmi);
-    g_assert (device);
+    if (!device) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Cannot track QMI device removal: QMI port no longer available");
+        return FALSE;
+    }
 
     self->priv->qmi_device_removed_id = g_signal_connect (
         device,
         QMI_DEVICE_SIGNAL_REMOVED,
         G_CALLBACK (qmi_device_removed_cb),
         self);
+    return TRUE;
 }
 
 static void
 untrack_qmi_device_removed (MMBroadbandModemQmi *self,
-                            MMPortQmi* qmi)
+                            MMPortQmi           *qmi)
 {
     QmiDevice *device;
 
@@ -9347,14 +9353,20 @@ static void
 allocate_next_client (GTask *task)
 {
     InitializationStartedContext *ctx;
-    MMBroadbandModemQmi *self;
+    MMBroadbandModemQmi          *self;
 
     self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
 
     if (ctx->service_index == G_N_ELEMENTS (qmi_services)) {
+        GError *error = NULL;
+
         /* Done we are, track device removal and launch parent's callback */
-        track_qmi_device_removed (self, ctx->qmi);
+        if (!track_qmi_device_removed (self, ctx->qmi, &error)) {
+            g_task_return_error (task, error);
+            g_object_unref (task);
+            return;
+        }
         parent_initialization_started (task);
         return;
     }
@@ -9423,6 +9435,7 @@ initialization_started (MMBroadbandModem *self,
 {
     InitializationStartedContext *ctx;
     GTask                        *task;
+    GError                       *error = NULL;
 
     ctx = g_new0 (InitializationStartedContext, 1);
     ctx->qmi = mm_base_modem_get_port_qmi (MM_BASE_MODEM (self));
@@ -9435,7 +9448,7 @@ initialization_started (MMBroadbandModem *self,
         g_task_return_new_error (task,
                                  MM_CORE_ERROR,
                                  MM_CORE_ERROR_FAILED,
-                                 "Cannot initialize: QMI port went missing");
+                                 "Cannot initialize: QMI port no longer available");
         g_object_unref (task);
         return;
     }
@@ -9443,7 +9456,12 @@ initialization_started (MMBroadbandModem *self,
     if (mm_port_qmi_is_open (ctx->qmi)) {
         /* Nothing to be done, just track device removal and launch parent's
          * callback */
-        track_qmi_device_removed (MM_BROADBAND_MODEM_QMI (self), ctx->qmi);
+        if (!track_qmi_device_removed (MM_BROADBAND_MODEM_QMI (self), ctx->qmi, &error)) {
+            g_task_return_error (task, error);
+            g_object_unref (task);
+            return;
+        }
+
         parent_initialization_started (task);
         return;
     }
@@ -9506,7 +9524,7 @@ dispose (GObject *object)
     MMPortQmi *qmi;
 
     /* If any port cleanup is needed, it must be done during dispose(), as
-     * the modem object will be affected by an explciit g_object_run_dispose()
+     * the modem object will be affected by an explicit g_object_run_dispose()
      * that will remove all port references right away */
     qmi = mm_base_modem_peek_port_qmi (MM_BASE_MODEM (self));
     if (qmi) {

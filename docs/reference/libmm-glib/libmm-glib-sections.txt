@@ -1223,6 +1223,8 @@ mm_sim_get_identifier
 mm_sim_dup_identifier
 mm_sim_get_imsi
 mm_sim_dup_imsi
+mm_sim_get_eid
+mm_sim_dup_eid
 mm_sim_get_operator_identifier
 mm_sim_dup_operator_identifier
 mm_sim_get_operator_name
@@ -3110,6 +3112,8 @@ MmGdbusSimIface
 mm_gdbus_sim_get_active
 mm_gdbus_sim_get_imsi
 mm_gdbus_sim_dup_imsi
+mm_gdbus_sim_get_eid
+mm_gdbus_sim_dup_eid
 mm_gdbus_sim_get_sim_identifier
 mm_gdbus_sim_dup_sim_identifier
 mm_gdbus_sim_get_operator_identifier
@@ -3134,6 +3138,7 @@ mm_gdbus_sim_call_change_pin_sync
 <SUBSECTION Private>
 mm_gdbus_sim_set_active
 mm_gdbus_sim_set_imsi
+mm_gdbus_sim_set_eid
 mm_gdbus_sim_set_operator_identifier
 mm_gdbus_sim_set_operator_name
 mm_gdbus_sim_set_sim_identifier

@@ -1972,6 +1972,16 @@ mm_qmi_uim_get_card_status_output_parse (gpointer                           log_
         return FALSE;
     }
 
+    /* Illegal application state is fatal, consider it as a failed SIM right
+     * away and don't even attempt to retry */
+    if (app->state == QMI_UIM_CARD_APPLICATION_STATE_ILLEGAL) {
+        g_set_error (error,
+                     MM_MOBILE_EQUIPMENT_ERROR,
+                     MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG,
+                     "Illegal SIM/USIM application state");
+        return FALSE;
+    }
+
     /* If card not ready yet, return RETRY error.
      * If the application state reports needing PIN/PUk, consider that ready as
      * well, and let the logic fall down to check PIN1/PIN2. */
@@ -2073,4 +2083,18 @@ mm_qmi_uim_get_card_status_output_parse (gpointer                           log_
 
     *o_lock = lock;
     return TRUE;
+}
+
+/*************************************************************************/
+/* EID parsing */
+
+#define EID_BYTE_LENGTH 16
+
+gchar *
+mm_qmi_uim_decode_eid (const gchar *eid, gsize eid_len)
+{
+    if (eid_len != EID_BYTE_LENGTH)
+        return NULL;
+
+    return mm_bcd_to_string ((const guint8 *) eid, eid_len, FALSE /* low_nybble_first */);
 }

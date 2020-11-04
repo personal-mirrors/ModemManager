@@ -29,6 +29,7 @@
 #include "mm-errors-types.h"
 #include "mm-modem-helpers-cinterion.h"
 #include "mm-modem-helpers.h"
+#include "mm-port-serial-at.h"
 
 /* Setup relationship between the 3G band bitmask in the modem and the bitmask
  * in ModemManager. */
@@ -846,6 +847,51 @@ mm_cinterion_parse_swwan_response (const gchar  *response,
 }
 
 /*****************************************************************************/
+/* ^SGAUTH response parser */
+
+/*   at^sgauth?
+ *   ^SGAUTH: 1,2,"vf"
+ *   ^SGAUTH: 3,0,""
+ *   ^SGAUTH: 4,0
+ *
+ *   OK
+ */
+
+gboolean
+mm_cinterion_parse_sgauth_response (const gchar          *response,
+                                    guint                 cid,
+                                    MMBearerAllowedAuth  *out_auth,
+                                    gchar               **out_username,
+                                    GError              **error)
+{
+    g_autoptr(GRegex)     r = NULL;
+    g_autoptr(GMatchInfo) match_info = NULL;
+
+    r = g_regex_new ("\\^SGAUTH:\\s*(\\d+),(\\d+),?\"?([a-zA-Z0-9_-]+)?\"?", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, NULL);
+    while (g_match_info_matches (match_info)) {
+        guint sgauth_cid = 0;
+
+        if (mm_get_uint_from_match_info (match_info, 1, &sgauth_cid) &&
+            (sgauth_cid == cid)) {
+            guint cinterion_auth_type = 0;
+
+            mm_get_uint_from_match_info (match_info, 2, &cinterion_auth_type);
+            *out_auth = mm_auth_type_from_cinterion_auth_type (cinterion_auth_type);
+            *out_username = mm_get_string_unquoted_from_match_info (match_info, 3);
+            return TRUE;
+        }
+        g_match_info_next (match_info, NULL);
+    }
+
+    g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
+                 "Auth settings for context %u not found", cid);
+    return FALSE;
+}
+
+/*****************************************************************************/
 /* ^SMONG response parser */
 
 static MMModemAccessTechnology
@@ -1411,42 +1457,153 @@ mm_cinterion_smoni_response_to_signal_info (const gchar  *response,
  * ^SCFG: "MEopMode/Prov/Cfg","tmode" -> t-mob germany
  * OK
  */
-void
-mm_cinterion_provcfg_response_to_cid (const gchar            *response,
-                                      MMCinterionModemFamily  modem_family,
-                                      MMModemCharset          charset,
-                                      gpointer                log_object,
-                                      guint                  *cid)
+gboolean
+mm_cinterion_provcfg_response_to_cid (const gchar             *response,
+                                      MMCinterionModemFamily   modem_family,
+                                      MMModemCharset           charset,
+                                      gpointer                 log_object,
+                                      gint                    *cid,
+                                      GError                 **error)
 {
-    g_autoptr(GRegex)       r = NULL;
-    g_autoptr(GMatchInfo)   match_info = NULL;
-    g_autofree GError      *inner_error = NULL;
+    g_autoptr(GRegex)      r = NULL;
+    g_autoptr(GMatchInfo)  match_info = NULL;
+    g_autofree GError     *inner_error = NULL;
+    g_autofree gchar      *mno = NULL;
 
     r = g_regex_new ("\\^SCFG:\\s*\"MEopMode/Prov/Cfg\",\\s*\"([0-9a-zA-Z]*)\"", 0, 0, NULL);
     g_assert (r != NULL);
-    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
-    if (inner_error)
-        return;
-    if (g_match_info_matches (match_info)) {
-        g_autofree gchar *mno = NULL;
 
-        mno = mm_get_string_unquoted_from_match_info (match_info, 1);
-        if (mno && modem_family == MM_CINTERION_MODEM_FAMILY_IMT) {
-            mno = mm_charset_take_and_convert_to_utf8 (mno, charset);
-            mm_obj_dbg (log_object, "current mno: %s", mno);
-        }
+    if (!g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, error))
+        return FALSE;
 
-        /* for Cinterion LTE modules, some CID numbers have special meaning.
-         * This is dictated by the chipset and by the MNO:
-         * - the chipset uses a special one, CID 1, as a LTE combined attach chipset
-         * - the MNOs can define the sequence and number of APN to be used for their network.
-         *   This takes priority over the chipset preferences, and therefore for some of them
-         *   the CID for the initial EPS context must be changed.
-         */
-        if (g_strcmp0 (mno, "2") == 0 || g_strcmp0 (mno, "vzwdcus") == 0)
-            *cid = 3;
-        else if (g_strcmp0 (mno, "tmode") == 0)
-            *cid = 2;
-        /* in all other cases no change to the preset value */
+    mno = mm_get_string_unquoted_from_match_info (match_info, 1);
+    if (mno && modem_family == MM_CINTERION_MODEM_FAMILY_IMT) {
+        mno = mm_charset_take_and_convert_to_utf8 (mno, charset);
+        mm_obj_dbg (log_object, "current mno: %s", mno);
     }
+
+    /* for Cinterion LTE modules, some CID numbers have special meaning.
+     * This is dictated by the chipset and by the MNO:
+     * - the chipset uses a special one, CID 1, as a LTE combined attach chipset
+     * - the MNOs can define the sequence and number of APN to be used for their network.
+     *   This takes priority over the chipset preferences, and therefore for some of them
+     *   the CID for the initial EPS context must be changed.
+     */
+    if (g_strcmp0 (mno, "2") == 0 || g_strcmp0 (mno, "vzwdcus") == 0)
+        *cid = 3;
+    else if (g_strcmp0 (mno, "tmode") == 0)
+        *cid = 2;
+    else
+        *cid = 1;
+    return TRUE;
+}
+
+/*****************************************************************************/
+/* Auth related helpers */
+
+typedef enum {
+    BEARER_CINTERION_AUTH_UNKNOWN   = -1,
+    BEARER_CINTERION_AUTH_NONE      =  0,
+    BEARER_CINTERION_AUTH_PAP       =  1,
+    BEARER_CINTERION_AUTH_CHAP      =  2,
+    BEARER_CINTERION_AUTH_MSCHAPV2  =  3,
+} BearerCinterionAuthType;
+
+static BearerCinterionAuthType
+parse_auth_type (MMBearerAllowedAuth mm_auth)
+{
+    switch (mm_auth) {
+    case MM_BEARER_ALLOWED_AUTH_NONE:
+        return BEARER_CINTERION_AUTH_NONE;
+    case MM_BEARER_ALLOWED_AUTH_PAP:
+        return BEARER_CINTERION_AUTH_PAP;
+    case MM_BEARER_ALLOWED_AUTH_CHAP:
+        return BEARER_CINTERION_AUTH_CHAP;
+    case MM_BEARER_ALLOWED_AUTH_MSCHAPV2:
+        return BEARER_CINTERION_AUTH_MSCHAPV2;
+    case MM_BEARER_ALLOWED_AUTH_UNKNOWN:
+    case MM_BEARER_ALLOWED_AUTH_MSCHAP:
+    case MM_BEARER_ALLOWED_AUTH_EAP:
+    default:
+        return BEARER_CINTERION_AUTH_UNKNOWN;
+    }
+}
+
+MMBearerAllowedAuth
+mm_auth_type_from_cinterion_auth_type (guint cinterion_auth)
+{
+    switch (cinterion_auth) {
+    case BEARER_CINTERION_AUTH_NONE:
+        return MM_BEARER_ALLOWED_AUTH_NONE;
+    case BEARER_CINTERION_AUTH_PAP:
+        return MM_BEARER_ALLOWED_AUTH_PAP;
+    case BEARER_CINTERION_AUTH_CHAP:
+        return MM_BEARER_ALLOWED_AUTH_CHAP;
+    default:
+        return MM_BEARER_ALLOWED_AUTH_UNKNOWN;
+    }
+}
+
+/* Cinterion authentication is done with the command AT^SGAUTH,
+   whose syntax depends on the modem family, as follow:
+   - AT^SGAUTH=<cid>[, <auth_type>[, <user>, <passwd>]] for the IMT family
+   - AT^SGAUTH=<cid>[, <auth_type>[, <passwd>, <user>]] for the rest */
+gchar *
+mm_cinterion_build_auth_string (gpointer                log_object,
+                                MMCinterionModemFamily  modem_family,
+                                MMBearerProperties     *config,
+                                guint                   cid)
+{
+    MMBearerAllowedAuth      auth;
+    BearerCinterionAuthType  encoded_auth = BEARER_CINTERION_AUTH_UNKNOWN;
+    gboolean                 has_user;
+    gboolean                 has_passwd;
+    const gchar             *user;
+    const gchar             *passwd;
+    g_autofree gchar        *quoted_user = NULL;
+    g_autofree gchar        *quoted_passwd = NULL;
+
+    user   = mm_bearer_properties_get_user         (config);
+    passwd = mm_bearer_properties_get_password     (config);
+    auth   = mm_bearer_properties_get_allowed_auth (config);
+
+    has_user     = (user   && user[0]);
+    has_passwd   = (passwd && passwd[0]);
+    encoded_auth = parse_auth_type (auth);
+
+    /* When 'none' requested, we won't require user/password */
+    if (encoded_auth == BEARER_CINTERION_AUTH_NONE) {
+        if (has_user || has_passwd)
+            mm_obj_warn (log_object, "APN user/password given but 'none' authentication requested");
+        if (modem_family == MM_CINTERION_MODEM_FAMILY_IMT)
+            return g_strdup_printf ("^SGAUTH=%u,%d,\"\",\"\"", cid, encoded_auth);
+        return g_strdup_printf ("^SGAUTH=%u,%d", cid, encoded_auth);
+    }
+
+    /* No explicit auth type requested? */
+    if (encoded_auth == BEARER_CINTERION_AUTH_UNKNOWN) {
+        /* If no user/passwd given, do nothing */
+        if (!has_user && !has_passwd)
+            return NULL;
+
+        /* If user/passwd given, default to CHAP (more common than PAP) */
+        mm_obj_dbg (log_object, "APN user/password given but no authentication type explicitly requested: defaulting to 'CHAP'");
+        encoded_auth = BEARER_CINTERION_AUTH_CHAP;
+    }
+
+    quoted_user   = mm_port_serial_at_quote_string (user   ? user   : "");
+    quoted_passwd = mm_port_serial_at_quote_string (passwd ? passwd : "");
+
+    if (modem_family == MM_CINTERION_MODEM_FAMILY_IMT)
+        return g_strdup_printf ("^SGAUTH=%u,%d,%s,%s",
+                                cid,
+                                encoded_auth,
+                                quoted_user,
+                                quoted_passwd);
+
+    return g_strdup_printf ("^SGAUTH=%u,%d,%s,%s",
+                            cid,
+                            encoded_auth,
+                            quoted_passwd,
+                            quoted_user);
 }

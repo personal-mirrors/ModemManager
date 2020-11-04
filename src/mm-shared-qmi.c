@@ -3321,10 +3321,14 @@ next_sim_switch_ready (QmiClientUim *client,
 
     output = qmi_client_uim_switch_slot_finish (client, res, &error);
     if (!output || !qmi_message_uim_switch_slot_output_get_result (output, &error)) {
-        mm_obj_dbg (self, "couldn't switch to SIM at slot %u: won't load additional info",
-                    ctx->current_slot_number);
-        load_next_sim_info (task);
-        return;
+        /* ignore NoEffect errors on slot switch, because that indicates we're
+         * already in the desired slot */
+        if (!g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_NO_EFFECT)) {
+            mm_obj_dbg (self, "couldn't switch to SIM at slot %u: won't load additional info",
+                        ctx->current_slot_number);
+            load_next_sim_info (task);
+            return;
+        }
     }
 
     mm_obj_dbg (self, "switched to SIM at slot %u: initializing...",
@@ -3384,6 +3388,8 @@ uim_get_slot_status_ready (QmiClientUim *client,
     MMIfaceModem              *self;
     GError                    *error = NULL;
     GArray                    *physical_slots = NULL;
+    GArray                    *ext_information = NULL;
+    GArray                    *slot_eids = NULL;
     guint                      i;
 
     self = g_task_get_source_object (task);
@@ -3398,15 +3404,30 @@ uim_get_slot_status_ready (QmiClientUim *client,
         return;
     }
 
+    /* It's fine if we don't have EID information, but it should be well-formed if present. If it's malformed,
+     * there is probably a modem firmware bug. */
+    if (qmi_message_uim_get_slot_status_output_get_physical_slot_information (output, &ext_information, NULL) &&
+        qmi_message_uim_get_slot_status_output_get_slot_eid_information (output, &slot_eids, NULL) &&
+        (ext_information->len != physical_slots->len || slot_eids->len != physical_slots->len)) {
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "UIM Get Slot Status returned malformed response");
+        g_object_unref (task);
+        return;
+    }
+
     ctx->sim_slots = g_ptr_array_new_full (physical_slots->len, (GDestroyNotify) sim_slot_free);
 
     for (i = 0; i < physical_slots->len; i++) {
-        QmiPhysicalSlotStatusSlot *slot_status;
-        MMBaseSim                 *sim;
-        g_autofree gchar          *raw_iccid = NULL;
-        g_autofree gchar          *iccid = NULL;
-        g_autoptr(GError)          inner_error = NULL;
-        gboolean                   sim_active = FALSE;
+        QmiPhysicalSlotStatusSlot      *slot_status;
+        QmiPhysicalSlotInformationSlot *slot_info;
+        MMBaseSim                      *sim;
+        g_autofree gchar               *raw_iccid = NULL;
+        g_autofree gchar               *iccid = NULL;
+        g_autofree gchar               *eid = NULL;
+        g_autoptr(GError)               inner_error = NULL;
+        gboolean                        sim_active = FALSE;
 
         /* Store active slot info */
         slot_status = &g_array_index (physical_slots, QmiPhysicalSlotStatusSlot, i);
@@ -3423,7 +3444,8 @@ uim_get_slot_status_ready (QmiClientUim *client,
             continue;
         }
 
-        raw_iccid = mm_bcd_to_string ((const guint8 *)slot_status->iccid->data, slot_status->iccid->len);
+        raw_iccid = mm_bcd_to_string ((const guint8 *)slot_status->iccid->data, slot_status->iccid->len,
+                                      TRUE /* low_nybble_first */);
         if (!raw_iccid) {
             mm_obj_warn (self, "not creating SIM object: failed to convert ICCID from BCD");
             g_ptr_array_add (ctx->sim_slots, NULL);
@@ -3437,12 +3459,26 @@ uim_get_slot_status_ready (QmiClientUim *client,
             continue;
         }
 
+        if (ext_information && slot_eids) {
+            slot_info = &g_array_index (ext_information, QmiPhysicalSlotInformationSlot, i);
+            if (slot_info->is_euicc) {
+                GArray *slot_eid;
+
+                slot_eid = g_array_index (slot_eids, GArray *, i);
+                if (slot_eid->len)
+                    eid = mm_qmi_uim_decode_eid (slot_eid->data, slot_eid->len);
+                if (!eid)
+                    mm_obj_dbg (self, "SIM in slot %d is marked as eUICC, but has malformed EID", i + 1);
+            }
+        }
+
         sim = mm_sim_qmi_new_initialized (MM_BASE_MODEM (self),
                                           TRUE, /* consider DMS UIM deprecated if we're creating SIM slots */
                                           i + 1, /* slot number is the array index starting at 1 */
                                           sim_active,
                                           iccid,
                                           NULL,  /* imsi unknown */
+                                          eid,   /* may be NULL, which is fine */
                                           NULL,  /* operator id unknown */
                                           NULL,  /* operator name unknown */
                                           NULL); /* emergency numbers unknown */
@@ -3765,8 +3801,10 @@ uim_slot_status_indication_cb (QmiClientUim                     *client,
         if (slot_status->physical_slot_status == QMI_UIM_SLOT_STATE_ACTIVE) {
             g_autofree gchar *iccid = NULL;
 
-            if (slot_status->iccid && slot_status->iccid->len > 0)
-                iccid = mm_bcd_to_string ((const guint8 *) slot_status->iccid->data, slot_status->iccid->len);
+            if (slot_status->iccid && slot_status->iccid->len > 0) {
+                iccid = mm_bcd_to_string ((const guint8 *) slot_status->iccid->data, slot_status->iccid->len,
+                                          TRUE /* low_nybble_first */);
+            }
 
             mm_iface_modem_check_for_sim_swap (MM_IFACE_MODEM (self),
                                                i + 1, /* Slot index */

@@ -112,6 +112,15 @@ MMBearerConnectionStatus mm_cinterion_parse_swwan_response (const gchar  *respon
                                                             GError      **error);
 
 /*****************************************************************************/
+/* ^SGAUTH response parser */
+
+gboolean mm_cinterion_parse_sgauth_response (const gchar          *response,
+                                             guint                 cid,
+                                             MMBearerAllowedAuth  *out_auth,
+                                             gchar               **out_username,
+                                             GError              **error);
+
+/*****************************************************************************/
 /* ^SMONG response parser */
 
 gboolean mm_cinterion_parse_smong_response (const gchar              *response,
@@ -166,10 +175,21 @@ gboolean mm_cinterion_smoni_response_to_signal_info (const gchar  *response,
 /*****************************************************************************/
 /* ^SCFG="MEopMode/Prov/Cfg" helper */
 
-void mm_cinterion_provcfg_response_to_cid (const gchar            *response,
-                                           MMCinterionModemFamily  modem_family,
-                                           MMModemCharset          charset,
-                                           gpointer                log_object,
-                                           guint                  *cid);
+gboolean mm_cinterion_provcfg_response_to_cid (const gchar             *response,
+                                               MMCinterionModemFamily   modem_family,
+                                               MMModemCharset           charset,
+                                               gpointer                 log_object,
+                                               gint                    *cid,
+                                               GError                 **error);
+
+/*****************************************************************************/
+/* Auth related helpers */
+
+MMBearerAllowedAuth mm_auth_type_from_cinterion_auth_type (guint cinterion_auth);
+
+gchar *mm_cinterion_build_auth_string (gpointer                log_object,
+                                       MMCinterionModemFamily  modem_family,
+                                       MMBearerProperties     *config,
+                                       guint                   cid);
 
 #endif  /* MM_MODEM_HELPERS_CINTERION_H */

@@ -1602,7 +1602,6 @@ test_smoni_response_to_signal (void)
 typedef struct {
     const gchar            *str;
     MMCinterionModemFamily  modem_family;
-    guint                   initial_cid;
     gdouble                 expected_cid;
 } ProvcfgResponseTest;
 
@@ -1612,35 +1611,30 @@ static const ProvcfgResponseTest provcfg_response_tests[] = {
 
         .str          = "^SCFG: \"MEopMode/Prov/Cfg\",\"vdfde\"",
         .modem_family = MM_CINTERION_MODEM_FAMILY_DEFAULT,
-        .initial_cid  = 1,
         .expected_cid = 1,
     },
     {
 
         .str          = "* ^SCFG: \"MEopMode/Prov/Cfg\",\"attus\"",
         .modem_family = MM_CINTERION_MODEM_FAMILY_IMT,
-        .initial_cid  = 1,
         .expected_cid = 1,
     },
     {
 
         .str          = "* ^SCFG: \"MEopMode/Prov/Cfg\",\"2\"",
         .modem_family = MM_CINTERION_MODEM_FAMILY_DEFAULT,
-        .initial_cid  = 1,
         .expected_cid = 3,
     },
     {
 
         .str          = "* ^SCFG: \"MEopMode/Prov/Cfg\",\"vzwdcus\"",
         .modem_family = MM_CINTERION_MODEM_FAMILY_DEFAULT,
-        .initial_cid  = 1,
         .expected_cid = 3,
     },
     {
 
         .str          = "* ^SCFG: \"MEopMode/Prov/Cfg\",\"tmode\"",
         .modem_family = MM_CINTERION_MODEM_FAMILY_DEFAULT,
-        .initial_cid  = 1,
         .expected_cid = 2,
     }
 };
@@ -1651,15 +1645,70 @@ test_provcfg_response (void)
     guint i;
 
     for (i = 0; i < G_N_ELEMENTS (provcfg_response_tests); i++) {
-        guint cid = provcfg_response_tests[i].initial_cid;
+        gint      cid = -1;
+        gboolean  result;
+        GError   *error = NULL;
 
-        mm_cinterion_provcfg_response_to_cid (provcfg_response_tests[i].str,
-                                              provcfg_response_tests[i].modem_family,
-                                              MM_MODEM_CHARSET_GSM,
-                                              NULL,
-                                              &cid);
-        g_assert_cmpuint (cid,  ==, provcfg_response_tests[i].expected_cid);
+        result = mm_cinterion_provcfg_response_to_cid (provcfg_response_tests[i].str,
+                                                       provcfg_response_tests[i].modem_family,
+                                                       MM_MODEM_CHARSET_GSM,
+                                                       NULL,
+                                                       &cid,
+                                                       &error);
+        g_assert_no_error (error);
+        g_assert (result);
+        g_assert_cmpuint (cid, ==, provcfg_response_tests[i].expected_cid);
     }
+}
+
+/*****************************************************************************/
+/* Test ^SGAUTH responses */
+
+static void
+test_sgauth_response (void)
+{
+    gboolean             result;
+    MMBearerAllowedAuth  auth = MM_BEARER_ALLOWED_AUTH_UNKNOWN;
+    gchar               *username = NULL;
+    GError              *error = NULL;
+
+    const gchar *response =
+        "^SGAUTH: 1,2,\"vf\"\r\n"
+        "^SGAUTH: 2,1,\"\"\r\n"
+        "^SGAUTH: 3,0\r\n";
+
+    /* CID 1 */
+    result = mm_cinterion_parse_sgauth_response (response, 1, &auth, &username, &error);
+    g_assert_no_error (error);
+    g_assert (result);
+    g_assert_cmpuint (auth, ==, MM_BEARER_ALLOWED_AUTH_CHAP);
+    g_assert_cmpstr (username, ==, "vf");
+
+    auth = MM_BEARER_ALLOWED_AUTH_UNKNOWN;
+    g_clear_pointer (&username, g_free);
+
+    /* CID 2 */
+    result = mm_cinterion_parse_sgauth_response (response, 2, &auth, &username, &error);
+    g_assert_no_error (error);
+    g_assert (result);
+    g_assert_cmpuint (auth, ==, MM_BEARER_ALLOWED_AUTH_PAP);
+    g_assert_null (username);
+
+    auth = MM_BEARER_ALLOWED_AUTH_UNKNOWN;
+
+    /* CID 3 */
+    result = mm_cinterion_parse_sgauth_response (response, 3, &auth, &username, &error);
+    g_assert_no_error (error);
+    g_assert (result);
+    g_assert_cmpuint (auth, ==, MM_BEARER_ALLOWED_AUTH_NONE);
+    g_assert_null (username);
+
+    auth = MM_BEARER_ALLOWED_AUTH_UNKNOWN;
+
+    /* CID 4 */
+    result = mm_cinterion_parse_sgauth_response (response, 4, &auth, &username, &error);
+    g_assert_error (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND);
+    g_assert (!result);
 }
 
 /*****************************************************************************/
@@ -1695,6 +1744,7 @@ int main (int argc, char **argv)
     g_test_add_func ("/MM/cinterion/smoni/query_response",    test_smoni_response);
     g_test_add_func ("/MM/cinterion/smoni/query_response_to_signal", test_smoni_response_to_signal);
     g_test_add_func ("/MM/cinterion/scfg/provcfg",            test_provcfg_response);
+    g_test_add_func ("/MM/cinterion/sgauth",                  test_sgauth_response);
 
     return g_test_run ();
 }

@@ -76,6 +76,14 @@ struct _MMBaseSimClass {
                                   GAsyncResult *res,
                                   GError **error);
 
+    /* Load EID (async) */
+    void    (* load_eid)         (MMBaseSim *self,
+                                  GAsyncReadyCallback callback,
+                                  gpointer user_data);
+    gchar * (* load_eid_finish)  (MMBaseSim *self,
+                                  GAsyncResult *res,
+                                  GError **error);
+
     /* Load operator identifier (async) */
     void    (* load_operator_identifier)        (MMBaseSim *self,
                                                  GAsyncReadyCallback callback,
@@ -167,6 +175,7 @@ MMBaseSim   *mm_base_sim_new_initialized            (MMBaseModem *modem,
                                                      gboolean     active,
                                                      const gchar *sim_identifier,
                                                      const gchar *imsi,
+                                                     const gchar *eid,
                                                      const gchar *operator_identifier,
                                                      const gchar *operator_name,
                                                      const GStrv  emergency_numbers);
