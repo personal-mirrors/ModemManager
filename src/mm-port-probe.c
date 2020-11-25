@@ -42,6 +42,10 @@
 #include "mm-port-qmi.h"
 #endif
 
+#if defined WITH_QMI && QMI_QRTR_SUPPORTED
+#include "mm-kernel-device-qrtr.h"
+#endif
+
 #if defined WITH_MBIM
 #include "mm-port-mbim.h"
 #endif
@@ -500,7 +504,21 @@ wdm_probe_qmi (MMPortProbe *self)
             subsys = MM_PORT_SUBSYS_RPMSG;
 
         /* Create a port and try to open it */
-        ctx->port_qmi = mm_port_qmi_new (mm_kernel_device_get_name (self->priv->port), subsys);
+#if QMI_QRTR_SUPPORTED
+        if (MM_IS_KERNEL_DEVICE_QRTR (self->priv->port)) {
+            QrtrNode *node;
+
+            node = mm_kernel_device_qrtr_get_node (
+                MM_KERNEL_DEVICE_QRTR (self->priv->port));
+
+            /* Will set MM_PORT_SUBSYS_QRTR when creating the mm-port */
+            ctx->port_qmi = mm_port_qmi_new_from_node (
+                mm_kernel_device_get_name (self->priv->port), node);
+        } else
+#endif /* QMI_QRTR_SUPPORTED */
+            ctx->port_qmi = mm_port_qmi_new (
+                mm_kernel_device_get_name (self->priv->port), subsys);
+
         mm_port_qmi_open (ctx->port_qmi,
                           FALSE,
                           NULL,
