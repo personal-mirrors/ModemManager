@@ -57,7 +57,7 @@ kernel_device_cmp (MMKernelDevice *_a,
     a = MM_KERNEL_DEVICE_QRTR (_a);
     b = MM_KERNEL_DEVICE_QRTR (_b);
 
-    return qrtr_node_id (a->priv->node) == qrtr_node_id (b->priv->node);
+    return qrtr_node_get_id (a->priv->node) == qrtr_node_get_id (b->priv->node);
 }
 
 static gboolean
@@ -96,7 +96,7 @@ kernel_device_get_name (MMKernelDevice *_self)
     self = MM_KERNEL_DEVICE_QRTR (_self);
     if (!self->priv->name)
         self->priv->name = g_strdup_printf ("qrtr%d",
-                                            qrtr_node_id (self->priv->node));
+                                            qrtr_node_get_id (self->priv->node));
 
     return self->priv->name;
 }
@@ -109,7 +109,7 @@ kernel_device_get_physdev_uid (MMKernelDevice *_self)
     self = MM_KERNEL_DEVICE_QRTR (_self);
 
     if (!self->priv->physdev_uid)
-        self->priv->physdev_uid = g_strdup_printf ("qrtr%d", qrtr_node_id (self->priv->node));
+        self->priv->physdev_uid = g_strdup_printf ("qrtr%d", qrtr_node_get_id (self->priv->node));
 
     return self->priv->physdev_uid;
 }
