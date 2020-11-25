@@ -430,6 +430,7 @@ typedef struct {
     MMPort *data;
     MMPortQmi *qmi;
     QmiSioPort sio_port;
+    guint mux_id;
     gboolean explicit_qmi_open;
     gchar *user;
     gchar *password;
@@ -1017,6 +1018,34 @@ bind_data_port_ready (QmiClientWds *client,
     connect_context_step (task);
 }
 
+#if QMI_QRTR_SUPPORTED
+static void
+bind_mux_data_port_ready (QmiClientWds *client,
+                          GAsyncResult *res,
+                          GTask        *task)
+{
+    ConnectContext                                *ctx;
+    GError                                        *error = NULL;
+    g_autoptr(QmiMessageWdsBindMuxDataPortOutput)  output = NULL;
+
+    ctx  = g_task_get_task_data (task);
+
+    g_assert (ctx->running_ipv4 || ctx->running_ipv6);
+    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
+
+    output = qmi_client_wds_bind_mux_data_port_finish (client, res, &error);
+    if (!output || !qmi_message_wds_bind_mux_data_port_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't bind mux data port: ");
+        complete_connect (task, NULL, error);
+        return;
+    }
+
+    /* Keep on */
+    ctx->step++;
+    connect_context_step (task);
+}
+#endif
+
 static void
 set_ip_family_ready (QmiClientWds *client,
                      GAsyncResult *res,
@@ -1446,6 +1475,25 @@ connect_context_step (GTask *task)
                                            task);
             return;
         }
+#if QMI_QRTR_SUPPORTED
+        else if (ctx->mux_id != QMI_DEVICE_MUX_ID_UNBOUND) {
+            g_autoptr(QmiMessageWdsBindMuxDataPortInput) input = NULL;
+
+            mm_obj_dbg (self, "binding to mux id: %d", ctx->mux_id);
+            input = qmi_message_wds_bind_mux_data_port_input_new ();
+            qmi_message_wds_bind_mux_data_port_input_set_endpoint_info (
+                input, QMI_DATA_ENDPOINT_TYPE_EMBEDDED, 0x1, NULL);
+            qmi_message_wds_bind_mux_data_port_input_set_mux_id (input, ctx->mux_id, NULL);
+
+            qmi_client_wds_bind_mux_data_port (ctx->client_ipv4,
+                                               input,
+                                               10,
+                                               g_task_get_cancellable (task),
+                                               (GAsyncReadyCallback)bind_mux_data_port_ready,
+                                               task);
+            return;
+        }
+#endif
 
         ctx->step++;
         /* fall through */
@@ -1557,7 +1605,25 @@ connect_context_step (GTask *task)
                                            task);
             return;
         }
+#if QMI_QRTR_SUPPORTED
+        else if (ctx->mux_id != QMI_DEVICE_MUX_ID_UNBOUND) {
+            g_autoptr(QmiMessageWdsBindMuxDataPortInput) input = NULL;
 
+            mm_obj_dbg (self, "binding to mux id: %d", ctx->mux_id);
+            input = qmi_message_wds_bind_mux_data_port_input_new ();
+            qmi_message_wds_bind_mux_data_port_input_set_endpoint_info (
+                input, QMI_DATA_ENDPOINT_TYPE_EMBEDDED, 0x1, NULL);
+            qmi_message_wds_bind_mux_data_port_input_set_mux_id (input, ctx->mux_id, NULL);
+
+            qmi_client_wds_bind_mux_data_port (ctx->client_ipv6,
+                                               input,
+                                               10,
+                                               g_task_get_cancellable (task),
+                                               (GAsyncReadyCallback)bind_mux_data_port_ready,
+                                               task);
+            return;
+        }
+#endif
         ctx->step++;
         /* fall through */
 
@@ -1716,6 +1782,7 @@ _connect (MMBaseBearer *_self,
         goto out;
     }
 
+
     /* Each data port has a single QMI port associated */
     qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (MM_BROADBAND_MODEM_QMI (modem), data, &sio_port, &mux_id, &error);
     if (!qmi) {
@@ -1760,6 +1827,9 @@ _connect (MMBaseBearer *_self,
     ctx->self = g_object_ref (self);
     ctx->qmi = g_object_ref (qmi);
     ctx->sio_port = sio_port;
+#if QMI_QRTR_SUPPORTED
+    ctx->mux_id = mux_id;
+#endif
     ctx->data = g_object_ref (data);
     ctx->step = CONNECT_STEP_FIRST;
     ctx->ip_method = MM_BEARER_IP_METHOD_UNKNOWN;
