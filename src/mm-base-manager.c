@@ -43,15 +43,16 @@
 #include <mm-gdbus-manager.h>
 #include <mm-gdbus-test.h>
 
-#include "mm-context.h"
+#include "mm-auth-provider.h"
 #include "mm-base-manager.h"
+#include "mm-context.h"
 #include "mm-daemon-enums-types.h"
 #include "mm-device.h"
-#include "mm-plugin-manager.h"
-#include "mm-auth-provider.h"
-#include "mm-plugin.h"
 #include "mm-filter.h"
 #include "mm-log-object.h"
+#include "mm-net-port-mapper.h"
+#include "mm-plugin-manager.h"
+#include "mm-plugin.h"
 
 static void initable_iface_init   (GInitableIface       *iface);
 static void log_object_iface_init (MMLogObjectInterface *iface);
@@ -100,6 +101,9 @@ struct _MMBaseManagerPrivate {
 
     /* The Test interface support */
     MmGdbusTest *test_skeleton;
+
+    /* The net port factory to register the newly created net ports */
+    MMNetPortMapper *net_port_mapper;
 
 #if defined WITH_UDEV
     /* The UDev client */
@@ -315,6 +319,11 @@ device_added (MMBaseManager  *self,
         mm_obj_dbg (self, "port %s not candidate", name);
         return;
     }
+
+    /* Check if the port was created by ModemManager, and call the setup
+     * function if so. */
+    if (mm_net_port_mapper_get_ctrl_iface_physdev_uid (self->priv->net_port_mapper, name))
+        mm_net_port_mapper_configure_net_interface (self->priv->net_port_mapper, port);
 
     /* Get the port's physical device's uid. All ports of the same physical
      * device will share the same uid. */
@@ -1437,6 +1446,9 @@ mm_base_manager_init (MMBaseManager *self)
 
     /* Setup Object Manager Server */
     self->priv->object_manager = g_dbus_object_manager_server_new (MM_DBUS_PATH);
+
+    /* Create the net port mapper */
+    self->priv->net_port_mapper = mm_net_port_mapper_get ();
 
     /* Enable processing of input DBus messages */
     g_object_connect (self,

@@ -365,6 +365,8 @@ ModemManager_SOURCES = \
 	mm-plugin.c \
 	mm-plugin.h \
 	mm-shared.h \
+	mm-net-port-mapper.h \
+	mm-net-port-mapper.c \
 	$(NULL)
 
 if WITH_QRTR
