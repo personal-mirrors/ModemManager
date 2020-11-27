@@ -49,6 +49,8 @@ struct _MMKernelDeviceUdevPrivate {
     guint16      product;
     guint16      revision;
     gchar       *driver;
+    /* Override values */
+    gchar       *override_physdev_uid;
 
     MMKernelEventProperties *properties;
 };
@@ -331,6 +333,10 @@ kernel_device_get_physdev_uid (MMKernelDevice *_self)
 
     self = MM_KERNEL_DEVICE_UDEV (_self);
 
+    /* Check if there is an override for the value */
+    if (self->priv->override_physdev_uid)
+        return self->priv->override_physdev_uid;
+
     /* Prefer the one coming in the properties, if any */
     if (self->priv->properties) {
         if ((uid = mm_kernel_event_properties_get_uid (self->priv->properties)) != NULL)
@@ -564,6 +570,17 @@ kernel_device_get_attribute (MMKernelDevice *_self,
     return g_udev_device_get_sysfs_attr (self->priv->device, attribute);
 }
 
+static void
+kernel_device_override_physdev_uid (MMKernelDevice *_self,
+                                    gchar          *value)
+{
+    MMKernelDeviceUdev *self;
+
+    self = MM_KERNEL_DEVICE_UDEV (_self);
+    if (self->priv->override_physdev_uid)
+        g_free (self->priv->override_physdev_uid);
+    self->priv->override_physdev_uid = value;
+}
 /*****************************************************************************/
 
 MMKernelDevice *
@@ -777,6 +794,7 @@ mm_kernel_device_udev_class_init (MMKernelDeviceUdevClass *klass)
     kernel_device_class->get_global_property       = kernel_device_get_global_property;
     kernel_device_class->has_attribute             = kernel_device_has_attribute;
     kernel_device_class->get_attribute             = kernel_device_get_attribute;
+    kernel_device_class->override_physdev_uid      = kernel_device_override_physdev_uid;
 
     properties[PROP_UDEV_DEVICE] =
         g_param_spec_object ("udev-device",

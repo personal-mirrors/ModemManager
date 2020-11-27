@@ -235,6 +235,14 @@ mm_kernel_device_get_property_as_int_hex (MMKernelDevice *self,
     return ((value && mm_get_uint_from_hex_str (value, &aux)) ? aux : 0);
 }
 
+void
+mm_kernel_device_override_physdev_uid (MMKernelDevice *self,
+                                       gchar          *value)
+{
+    if (MM_KERNEL_DEVICE_GET_CLASS (self)->override_physdev_uid)
+        MM_KERNEL_DEVICE_GET_CLASS (self)->override_physdev_uid (self, value);
+}
+
 gboolean
 mm_kernel_device_has_global_property (MMKernelDevice *self,
                                       const gchar    *property)
