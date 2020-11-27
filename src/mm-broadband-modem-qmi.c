@@ -218,13 +218,14 @@ MMPortQmi *
 mm_broadband_modem_qmi_get_port_qmi_for_data (MMBroadbandModemQmi  *self,
                                               MMPort               *data,
                                               QmiSioPort           *out_sio_port,
+                                              guint                *out_mux_id,
                                               GError              **error)
 {
     MMPortQmi *qmi_port;
 
     g_assert (MM_IS_BROADBAND_MODEM_QMI (self));
 
-    qmi_port = mm_broadband_modem_qmi_peek_port_qmi_for_data (self, data, out_sio_port, error);
+    qmi_port = mm_broadband_modem_qmi_peek_port_qmi_for_data (self, data, out_sio_port, out_mux_id, error);
     return (qmi_port ?
             MM_PORT_QMI (g_object_ref (qmi_port)) :
             NULL);
@@ -234,6 +235,7 @@ static MMPortQmi *
 peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
                         MMPort               *data,
                         QmiSioPort           *out_sio_port,
+                        guint                *out_mux_id,
                         GError              **error)
 {
     GList       *cdc_wdm_qmi_ports;
@@ -281,15 +283,20 @@ peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
 
     g_list_free_full (cdc_wdm_qmi_ports, g_object_unref);
 
-    if (!found)
+    if (!found) {
         g_set_error (error,
                      MM_CORE_ERROR,
                      MM_CORE_ERROR_NOT_FOUND,
                      "Couldn't find associated QMI port for 'net/%s'",
                      mm_port_get_device (data));
-    else if (out_sio_port)
+    } else if (out_sio_port && out_mux_id) {
         *out_sio_port = QMI_SIO_PORT_NONE;
-
+#if QMI_QRTR_SUPPORTED
+        *out_mux_id = QMI_DEVICE_MUX_ID_UNBOUND;
+#else
+        *out_mux_id = 0;
+#endif
+    }
     return found;
 }
 
@@ -297,11 +304,12 @@ MMPortQmi *
 mm_broadband_modem_qmi_peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
                                                MMPort               *data,
                                                QmiSioPort           *out_sio_port,
+                                               guint                *mux_id,
                                                GError              **error)
 {
     g_assert (MM_BROADBAND_MODEM_QMI_GET_CLASS (self)->peek_port_qmi_for_data);
 
-    return MM_BROADBAND_MODEM_QMI_GET_CLASS (self)->peek_port_qmi_for_data (self, data, out_sio_port, error);
+    return MM_BROADBAND_MODEM_QMI_GET_CLASS (self)->peek_port_qmi_for_data (self, data, out_sio_port, mux_id, error);
 }
 
 /*****************************************************************************/

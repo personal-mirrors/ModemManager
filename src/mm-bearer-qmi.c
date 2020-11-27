@@ -1687,6 +1687,7 @@ _connect (MMBaseBearer *_self,
     MMPort *data = NULL;
     MMPortQmi *qmi = NULL;
     QmiSioPort sio_port = QMI_SIO_PORT_NONE;
+    guint mux_id = QMI_DEVICE_MUX_ID_UNBOUND;
     GError *error = NULL;
     const gchar *apn;
     GTask *task;
@@ -1712,14 +1713,9 @@ _connect (MMBaseBearer *_self,
     }
 
     /* Each data port has a single QMI port associated */
-    qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (MM_BROADBAND_MODEM_QMI (modem), data, &sio_port, &error);
+    qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (MM_BROADBAND_MODEM_QMI (modem), data, &sio_port, &mux_id, &error);
     if (!qmi) {
-        g_task_report_error (
-            self,
-            callback,
-            user_data,
-            _connect,
-            error);
+        g_task_report_error (self, callback, user_data, _connect, error);
         goto out;
     }
 

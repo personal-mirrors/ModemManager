@@ -21,9 +21,12 @@
 #include <unistd.h>
 #include <ctype.h>
 
+#include <libmm-glib.h>
+
 #include "ModemManager.h"
-#include "mm-log.h"
 #include "mm-broadband-modem-qmi-qcom-soc.h"
+#include "mm-log.h"
+#include "mm-net-port-mapper.h"
 
 G_DEFINE_TYPE (MMBroadbandModemQmiQcomSoc, mm_broadband_modem_qmi_qcom_soc, MM_TYPE_BROADBAND_MODEM_QMI)
 
@@ -41,31 +44,17 @@ static const QmiSioPort sio_port_per_port_number[] = {
 };
 
 static MMPortQmi *
-peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
-                        MMPort               *data,
-                        QmiSioPort           *out_sio_port,
-                        GError              **error)
+peek_port_qmi_for_data_in_bam_dmux (MMBroadbandModemQmi  *self,
+                                    MMPort               *data,
+                                    QmiSioPort           *out_sio_port,
+                                    GError              **error)
 {
     GList          *rpmsg_qmi_ports;
     MMPortQmi      *found = NULL;
     MMKernelDevice *net_port;
-    const gchar    *net_port_driver;
     gint            net_port_number;
 
-    g_assert (MM_IS_BROADBAND_MODEM_QMI (self));
-    g_assert (mm_port_get_subsys (data) == MM_PORT_SUBSYS_NET);
-
     net_port = mm_port_peek_kernel_device (data);
-    net_port_driver = mm_kernel_device_get_driver (net_port);
-    if (g_strcmp0 (net_port_driver, "bam-dmux") != 0) {
-        g_set_error (error,
-                     MM_CORE_ERROR,
-                     MM_CORE_ERROR_FAILED,
-                     "Unsupported QMI kernel driver for 'net/%s': %s",
-                     mm_port_get_device (data),
-                     net_port_driver);
-        return NULL;
-    }
 
     /* The dev_port notified by the bam-dmux driver indicates which SIO port we should be using */
     net_port_number = mm_kernel_device_get_attribute_as_int (net_port, "dev_port");
@@ -99,6 +88,88 @@ peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
     g_list_free_full (rpmsg_qmi_ports, g_object_unref);
 
     return found;
+}
+
+#if defined WITH_QMI && QMI_QRTR_SUPPORTED
+
+static MMPortQmi *
+peek_port_qmi_for_data_in_qrtr (MMBroadbandModemQmi  *self,
+                                MMPort               *data,
+                                guint                *out_mux_id,
+                                GError              **error)
+{
+    GList           *qrtr_qmi_ports = NULL;
+    MMPortQmi       *found = NULL;
+    MMKernelDevice  *net_port;
+    MMNetPortMapper *net_port_mapper;
+    const gchar     *net_port_name;
+    const gchar     *parent_port_name;
+
+    net_port      = mm_port_peek_kernel_device (data);
+    net_port_name = mm_kernel_device_get_name (net_port);
+
+    /* Find the QMI port that was used to create the net port */
+    net_port_mapper = mm_net_port_mapper_get ();
+    parent_port_name = mm_net_port_mapper_get_ctrl_iface_name (net_port_mapper, net_port_name);
+    if (parent_port_name) {
+        qrtr_qmi_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
+                                                   MM_PORT_SUBSYS_QRTR,
+                                                   MM_PORT_TYPE_QMI,
+                                                   parent_port_name);
+    }
+
+    if (!qrtr_qmi_ports) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_NOT_FOUND,
+                     "Couldn't find any QMI port for 'net/%s'",
+                     mm_port_get_device (data));
+        return NULL;
+    }
+
+    *out_mux_id = mm_net_port_mapper_get_mux_id (net_port_mapper, net_port_name);
+    found = MM_PORT_QMI (qrtr_qmi_ports->data);
+
+    g_list_free_full (qrtr_qmi_ports, g_object_unref);
+
+    return found;
+}
+#endif
+
+static MMPortQmi *
+peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
+                        MMPort               *data,
+                        QmiSioPort           *out_sio_port,
+                        guint                *out_mux_id,
+                        GError              **error)
+{
+    MMKernelDevice *net_port;
+    const gchar    *net_port_driver;
+    const gchar    *net_port_name;
+    gboolean        is_rmnet_data;
+
+    g_assert (MM_IS_BROADBAND_MODEM_QMI (self));
+    g_assert (mm_port_get_subsys (data) == MM_PORT_SUBSYS_NET);
+
+    net_port        = mm_port_peek_kernel_device (data);
+    net_port_driver = mm_kernel_device_get_driver (net_port);
+    net_port_name   = mm_kernel_device_get_name (net_port);
+    is_rmnet_data   = g_str_has_prefix (net_port_name, "rmnet_ipa0.");
+    if (g_strcmp0 (net_port_driver, "bam-dmux") != 0 && !is_rmnet_data) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Unsupported QMI kernel driver for 'net/%s': %s",
+                     mm_port_get_device (data),
+                     net_port_driver);
+        return NULL;
+    }
+#if defined WITH_QMI && QMI_QRTR_SUPPORTED
+    if (is_rmnet_data)
+        return peek_port_qmi_for_data_in_qrtr (self, data, out_mux_id, error);
+    else
+#endif
+        return peek_port_qmi_for_data_in_bam_dmux (self, data, out_sio_port, error);
 }
 
 /*****************************************************************************/
