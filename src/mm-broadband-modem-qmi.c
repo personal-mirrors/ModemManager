@@ -2658,7 +2658,7 @@ modem_3gpp_load_profiles (MMIfaceModem3gpp *_self,
                                      10,
                                      NULL,
                                      (GAsyncReadyCallback) get_profile_list_ready,
-                                     NULL);
+                                     task);
     qmi_message_wds_get_profile_list_input_unref (input);
 }
 
