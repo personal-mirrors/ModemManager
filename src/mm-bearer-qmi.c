@@ -29,14 +29,18 @@
 
 #include "mm-iface-modem.h"
 #include "mm-bearer-qmi.h"
+#include "mm-kernel-device-generic.h"
 #include "mm-modem-helpers-qmi.h"
 #include "mm-port-enums-types.h"
 #include "mm-log-object.h"
 #include "mm-modem-helpers.h"
+#include "mm-net-port-mapper.h"
 
 G_DEFINE_TYPE (MMBearerQmi, mm_bearer_qmi, MM_TYPE_BASE_BEARER)
 
 #define GLOBAL_PACKET_DATA_HANDLE 0xFFFFFFFF
+#define RMNET_IPA_DEFAULT_IFNAME "rmnet_ipa0"
+#define RMNET_IPA_IFNAME_PREFIX  "rmnet_ipa0."
 
 struct _MMBearerQmiPrivate {
     /* Cancellables available during a connection attempt */
@@ -46,6 +50,8 @@ struct _MMBearerQmiPrivate {
     /* State kept while connected */
     MMPortQmi *qmi;
     gboolean   explicit_qmi_open;
+    gchar     *net_iface_link;
+    guint      mux_id;
 
     QmiClientWds *client_ipv4;
     guint packet_service_status_ipv4_indication_id;
@@ -406,6 +412,7 @@ static void cleanup_event_report_unsolicited_events (MMBearerQmi *self,
 typedef enum {
     CONNECT_STEP_FIRST,
     CONNECT_STEP_OPEN_QMI_PORT,
+    CONNECT_STEP_CREATE_DATA_PORT,
     CONNECT_STEP_IP_METHOD,
     CONNECT_STEP_IPV4,
     CONNECT_STEP_WDS_CLIENT_IPV4,
@@ -431,6 +438,7 @@ typedef struct {
     MMPortQmi *qmi;
     QmiSioPort sio_port;
     guint mux_id;
+    gchar *net_iface_link;
     gboolean explicit_qmi_open;
     gchar *user;
     gchar *password;
@@ -457,6 +465,9 @@ typedef struct {
     guint32 packet_data_handle_ipv6;
     MMBearerIpConfig *ipv6_config;
     GError *error_ipv6;
+
+    MMBearerConnectResult *result;
+    GError *error;
 } ConnectContext;
 
 static void
@@ -517,6 +528,7 @@ connect_context_free (ConnectContext *ctx)
     g_clear_error (&ctx->error_ipv6);
     g_clear_object (&ctx->ipv4_config);
     g_clear_object (&ctx->ipv6_config);
+    g_free (ctx->net_iface_link);
     g_object_unref (ctx->data);
     g_object_unref (ctx->qmi);
     g_object_unref (ctx->self);
@@ -531,6 +543,36 @@ connect_finish (MMBaseBearer *self,
     return g_task_propagate_pointer (G_TASK (res), error);
 }
 
+#if QMI_QRTR_SUPPORTED
+static void
+complete_connect_delete_link_ready (QmiDevice     *device,
+                                    GAsyncResult  *res,
+                                    GTask         *task)
+{
+    ConnectContext *ctx;
+    GError         *inner_error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    if (!qmi_device_delete_link_finish (device, res, &inner_error))
+        mm_obj_err (ctx->self,
+                    "failed to delete net link %s: %s",
+                    ctx->net_iface_link,
+                    inner_error->message);
+    else
+        mm_obj_dbg (ctx->self,
+                    "net link removed: %s.",
+                    ctx->net_iface_link);
+
+    g_clear_pointer (&ctx->self->priv->net_iface_link, g_free);
+    if (ctx->error)
+        g_task_return_error (task, ctx->error);
+    else
+        g_task_return_pointer (task, ctx->result, (GDestroyNotify)mm_bearer_connect_result_unref);
+    g_object_unref (task);
+}
+#endif
+
 static void
 complete_connect (GTask                 *task,
                   MMBearerConnectResult *result,
@@ -542,8 +584,26 @@ complete_connect (GTask                 *task,
     g_assert (!(result && error));
 
     ctx = g_task_get_task_data (task);
+
+    g_assert_null (ctx->result);
+    g_assert_null (ctx->error);
+
     g_clear_object (&ctx->self->priv->ongoing_connect_user_cancellable);
     g_clear_object (&ctx->self->priv->ongoing_connect_network_cancellable);
+
+#if QMI_QRTR_SUPPORTED
+    if (error && ctx->qmi && ctx->net_iface_link) {
+        ctx->result = result;
+        ctx->error = error;
+        qmi_device_delete_link (mm_port_qmi_peek_device (ctx->qmi),
+                                ctx->net_iface_link,
+                                NULL,
+                                ctx->mux_id,
+                                (GAsyncReadyCallback) complete_connect_delete_link_ready,
+                                task);
+        return;
+    }
+#endif
 
     if (error)
         g_task_return_error (task, error);
@@ -1335,6 +1395,112 @@ qmi_port_open_ready (MMPortQmi *qmi,
     connect_context_step (task);
 }
 
+#if QMI_QRTR_SUPPORTED
+
+static void
+net_link_configure_net_interface (MMKernelDevice *net_device,
+                                  const gchar    *physdev_uid)
+{
+    mm_kernel_device_override_physdev_uid (net_device, physdev_uid);
+}
+
+static void
+qmi_device_add_link_ready (QmiDevice     *device,
+                           GAsyncResult  *res,
+                           GTask         *task)
+{
+    g_autoptr(MMBaseModem)               modem  = NULL;
+    g_autoptr (MMKernelEventProperties)  properties = NULL;
+    g_autoptr (MMKernelDevice)           kernel_device = NULL;
+    ConnectContext                      *ctx;
+    GError                              *error = NULL;
+    gchar                               *net_iface_link;
+    guint                                mux_id;
+    MMKernelDevice                      *kernel_device_qmi;
+
+    net_iface_link = qmi_device_add_link_finish (device, res, &mux_id, &error);
+    if (!net_iface_link) {
+        g_prefix_error (&error, "failed to create net link for QmiDevice:");
+        complete_connect (task, NULL, error);
+        return;
+    }
+
+    ctx = g_task_get_task_data (task);
+
+    ctx->mux_id = mux_id;
+    ctx->net_iface_link = net_iface_link;
+
+    kernel_device_qmi = mm_port_peek_kernel_device (MM_PORT (ctx->qmi));
+
+    /* Build a new internal kernel event properties notification in order to
+     * manually build a MMKernelDevice for the newly instantiated port. */
+    properties = mm_kernel_event_properties_new ();
+    mm_kernel_event_properties_set_action (properties, "add");
+    mm_kernel_event_properties_set_name (properties, ctx->net_iface_link);
+    mm_kernel_event_properties_set_uid (
+        properties,
+        mm_kernel_device_get_physdev_uid (kernel_device_qmi));
+
+    mm_kernel_event_properties_set_subsystem (properties, "net");
+
+    kernel_device = mm_kernel_device_generic_new_with_rules (properties, NULL, TRUE, &error);
+    if (!kernel_device) {
+        g_prefix_error (&error,
+                        "failed to create kernel device for net link %s",
+                        ctx->net_iface_link);
+        complete_connect (task, NULL, error);
+        return;
+    }
+
+    mm_obj_info (ctx->self, "net link %s created", ctx->net_iface_link);
+
+    g_object_get (ctx->self,
+                  MM_BASE_BEARER_MODEM, &modem,
+                  NULL);
+    g_assert (modem);
+
+    if (!mm_base_modem_grab_port (modem,
+                                  kernel_device,
+                                  MM_PORT_TYPE_NET,
+                                  MM_PORT_SERIAL_AT_FLAG_NONE,
+                                  &error)) {
+        g_prefix_error (&error,
+                        "failed to grab port for net link %s",
+                        ctx->net_iface_link);
+        complete_connect (task, NULL, error);
+        return;
+    }
+
+    if (!mm_base_modem_organize_ports (modem, TRUE, &error)) {
+        g_prefix_error (&error, "failed to organize ports on modem");
+        complete_connect (task, NULL, error);
+        return;
+    }
+
+    ctx->data = mm_base_modem_get_best_data_port (modem, MM_PORT_TYPE_NET);
+    if (!ctx->data) {
+        error = g_error_new (MM_CORE_ERROR,
+                             MM_CORE_ERROR_NOT_FOUND,
+                             "failed to get data port %s for modem",
+                             net_iface_link);
+        complete_connect (task, NULL, error);
+        return;
+    }
+
+    mm_net_port_mapper_register_port (
+            mm_net_port_mapper_get (),
+            mm_kernel_device_get_name (kernel_device_qmi),
+            mm_kernel_device_get_subsystem (kernel_device_qmi),
+            mm_kernel_device_get_physdev_uid (kernel_device_qmi),
+            ctx->net_iface_link,
+            ctx->mux_id,
+            (MMNetPortMapperConfigureNet) net_link_configure_net_interface);
+    /* Keep on */
+    ctx->step++;
+    connect_context_step (task);
+}
+#endif
+
 static void
 connect_context_step (GTask *task)
 {
@@ -1385,6 +1551,26 @@ connect_context_step (GTask *task)
             return;
         }
 
+        ctx->step++;
+        /* fall through */
+
+    case CONNECT_STEP_CREATE_DATA_PORT:
+        /* For devices without a net port (i.e. QRTR/IPA), create a net port. */
+#if QMI_QRTR_SUPPORTED
+        if (!ctx->data &&
+            mm_port_get_subsys (MM_PORT (ctx->qmi)) == MM_PORT_SUBSYS_QRTR &&
+            ctx->mux_id == QMI_DEVICE_MUX_ID_UNBOUND) {
+                qmi_device_add_link_with_flags (mm_port_qmi_peek_device (ctx->qmi),
+                                                QMI_DEVICE_MUX_ID_AUTOMATIC,
+                                                RMNET_IPA_DEFAULT_IFNAME,
+                                                RMNET_IPA_IFNAME_PREFIX,
+                                                QMI_DEVICE_ADD_LINK_FLAGS_INGRESS_MAP_CKSUMV4 | QMI_DEVICE_ADD_LINK_FLAGS_EGRESS_MAP_CKSUMV4,
+                                                g_task_get_cancellable (task),
+                                                (GAsyncReadyCallback) qmi_device_add_link_ready,
+                                                task);
+            return;
+        }
+#endif
         ctx->step++;
         /* fall through */
 
@@ -1693,6 +1879,9 @@ connect_context_step (GTask *task)
             ctx->self->priv->explicit_qmi_open = TRUE;
             ctx->explicit_qmi_open = FALSE;
         }
+        g_assert (ctx->self->priv->net_iface_link == NULL);
+        ctx->self->priv->net_iface_link = g_strdup (ctx->net_iface_link);
+        ctx->self->priv->mux_id = ctx->mux_id;
 
         g_assert (ctx->self->priv->data == NULL);
         ctx->self->priv->data = g_object_ref (ctx->data);
@@ -1770,6 +1959,7 @@ _connect (MMBaseBearer *_self,
 
     /* Grab a data port */
     data = mm_base_modem_get_best_data_port (modem, MM_PORT_TYPE_NET);
+ #if !QMI_QRTR_SUPPORTED
     if (!data) {
         g_task_report_new_error (
             self,
@@ -1781,10 +1971,31 @@ _connect (MMBaseBearer *_self,
             "No valid data port found to launch connection");
         goto out;
     }
+#endif
 
+    if (data) {
+        /* Each data port has a single QMI port associated */
+        qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (
+            MM_BROADBAND_MODEM_QMI (modem), data, &sio_port, &mux_id, &error);
+    } else {
+        /* QRTR doesn't need a data port yet, since it will be created later on.*/
+        GList *qrtr_qmi_ports;
 
-    /* Each data port has a single QMI port associated */
-    qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (MM_BROADBAND_MODEM_QMI (modem), data, &sio_port, &mux_id, &error);
+        qrtr_qmi_ports = mm_base_modem_find_ports (MM_BASE_MODEM (modem),
+                                                   MM_PORT_SUBSYS_QRTR,
+                                                   MM_PORT_TYPE_QMI,
+                                                   NULL);
+        if (!qrtr_qmi_ports)
+            g_set_error (&error,
+                         MM_CORE_ERROR,
+                         MM_CORE_ERROR_NOT_FOUND,
+                         "Couldn't find any QMI ports for QRTR device");
+        else
+            qmi = MM_PORT_QMI (qrtr_qmi_ports->data);
+
+        g_list_free_full (qrtr_qmi_ports, g_object_unref);
+    }
+
     if (!qmi) {
         g_task_report_error (self, callback, user_data, _connect, error);
         goto out;
@@ -1821,7 +2032,7 @@ _connect (MMBaseBearer *_self,
 
     mm_obj_dbg (self, "launching connection with QMI port (%s) and data port (%s)",
                 mm_port_get_device (MM_PORT (qmi)),
-                mm_port_get_device (data));
+                (data ? mm_port_get_device (data) : ""));
 
     ctx = g_slice_new0 (ConnectContext);
     ctx->self = g_object_ref (self);
@@ -1949,6 +2160,7 @@ typedef enum {
     DISCONNECT_STEP_FIRST,
     DISCONNECT_STEP_STOP_NETWORK_IPV4,
     DISCONNECT_STEP_STOP_NETWORK_IPV6,
+    DISCONNECT_DELETE_DATA_PORT,
     DISCONNECT_STEP_LAST
 } DisconnectStep;
 
@@ -1964,6 +2176,10 @@ typedef struct {
     QmiClientWds *client_ipv6;
     guint32 packet_data_handle_ipv6;
     GError *error_ipv6;
+
+    MMPortQmi *qmi;
+    gchar *net_iface_link;
+    guint mux_id;
 } DisconnectContext;
 
 static void
@@ -1977,6 +2193,9 @@ disconnect_context_free (DisconnectContext *ctx)
         g_object_unref (ctx->client_ipv4);
     if (ctx->client_ipv6)
         g_object_unref (ctx->client_ipv6);
+    if (ctx->qmi)
+        g_object_unref (ctx->qmi);
+    g_free (ctx->net_iface_link);
     g_slice_free (DisconnectContext, ctx);
 }
 
@@ -2089,6 +2308,40 @@ stop_network_ready (QmiClientWds *client,
     disconnect_context_step (task);
 }
 
+#if QMI_QRTR_SUPPORTED
+static void
+qmi_device_delete_link_ready (QmiDevice     *device,
+                           GAsyncResult  *res,
+                           GTask         *task)
+{
+    MMBearerQmi *self;
+    DisconnectContext *ctx;
+    GError *error = NULL;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    if (!qmi_device_delete_link_finish (device, res, &error)) {
+        mm_obj_err (self,
+                    "failed to delete net link %s: %s",
+                    ctx->net_iface_link,
+                    error->message);
+        g_error_free (error);
+        error = NULL;
+    } else {
+        mm_obj_dbg (self,
+                    "net link removed: %s.",
+                    ctx->net_iface_link);
+    }
+
+    g_free (self->priv->net_iface_link);
+    g_clear_object (&self->priv->data);
+    /* Keep on */
+    ctx->step++;
+    disconnect_context_step (task);
+}
+#endif
+
 static void
 disconnect_context_step (GTask *task)
 {
@@ -2165,6 +2418,20 @@ disconnect_context_step (GTask *task)
         ctx->step++;
         /* fall through */
 
+    case DISCONNECT_DELETE_DATA_PORT:
+#if QMI_QRTR_SUPPORTED
+        if (ctx->qmi && ctx->net_iface_link) {
+            qmi_device_delete_link (mm_port_qmi_peek_device (ctx->qmi),
+                                    ctx->net_iface_link,
+                                    ctx->mux_id,
+                                    NULL,
+                                    (GAsyncReadyCallback) qmi_device_delete_link_ready,
+                                    task);
+            return;
+        }
+#endif
+        ctx->step++;
+        /* fall through */
     case DISCONNECT_STEP_LAST:
         if (!ctx->error_ipv4 && !ctx->error_ipv6)
             g_task_return_boolean (task, TRUE);
@@ -2217,6 +2484,10 @@ disconnect (MMBaseBearer *_self,
     ctx->packet_data_handle_ipv4 = self->priv->packet_data_handle_ipv4;
     ctx->client_ipv6 = self->priv->client_ipv6 ? g_object_ref (self->priv->client_ipv6) : NULL;
     ctx->packet_data_handle_ipv6 = self->priv->packet_data_handle_ipv6;
+    ctx->net_iface_link = g_strdup (self->priv->net_iface_link);
+    ctx->mux_id = self->priv->mux_id;
+    ctx->qmi = g_object_ref (self->priv->qmi);
+
     ctx->step = DISCONNECT_STEP_FIRST;
 
     g_task_set_task_data (task, ctx, (GDestroyNotify)disconnect_context_free);

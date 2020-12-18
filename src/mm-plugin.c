@@ -1092,7 +1092,7 @@ mm_plugin_create_modem (MMPlugin  *self,
     }
 
     /* If organizing ports fails, consider the modem invalid */
-    if (!mm_base_modem_organize_ports (modem, error))
+    if (!mm_base_modem_organize_ports (modem, FALSE, error))
         g_clear_object (&modem);
 
     return modem;

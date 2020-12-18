@@ -119,6 +119,7 @@ gboolean  mm_base_modem_grab_port    (MMBaseModem         *self,
 gboolean  mm_base_modem_has_at_port  (MMBaseModem *self);
 
 gboolean  mm_base_modem_organize_ports (MMBaseModem *self,
+                                        gboolean already_initialized,
                                         GError **error);
 
 MMPortSerialAt   *mm_base_modem_peek_port_primary      (MMBaseModem *self);

@@ -959,6 +959,7 @@ log_port (MMBaseModem *self, MMPort *port, const char *desc)
 
 gboolean
 mm_base_modem_organize_ports (MMBaseModem *self,
+                              gboolean already_initialized,
                               GError **error)
 {
     GHashTableIter iter;
@@ -977,6 +978,7 @@ mm_base_modem_organize_ports (MMBaseModem *self,
     GList *data_net = NULL;
 #if defined WITH_QMI
     GList *qmi = NULL;
+    gboolean is_qrtr = FALSE;
 #endif
 #if defined WITH_MBIM
     GList *mbim = NULL;
@@ -1061,6 +1063,8 @@ mm_base_modem_organize_ports (MMBaseModem *self,
 #if defined WITH_QMI
         case MM_PORT_TYPE_QMI:
             qmi = g_list_append (qmi, candidate);
+            if (mm_port_get_subsys (candidate) == MM_PORT_SUBSYS_QRTR)
+                is_qrtr = TRUE;
             break;
 #endif
 
@@ -1126,7 +1130,7 @@ mm_base_modem_organize_ports (MMBaseModem *self,
 
 #if defined WITH_QMI
     /* On QMI-based modems, we need to have at least a net port */
-    if (qmi && !data_net) {
+    if (qmi && !is_qrtr && !data_net) {
         g_set_error_literal (error,
                              MM_CORE_ERROR,
                              MM_CORE_ERROR_FAILED,
@@ -1249,9 +1253,10 @@ mm_base_modem_organize_ports (MMBaseModem *self,
 #endif
 
     /* As soon as we get the ports organized, we initialize the modem */
-    mm_base_modem_initialize (self,
-                              (GAsyncReadyCallback)initialize_ready,
-                              NULL);
+    if (!already_initialized)
+        mm_base_modem_initialize (self,
+                                  (GAsyncReadyCallback)initialize_ready,
+                                  NULL);
 
     return TRUE;
 }
