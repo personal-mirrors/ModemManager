@@ -5104,11 +5104,23 @@ interface_initialization_step (GTask *task)
                       NULL);
 
         if (!list) {
-            guint n;
+            guint n = 0;
+#if defined WITH_QMI && QMI_QRTR_SUPPORTED
+            MMPort *qmi_port = NULL;
 
-            /* The maximum number of available/connected modems is guessed from
-             * the size of the data ports list. */
-            n = g_list_length (mm_base_modem_peek_data_ports (MM_BASE_MODEM (self)));
+            if (MM_IS_BROADBAND_MODEM_QMI (self)) {
+                qmi_port = MM_PORT (mm_broadband_modem_qmi_peek_port_qmi (
+                    MM_BROADBAND_MODEM_QMI (self)));
+                if (mm_port_get_subsys (qmi_port) == MM_PORT_SUBSYS_QRTR)
+                    n = 255;
+            } else
+#endif
+            {
+                /* The maximum number of available/connected modems is guessed
+                 * from the size of the data ports list. */
+                n = g_list_length (
+                    mm_base_modem_peek_data_ports (MM_BASE_MODEM (self)));
+            }
             mm_obj_dbg (self, "allowed up to %u bearers", n);
 
             /* Create new default list */
