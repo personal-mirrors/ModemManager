@@ -42,6 +42,7 @@ enum {
     PROP_0,
     PROP_PROPERTIES,
     PROP_RULES,
+    PROP_ALLOW_NULL_SYSFS,
     PROP_LAST
 };
 
@@ -52,6 +53,8 @@ struct _MMKernelDeviceGenericPrivate {
     MMKernelEventProperties *properties;
     /* Rules to apply */
     GArray *rules;
+    /* Allow NULL sysfs for devices created inside MM */
+    gboolean allow_null_sysfs;
 
     /* Contents from sysfs */
     gchar  **drivers;
@@ -1008,6 +1011,7 @@ kernel_device_get_attribute (MMKernelDevice *_self,
 MMKernelDevice *
 mm_kernel_device_generic_new_with_rules (MMKernelEventProperties  *props,
                                          GArray                   *rules,
+                                         gboolean                  allow_null_sysfs,
                                          GError                  **error)
 {
     /* Note: we allow NULL rules, e.g. for virtual devices */
@@ -1015,8 +1019,9 @@ mm_kernel_device_generic_new_with_rules (MMKernelEventProperties  *props,
     return MM_KERNEL_DEVICE (g_initable_new (MM_TYPE_KERNEL_DEVICE_GENERIC,
                                              NULL,
                                              error,
-                                             "properties", props,
-                                             "rules",      rules,
+                                             "properties",       props,
+                                             "rules",            rules,
+                                             "allow_null_sysfs", allow_null_sysfs,
                                              NULL));
 }
 
@@ -1033,7 +1038,7 @@ mm_kernel_device_generic_new (MMKernelEventProperties  *props,
             return NULL;
     }
 
-    return mm_kernel_device_generic_new_with_rules (props, rules, error);
+    return mm_kernel_device_generic_new_with_rules (props, rules, FALSE, error);
 }
 
 /*****************************************************************************/
@@ -1062,6 +1067,9 @@ set_property (GObject      *object,
         g_assert (!self->priv->rules);
         self->priv->rules = g_value_dup_boxed (value);
         break;
+    case PROP_ALLOW_NULL_SYSFS:
+        self->priv->allow_null_sysfs = g_value_get_boolean (value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -1082,6 +1090,9 @@ get_property (GObject    *object,
         break;
     case PROP_RULES:
         g_value_set_boxed (value, self->priv->rules);
+        break;
+    case PROP_ALLOW_NULL_SYSFS:
+        g_value_set_boolean (value, self->priv->allow_null_sysfs);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1117,6 +1128,7 @@ initable_init (GInitable     *initable,
      * and not a virtual device.
      */
     if (self->priv->properties &&
+        !self->priv->allow_null_sysfs &&
         g_strcmp0 (mm_kernel_event_properties_get_action (self->priv->properties), "remove") &&
         g_strcmp0 (mm_kernel_event_properties_get_subsystem (self->priv->properties), "virtual") &&
         !self->priv->sysfs_path) {
@@ -1210,4 +1222,11 @@ mm_kernel_device_generic_class_init (MMKernelDeviceGenericClass *klass)
                             G_TYPE_ARRAY,
                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
     g_object_class_install_property (object_class, PROP_RULES, properties[PROP_RULES]);
+    properties[PROP_ALLOW_NULL_SYSFS] =
+        g_param_spec_boolean ("allow_null_sysfs",
+                             "Allow NULL sysfs",
+                             "Allows creating a kernel device without a sysfs path.",
+                             FALSE,
+                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+    g_object_class_install_property (object_class, PROP_ALLOW_NULL_SYSFS, properties[PROP_ALLOW_NULL_SYSFS]);
 }

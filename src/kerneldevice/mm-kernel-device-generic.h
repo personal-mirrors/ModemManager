@@ -51,6 +51,7 @@ MMKernelDevice *mm_kernel_device_generic_new            (MMKernelEventProperties
                                                          GError                  **error);
 MMKernelDevice *mm_kernel_device_generic_new_with_rules (MMKernelEventProperties  *properties,
                                                          GArray                   *rules,
+                                                         gboolean                  allow_null_sysfs,
                                                          GError                  **error);
 
 #endif /* MM_KERNEL_DEVICE_GENERIC_H */

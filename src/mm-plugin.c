@@ -1067,7 +1067,8 @@ mm_plugin_create_modem (MMPlugin  *self,
             /* Give an empty set of rules, because we don't want them to be
              * loaded from the udev rules path (as there may not be any
              * installed yet). */
-            kernel_device = mm_kernel_device_generic_new_with_rules (properties, NULL, &inner_error);
+            kernel_device = mm_kernel_device_generic_new_with_rules (
+                properties, NULL, FALSE, &inner_error);
             if (!kernel_device) {
                 mm_obj_warn (self, "could not create generic device for virtual port %s: %s",
                              virtual_ports[i],
