@@ -1773,3 +1773,42 @@ mm_utils_check_for_single_value (guint32 value)
 
     return TRUE;
 }
+
+GArray *
+mm_common_power_levels_variant_to_garray (GVariant *variant)
+{
+    GArray *array = NULL;
+
+    if (variant) {
+        GVariantIter iter;
+        guint n;
+
+        g_variant_iter_init (&iter, variant);
+        n = g_variant_iter_n_children (&iter);
+
+        if (n > 0) {
+            guint32 level;
+
+            array = g_array_sized_new (FALSE, FALSE, sizeof (guint32), n);
+            while (g_variant_iter_loop (&iter, "u", &level))
+                g_array_append_val (array, level);
+        }
+    }
+
+    return array;
+}
+
+GVariant *
+mm_common_power_levels_array_to_variant (const guint *levels,
+                                         guint n_levels)
+{
+    GVariantBuilder builder;
+    guint i;
+
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("au"));
+
+    for (i = 0; i < n_levels; i++)
+        g_variant_builder_add_value (&builder,
+                                     g_variant_new_uint32 ((guint32)levels[i]));
+    return g_variant_builder_end (&builder);
+}
