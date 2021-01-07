@@ -58,6 +58,13 @@ create_modem (MMPlugin *self,
               GError **error)
 {
 #if defined WITH_QMI
+#if QMI_QRTR_SUPPORTED //TODO(crbug.com/1103840): Remove the ifdefs and upstream
+    return MM_BASE_MODEM (mm_broadband_modem_qmi_new (uid,
+                                                      drivers,
+                                                      mm_plugin_get_name (self),
+                                                      vendor,
+                                                      product));
+#endif
     if (mm_port_probe_list_has_qmi_port (probes)) {
         mm_obj_dbg (self, "QMI-powered generic modem found...");
         return MM_BASE_MODEM (mm_broadband_modem_qmi_new (uid,

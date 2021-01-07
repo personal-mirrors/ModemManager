@@ -50,7 +50,7 @@ G_DEFINE_TYPE_EXTENDED (MMPlugin, mm_plugin, G_TYPE_OBJECT, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_LOG_OBJECT, log_object_iface_init))
 
 /* Virtual port corresponding to the embedded modem */
-static const gchar *virtual_port[] = {"smd0", NULL};
+static const gchar *virtual_port[] = {"smd0", "rmnet_data0", "qmi0", NULL};
 
 #define HAS_POST_PROBING_FILTERS(self)          \
     (self->priv->vendor_strings ||              \
@@ -1069,7 +1069,11 @@ mm_plugin_create_modem (MMPlugin  *self,
                 g_clear_error (&inner_error);
             } else if (!mm_base_modem_grab_port (modem,
                                                  kernel_device,
+#if QMI_QRTR_SUPPORTED //TODO(crbug.com/1103840): Remove hacks before merging to upstream
+                                                 MM_PORT_TYPE_QMI,
+#else
                                                  MM_PORT_TYPE_AT,
+#endif
                                                  MM_PORT_SERIAL_AT_FLAG_NONE,
                                                  &inner_error)) {
                 mm_obj_warn (self, "could not grab virtual port %s: %s",

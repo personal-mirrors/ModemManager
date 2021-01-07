@@ -1263,6 +1263,73 @@ log_object_build_id (MMLogObject *_self)
 
 /*****************************************************************************/
 
+#if QMI_QRTR_SUPPORTED //TODO(crbug.com/1103840): Remove hacks before merging to upstream
+static void
+create_virtual_device (const gchar *id,
+                       const gchar *plugin_name,
+                       const gchar *const *ports,
+                       MMBaseManager *self)
+{
+    MMPlugin *plugin;
+    MMDevice *device;
+    gchar *physdev_uid;
+    GError *error = NULL;
+
+    mm_obj_info (self, "Creating virtual device '%s'", id);
+
+    /* Create device and keep it listed in the Manager */
+    physdev_uid = g_strdup_printf ("/virtual/%s", id);
+    device = mm_device_new (physdev_uid, TRUE, TRUE, self->priv->object_manager);
+    g_hash_table_insert (self->priv->devices, physdev_uid, device);
+
+    /* Grab virtual ports */
+    mm_device_virtual_grab_ports (device, (const gchar **)ports);
+
+    /* Set plugin to use */
+    plugin = mm_plugin_manager_peek_plugin (self->priv->plugin_manager, plugin_name);
+    if (!plugin) {
+        error = g_error_new (MM_CORE_ERROR,
+                             MM_CORE_ERROR_NOT_FOUND,
+                             "Requested plugin '%s' not found",
+                             plugin_name);
+        mm_obj_warn (self, "Couldn't set plugin for virtual device '%s': %s",
+                 mm_device_get_uid (device),
+                 error->message);
+        goto out;
+    }
+    mm_device_set_plugin (device, G_OBJECT (plugin));
+
+    /* Create modem */
+    if (!mm_device_create_modem (device, &error)) {
+        mm_obj_warn (self, "Couldn't create modem for virtual device '%s': %s",
+                 mm_device_get_uid (device),
+                 error->message);
+        goto out;
+    }
+
+    mm_obj_info (self, "Modem for virtual device '%s' successfully created",
+             mm_device_get_uid (device));
+
+out:
+
+    if (error) {
+        mm_device_remove_modem (device);
+        g_hash_table_remove (self->priv->devices, mm_device_get_uid (device));
+        g_error_free (error);
+    }
+}
+
+static gboolean
+create_fake_modem (MMBaseManager *self)
+{
+    const gchar *ports[] = { "qmi0", "rmnet_data0", NULL };
+
+    create_virtual_device ("fake", "generic", ports, self);
+
+    return FALSE;
+}
+#endif
+
 MMBaseManager *
 mm_base_manager_new (GDBusConnection  *connection,
                      const gchar      *plugin_dir,
@@ -1459,6 +1526,9 @@ initable_init (GInitable     *initable,
                                                error))
             return FALSE;
     }
+#if QMI_QRTR_SUPPORTED //TODO(crbug.com/1103840): Remove hacks before merging to upstream
+    g_timeout_add_seconds (3, (GSourceFunc)create_fake_modem, MM_BASE_MANAGER (initable));
+#endif
 
     /* All good */
     return TRUE;
