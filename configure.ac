@@ -49,9 +49,6 @@ AM_PROG_CC_C_O
 AC_PROG_INSTALL
 AC_PROG_MKDIR_P
 
-AC_CHECK_PROG(XSLTPROC_CHECK,xsltproc,yes)
-AS_IF([test x"$XSLTPROC_CHECK" != x"yes"], [AC_MSG_ERROR([Please install xsltproc before configuring.])])
-
 dnl Initialize libtool
 LT_PREREQ([2.2])
 LT_INIT([disable-static])
@@ -165,6 +162,12 @@ AC_SUBST(GLIB_MKENUMS)
 GDBUS_CODEGEN=`$PKG_CONFIG --variable=gdbus_codegen gio-2.0`
 AC_SUBST(GDBUS_CODEGEN)
 
+dnl xsltproc required in git builds only
+AC_CHECK_PROG(XSLTPROC_CHECK,xsltproc,yes)
+if test "x$ax_is_release" != "xyes" -a "x$XSLTPROC_CHECK" != "xyes"; then
+   AC_MSG_ERROR([Please install xsltproc before configuring.])
+fi
+
 dnl-----------------------------------------------------------------------------
 dnl Testing support
 dnl
@@ -245,13 +248,14 @@ dnl
 
 PKG_CHECK_MODULES(LIBSYSTEMD, [libsystemd >= 209],[have_libsystemd=yes],[have_libsystemd=no])
 PKG_CHECK_MODULES(LIBSYSTEMD_LOGIN, [libsystemd-login >= 183],[have_libsystemd_login=yes],[have_libsystemd_login=no])
+PKG_CHECK_MODULES(LIBELOGIND, [libelogind >= 209], [have_elogind=yes], [have_elogind=no])
 AC_ARG_WITH(systemd-suspend-resume,
             AS_HELP_STRING([--with-systemd-suspend-resume=no|yes],
                            [Enable systemd suspend/resume support [[default=auto]]]),,
             [with_systemd_suspend_resume=auto])
 
 if test "x$with_systemd_suspend_resume" = "xauto"; then
-    if test "x$have_libsystemd" = "xyes" || test "x$have_libsystemd_login" = "xyes"; then
+    if test "x$have_libsystemd" = "xyes" || test "x$have_libsystemd_login" = "xyes" || test "x$have_elogind" = "xyes"; then
         with_systemd_suspend_resume=yes
     else
         with_systemd_suspend_resume=no
@@ -260,8 +264,8 @@ fi
 
 case $with_systemd_suspend_resume in
     yes)
-        if test "x$have_libsystemd" = "xno" && test "x$have_libsystemd_login" = "xno"; then
-		    AC_MSG_ERROR(libsystemd or libsystemd-login development headers are required)
+        if test "x$have_libsystemd" = "xno" && test "x$have_libsystemd_login" = "xno" && test "x$have_elogind" = "xno"; then
+		    AC_MSG_WARN(libsystemd, libsystemd-login or elogind must be available at runtime for suspend/resume support)
 	    fi
         AC_DEFINE(WITH_SYSTEMD_SUSPEND_RESUME, 1, [Define if you have systemd suspend-resume support])
         ;;
@@ -397,7 +401,7 @@ dnl-----------------------------------------------------------------------------
 dnl QMI support (enabled by default)
 dnl
 
-LIBQMI_VERSION=1.27.1
+LIBQMI_VERSION=1.27.2
 
 AC_ARG_WITH(qmi, AS_HELP_STRING([--without-qmi], [Build without QMI support]), [], [with_qmi=yes])
 AM_CONDITIONAL(WITH_QMI, test "x$with_qmi" = "xyes")
@@ -487,6 +491,7 @@ MM_ENABLE_PLUGIN([option],
 MM_ENABLE_PLUGIN([option-hso],
                  [with_shared_option])
 MM_ENABLE_PLUGIN([pantech])
+MM_ENABLE_PLUGIN_DISABLED([qcom-soc])
 MM_ENABLE_PLUGIN([quectel])
 MM_ENABLE_PLUGIN([samsung],
                  [with_shared_icera])
@@ -536,6 +541,7 @@ src/Makefile
 src/tests/Makefile
 plugins/Makefile
 test/Makefile
+tools/Makefile
 introspection/Makefile
 introspection/tests/Makefile
 po/Makefile.in
@@ -623,6 +629,7 @@ echo "
       option:                  ${enable_plugin_option}
       option hso:              ${enable_plugin_option_hso}
       pantech:                 ${enable_plugin_pantech}
+      qcom-soc:                ${enable_plugin_qcom_soc}
       quectel:                 ${enable_plugin_quectel}
       samsung:                 ${enable_plugin_samsung}
       sierra legacy:           ${enable_plugin_sierra_legacy}

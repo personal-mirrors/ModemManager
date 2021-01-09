@@ -87,6 +87,14 @@ typedef enum {
     PROCESS_NOTIFICATION_FLAG_PROVISIONED_CONTEXTS = 1 << 9,
 } ProcessNotificationFlag;
 
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+enum {
+    PROP_0,
+    PROP_QMI_UNSUPPORTED,
+    PROP_LAST
+};
+#endif
+
 struct _MMBroadbandModemMbimPrivate {
     /* Queried and cached capabilities */
     MbimCellularClass caps_cellular_class;
@@ -129,6 +137,7 @@ struct _MMBroadbandModemMbimPrivate {
     gulong mbim_device_removed_id;
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+    gboolean qmi_unsupported;
     /* Flag when QMI-based capability/mode switching is in use */
     gboolean qmi_capability_and_mode_switching;
 #endif
@@ -144,7 +153,7 @@ peek_device (gpointer self,
 {
     MMPortMbim *port;
 
-    port = mm_base_modem_peek_port_mbim (MM_BASE_MODEM (self));
+    port = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
     if (!port) {
         g_task_report_new_error (self,
                                  callback,
@@ -173,7 +182,7 @@ shared_qmi_peek_client (MMSharedQmi    *self,
 
     g_assert (flag == MM_PORT_QMI_FLAG_DEFAULT);
 
-    port = mm_base_modem_peek_port_mbim (MM_BASE_MODEM (self));
+    port = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
     if (!port) {
         g_set_error (error,
                      MM_CORE_ERROR,
@@ -202,6 +211,130 @@ shared_qmi_peek_client (MMSharedQmi    *self,
 }
 
 #endif
+
+/*****************************************************************************/
+
+MMPortMbim *
+mm_broadband_modem_mbim_get_port_mbim (MMBroadbandModemMbim *self)
+{
+    MMPortMbim *primary_mbim_port;
+
+    g_assert (MM_IS_BROADBAND_MODEM_MBIM (self));
+
+    primary_mbim_port = mm_broadband_modem_mbim_peek_port_mbim (self);
+    return (primary_mbim_port ?
+            MM_PORT_MBIM (g_object_ref (primary_mbim_port)) :
+            NULL);
+}
+
+MMPortMbim *
+mm_broadband_modem_mbim_peek_port_mbim (MMBroadbandModemMbim *self)
+{
+    MMPortMbim *primary_mbim_port = NULL;
+    GList      *mbim_ports;
+
+    g_assert (MM_IS_BROADBAND_MODEM_MBIM (self));
+
+    mbim_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
+                                           MM_PORT_SUBSYS_UNKNOWN,
+                                           MM_PORT_TYPE_MBIM,
+                                           NULL);
+
+    /* First MBIM port in the list is the primary one always */
+    if (mbim_ports)
+        primary_mbim_port = MM_PORT_MBIM (mbim_ports->data);
+
+    g_list_free_full (mbim_ports, g_object_unref);
+
+    return primary_mbim_port;
+}
+
+MMPortMbim *
+mm_broadband_modem_mbim_get_port_mbim_for_data (MMBroadbandModemMbim  *self,
+                                                MMPort                *data,
+                                                GError               **error)
+{
+    MMPortMbim *mbim_port;
+
+    g_assert (MM_IS_BROADBAND_MODEM_MBIM (self));
+
+    mbim_port = mm_broadband_modem_mbim_peek_port_mbim_for_data (self, data, error);
+    return (mbim_port ?
+            MM_PORT_MBIM (g_object_ref (mbim_port)) :
+            NULL);
+}
+
+static MMPortMbim *
+peek_port_mbim_for_data (MMBroadbandModemMbim  *self,
+                         MMPort                *data,
+                         GError               **error)
+{
+    GList       *cdc_wdm_mbim_ports;
+    GList       *l;
+    const gchar *net_port_parent_path;
+    MMPortMbim  *found = NULL;
+    const gchar *net_port_driver;
+
+    g_assert (MM_IS_BROADBAND_MODEM_MBIM (self));
+    g_assert (mm_port_get_subsys (data) == MM_PORT_SUBSYS_NET);
+
+    net_port_driver = mm_kernel_device_get_driver (mm_port_peek_kernel_device (data));
+    if (g_strcmp0 (net_port_driver, "cdc_mbim") != 0) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Unsupported MBIM kernel driver for 'net/%s': %s",
+                     mm_port_get_device (data),
+                     net_port_driver);
+        return NULL;
+    }
+
+    net_port_parent_path = mm_kernel_device_get_interface_sysfs_path (mm_port_peek_kernel_device (data));
+    if (!net_port_parent_path) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "No parent path for 'net/%s'",
+                     mm_port_get_device (data));
+        return NULL;
+    }
+
+    /* Find the CDC-WDM port on the same USB interface as the given net port */
+    cdc_wdm_mbim_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
+                                                   MM_PORT_SUBSYS_USBMISC,
+                                                   MM_PORT_TYPE_MBIM,
+                                                   NULL);
+
+    for (l = cdc_wdm_mbim_ports; l && !found; l = g_list_next (l)) {
+        const gchar *wdm_port_parent_path;
+
+        g_assert (MM_IS_PORT_MBIM (l->data));
+        wdm_port_parent_path = mm_kernel_device_get_interface_sysfs_path (mm_port_peek_kernel_device (MM_PORT (l->data)));
+        if (wdm_port_parent_path && g_str_equal (wdm_port_parent_path, net_port_parent_path))
+            found = MM_PORT_MBIM (l->data);
+    }
+
+    g_list_free_full (cdc_wdm_mbim_ports, g_object_unref);
+
+    if (!found)
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_NOT_FOUND,
+                     "Couldn't find associated MBIM port for 'net/%s'",
+                     mm_port_get_device (data));
+
+    return found;
+}
+
+MMPortMbim *
+mm_broadband_modem_mbim_peek_port_mbim_for_data (MMBroadbandModemMbim  *self,
+                                                 MMPort                *data,
+                                                 GError               **error)
+{
+    g_assert (MM_BROADBAND_MODEM_MBIM_GET_CLASS (self)->peek_port_mbim_for_data);
+
+    return MM_BROADBAND_MODEM_MBIM_GET_CLASS (self)->peek_port_mbim_for_data (self, data, error);
+}
 
 /*****************************************************************************/
 /* Current capabilities (Modem interface) */
@@ -516,7 +649,7 @@ modem_load_manufacturer (MMIfaceModem *self,
     gchar *manufacturer = NULL;
     MMPortMbim *port;
 
-    port = mm_base_modem_peek_port_mbim (MM_BASE_MODEM (self));
+    port = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
     if (port) {
         manufacturer = g_strdup (mm_kernel_device_get_physdev_manufacturer (
             mm_port_peek_kernel_device (MM_PORT (port))));
@@ -550,7 +683,7 @@ modem_load_model (MMIfaceModem *self,
     GTask *task;
     MMPortMbim *port;
 
-    port = mm_base_modem_peek_port_mbim (MM_BASE_MODEM (self));
+    port = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
     if (port) {
         model = g_strdup (mm_kernel_device_get_physdev_product (
             mm_port_peek_kernel_device (MM_PORT (port))));
@@ -2306,9 +2439,12 @@ initialization_started (MMBroadbandModem    *self,
 {
     InitializationStartedContext *ctx;
     GTask                        *task;
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+    gboolean                      qmi_unsupported = FALSE;
+#endif
 
     ctx = g_slice_new0 (InitializationStartedContext);
-    ctx->mbim = mm_base_modem_get_port_mbim (MM_BASE_MODEM (self));
+    ctx->mbim = mm_broadband_modem_mbim_get_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
 
     task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, (GDestroyNotify)initialization_started_context_free);
@@ -2331,10 +2467,16 @@ initialization_started (MMBroadbandModem    *self,
         return;
     }
 
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+    g_object_get (self,
+                  MM_BROADBAND_MODEM_MBIM_QMI_UNSUPPORTED, &qmi_unsupported,
+                  NULL);
+#endif
+
     /* Now open our MBIM port */
     mm_port_mbim_open (ctx->mbim,
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
-                       TRUE, /* With QMI over MBIM support if available */
+                       ! qmi_unsupported, /* With QMI over MBIM support if available */
 #endif
                        NULL,
                        (GAsyncReadyCallback)mbim_port_open_ready,
@@ -3299,7 +3441,7 @@ sms_notification_read_stored_sms (MMBroadbandModemMbim *self,
     MbimDevice *device;
     MbimMessage *message;
 
-    port = mm_base_modem_peek_port_mbim (MM_BASE_MODEM (self));
+    port = mm_broadband_modem_mbim_peek_port_mbim (self);
     if (!port)
         return;
     device = mm_port_mbim_peek_device (port);
@@ -3495,6 +3637,9 @@ device_notification_cb (MbimDevice *device,
     case MBIM_SERVICE_QMI:
     case MBIM_SERVICE_ATDS:
     case MBIM_SERVICE_INTEL_FIRMWARE_UPDATE:
+#if MBIM_CHECK_VERSION (1,25,1)
+    case MBIM_SERVICE_MS_SAR:
+#endif
     default:
         /* Ignore */
         break;
@@ -4785,8 +4930,8 @@ ussd_decode (guint32      scheme,
     gchar *decoded = NULL;
 
     if (scheme == MM_MODEM_GSM_USSD_SCHEME_7BIT) {
-        guint8  *unpacked;
-        guint32  unpacked_len;
+        g_autofree guint8  *unpacked = NULL;
+        guint32             unpacked_len;
 
         unpacked = mm_charset_gsm_unpack ((const guint8 *)data->data, (data->len * 8) / 7, 0, &unpacked_len);
         decoded = (gchar *) mm_charset_gsm_unpacked_to_utf8 (unpacked, unpacked_len);
@@ -5500,6 +5645,44 @@ messaging_create_sms (MMIfaceModemMessaging *self)
 
 /*****************************************************************************/
 
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+static void
+set_property (GObject *object,
+              guint prop_id,
+              const GValue *value,
+              GParamSpec *pspec)
+{
+    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (object);
+
+    switch (prop_id) {
+   case PROP_QMI_UNSUPPORTED:
+        self->priv->qmi_unsupported = g_value_get_boolean (value);
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+        break;
+    }
+}
+
+static void
+get_property (GObject *object,
+              guint prop_id,
+              GValue *value,
+              GParamSpec *pspec)
+{
+    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (object);
+
+    switch (prop_id) {
+    case PROP_QMI_UNSUPPORTED:
+        g_value_set_boolean (value, self->priv->qmi_unsupported);
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+        break;
+    }
+}
+#endif
+
 MMBroadbandModemMbim *
 mm_broadband_modem_mbim_new (const gchar *device,
                              const gchar **drivers,
@@ -5537,7 +5720,7 @@ dispose (GObject *object)
     /* If any port cleanup is needed, it must be done during dispose(), as
      * the modem object will be affected by an explciit g_object_run_dispose()
      * that will remove all port references right away */
-    mbim = mm_base_modem_peek_port_mbim (MM_BASE_MODEM (self));
+    mbim = mm_broadband_modem_mbim_peek_port_mbim (self);
     if (mbim) {
         /* Explicitly remove notification handler */
         self->priv->setup_flags = PROCESS_NOTIFICATION_FLAG_NONE;
@@ -5829,6 +6012,12 @@ mm_broadband_modem_mbim_class_init (MMBroadbandModemMbimClass *klass)
 
     g_type_class_add_private (object_class, sizeof (MMBroadbandModemMbimPrivate));
 
+    klass->peek_port_mbim_for_data = peek_port_mbim_for_data;
+
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+    object_class->set_property = set_property;
+    object_class->get_property = get_property;
+#endif
     object_class->dispose = dispose;
     object_class->finalize = finalize;
 
@@ -5839,4 +6028,13 @@ mm_broadband_modem_mbim_class_init (MMBroadbandModemMbimClass *klass)
     /* Do not initialize the MBIM modem through AT commands */
     broadband_modem_class->enabling_modem_init = NULL;
     broadband_modem_class->enabling_modem_init_finish = NULL;
+
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+    g_object_class_install_property (object_class, PROP_QMI_UNSUPPORTED,
+        g_param_spec_boolean (MM_BROADBAND_MODEM_MBIM_QMI_UNSUPPORTED,
+                              "QMI over MBIM unsupported",
+                              "TRUE when QMI over MBIM should not be considered.",
+                              FALSE,
+                              G_PARAM_READWRITE));
+#endif
 }

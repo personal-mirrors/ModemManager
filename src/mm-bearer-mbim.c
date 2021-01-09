@@ -68,7 +68,7 @@ peek_ports (gpointer self,
     if (o_device) {
         MMPortMbim *port;
 
-        port = mm_base_modem_peek_port_mbim (modem);
+        port = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (modem));
         if (!port) {
             g_task_report_new_error (self,
                                      callback,
@@ -948,7 +948,7 @@ connect_context_step (GTask *task)
 
         mbim_device_command (ctx->device,
                              message,
-                             60,
+                             MM_BASE_BEARER_DEFAULT_DISCONNECTION_TIMEOUT,
                              NULL,
                              (GAsyncReadyCallback)ensure_disconnected_ready,
                              task);
@@ -1022,7 +1022,7 @@ connect_context_step (GTask *task)
 
         mbim_device_command (ctx->device,
                              message,
-                             60,
+                             MM_BASE_BEARER_DEFAULT_CONNECTION_TIMEOUT,
                              NULL,
                              (GAsyncReadyCallback)connect_set_ready,
                              task);
@@ -1318,7 +1318,7 @@ disconnect_context_step (GTask *task)
 
         mbim_device_command (ctx->device,
                              message,
-                             60,
+                             MM_BASE_BEARER_DEFAULT_DISCONNECTION_TIMEOUT,
                              NULL,
                              (GAsyncReadyCallback)disconnect_set_ready,
                              task);
