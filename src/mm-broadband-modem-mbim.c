@@ -4509,10 +4509,10 @@ provisioned_contexts_ready (MbimDevice   *device,
                             GAsyncResult *res,
                             GTask        *task)
 {
-    MbimMessage                    *response;
-    MbimProvisionedContextElement **provisioned_contexts;
-    guint32                         n_provisioned_contexts;
-    GError                         *error = NULL;
+    g_autoptr(MbimMessage)                         response = NULL;
+    g_autoptr(MbimProvisionedContextElementArray)  provisioned_contexts = NULL;
+    guint32                                        n_provisioned_contexts;
+    GError                                        *error = NULL;
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
@@ -4526,17 +4526,12 @@ provisioned_contexts_ready (MbimDevice   *device,
         profiles = mm_3gpp_profile_list_from_mbim_provisioned_contexts (
             (const MbimProvisionedContextElement *const *)provisioned_contexts,
             n_provisioned_contexts);
-        mbim_provisioned_context_element_array_free (provisioned_contexts);
-
         g_task_set_task_data (task, profiles, (GDestroyNotify)mm_3gpp_profile_list_free);
         g_task_return_boolean (task, TRUE);
     } else
         g_task_return_error (task, error);
 
     g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
 }
 
 static void
@@ -4544,9 +4539,9 @@ modem_3gpp_load_profiles (MMIfaceModem3gpp    *self,
                           GAsyncReadyCallback  callback,
                           gpointer             user_data)
 {
-    MbimDevice  *device;
-    MbimMessage *message;
-    GTask       *task;
+    g_autoptr(MbimMessage)  message = NULL;
+    MbimDevice             *device;
+    GTask                  *task;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
@@ -4561,7 +4556,6 @@ modem_3gpp_load_profiles (MMIfaceModem3gpp    *self,
                          NULL,
                          (GAsyncReadyCallback)provisioned_contexts_ready,
                          task);
-    mbim_message_unref (message);
 }
 
 /*****************************************************************************/
