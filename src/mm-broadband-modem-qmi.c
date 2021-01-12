@@ -2583,15 +2583,18 @@ typedef struct {
     QmiClientWds *client;
     guint         i;
     GArray       *profile_ids;
-    GList        *profiles;
+    GList        *wds_profiles;
+    GList        *mm_profiles;
 } GetProfileListContext;
 
 static void
 get_profile_list_context_free (GetProfileListContext *ctx)
 {
     g_object_unref (ctx->client);
-    g_array_unref (ctx->profile_ids);
-    g_list_free_full (ctx->profiles, (GDestroyNotify) qmi_message_wds_get_profile_settings_output_unref);
+    if (ctx->profile_ids)
+        g_array_unref (ctx->profile_ids);
+    g_list_free_full (ctx->wds_profiles, (GDestroyNotify) qmi_message_wds_get_profile_settings_output_unref);
+    mm_3gpp_profile_list_free (ctx->mm_profiles);
     g_slice_free (GetProfileListContext, ctx);
 }
 
@@ -2601,14 +2604,16 @@ modem_3gpp_load_profiles_finish (MMIfaceModem3gpp  *self,
                                  GList            **out_list,
                                  GError           **error)
 {
-    GTask *task;
+    GTask                 *task;
+    GetProfileListContext *ctx;
 
     task = G_TASK (res);
     if (!g_task_propagate_boolean (task, error))
         return FALSE;
 
+    ctx = g_task_get_task_data (task);
     if (out_list)
-        *out_list = mm_3gpp_profile_list_copy (g_task_get_task_data (task));
+        *out_list = g_steal_pointer (&ctx->mm_profiles);
     return TRUE;
 }
 
@@ -2619,9 +2624,9 @@ get_profile_settings_ready (QmiClientWds *client,
                             GAsyncResult *res,
                             GTask        *task)
 {
-    GetProfileListContext                 *ctx;
-    QmiMessageWdsGetProfileSettingsOutput *output;
-    GError                                *error = NULL;
+    g_autoptr(QmiMessageWdsGetProfileSettingsOutput)  output = NULL;
+    GetProfileListContext                            *ctx;
+    GError                                           *error = NULL;
 
     ctx = g_task_get_task_data (task);
 
@@ -2635,29 +2640,16 @@ get_profile_settings_ready (QmiClientWds *client,
     if (!qmi_message_wds_get_profile_settings_output_get_result (output, &error)) {
         QmiWdsDsProfileError ds_profile_error;
 
-        if (g_error_matches (error,
-                             QMI_PROTOCOL_ERROR,
-                             QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL) &&
-            qmi_message_wds_get_profile_settings_output_get_extended_error_code (
-                output,
-                &ds_profile_error,
-                NULL)) {
-            g_task_return_new_error (task,
-                                     QMI_PROTOCOL_ERROR,
-                                     QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL,
-                                     "DS profile error: %s\n",
-                                     qmi_wds_ds_profile_error_get_string (ds_profile_error));
-            g_error_free (error);
-        } else {
-            g_task_return_error (task, error);
-        }
+        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL) &&
+            qmi_message_wds_get_profile_settings_output_get_extended_error_code (output, &ds_profile_error, NULL))
+            g_prefix_error (&error, "DS profile error: %s: ", qmi_wds_ds_profile_error_get_string (ds_profile_error));
 
-        qmi_message_wds_get_profile_settings_output_unref (output);
+        g_task_return_error (task, error);
         g_object_unref (task);
         return;
     }
 
-    ctx->profiles = g_list_prepend (ctx->profiles, output);
+    ctx->wds_profiles = g_list_prepend (ctx->wds_profiles, g_steal_pointer (&output));
     ctx->i++;
     get_next_profile_settings (task);
 }
@@ -2665,16 +2657,15 @@ get_profile_settings_ready (QmiClientWds *client,
 static void
 get_next_profile_settings (GTask *task)
 {
+    g_autoptr(QmiMessageWdsGetProfileSettingsInput)      input = NULL;
     QmiMessageWdsGetProfileListOutputProfileListProfile *profile;
-    QmiMessageWdsGetProfileSettingsInput                *input;
     GetProfileListContext                               *ctx;
 
     ctx = g_task_get_task_data (task);
 
     if (ctx->i == ctx->profile_ids->len) {
-        g_task_set_task_data (task,
-                              mm_3gpp_profile_list_from_qmi_profile_settings (ctx->profiles),
-                              (GDestroyNotify) mm_3gpp_profile_list_free);
+        /* Build MM profile list before returning success */
+        ctx->mm_profiles = mm_3gpp_profile_list_from_qmi_profile_settings (ctx->wds_profiles);
         g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
@@ -2694,7 +2685,6 @@ get_next_profile_settings (GTask *task)
                                          NULL,
                                          (GAsyncReadyCallback)get_profile_settings_ready,
                                          task);
-    qmi_message_wds_get_profile_settings_input_unref (input);
 }
 
 static void
@@ -2702,10 +2692,9 @@ get_profile_list_ready (QmiClientWds *client,
                         GAsyncResult *res,
                         GTask        *task)
 {
-    GError                            *error = NULL;
-    QmiMessageWdsGetProfileListOutput *output;
-    GetProfileListContext             *ctx;
-    GArray                            *profile_ids = NULL;
+    g_autoptr(QmiMessageWdsGetProfileListOutput)  output = NULL;
+    GError                                       *error = NULL;
+    GetProfileListContext                        *ctx;
 
     ctx = g_task_get_task_data (task);
 
@@ -2719,66 +2708,44 @@ get_profile_list_ready (QmiClientWds *client,
     if (!qmi_message_wds_get_profile_list_output_get_result (output, &error)) {
         QmiWdsDsProfileError ds_profile_error;
 
-        if (g_error_matches (error,
-                             QMI_PROTOCOL_ERROR,
-                             QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL) &&
-            qmi_message_wds_get_profile_list_output_get_extended_error_code (
-                output,
-                &ds_profile_error,
-                NULL)) {
-            g_task_return_new_error (task,
-                                     QMI_PROTOCOL_ERROR,
-                                     QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL,
-                                     "DS profile error: %s\n",
-                                     qmi_wds_ds_profile_error_get_string (ds_profile_error));
-            g_error_free (error);
-        } else {
-            g_task_return_error (task, error);
-        }
+        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL) &&
+            qmi_message_wds_get_profile_list_output_get_extended_error_code (output, &ds_profile_error, NULL))
+            g_prefix_error (&error, "DS profile error: %s: ", qmi_wds_ds_profile_error_get_string (ds_profile_error));
 
-        qmi_message_wds_get_profile_list_output_unref (output);
+        g_task_return_error (task, error);
         g_object_unref (task);
         return;
     }
 
-    qmi_message_wds_get_profile_list_output_get_profile_list (output, &profile_ids, NULL);
-
-    if (!profile_ids || !profile_ids->len) {
-        /* No profiles to get details for. */
-        g_task_return_pointer (task, NULL, NULL);
+    qmi_message_wds_get_profile_list_output_get_profile_list (output, &ctx->profile_ids, NULL);
+    if (!ctx->profile_ids || !ctx->profile_ids->len) {
+        /* No profiles reported, empty list */
+        g_task_return_boolean (task, TRUE);
         g_object_unref (task);
         return;
     }
-
-    ctx->profile_ids = profile_ids;
 
     get_next_profile_settings (task);
 }
 
 static void
-modem_3gpp_load_profiles (MMIfaceModem3gpp    *_self,
+modem_3gpp_load_profiles (MMIfaceModem3gpp    *self,
                           GAsyncReadyCallback  callback,
                           gpointer             user_data)
 {
-    MMBroadbandModemQmi              *self = MM_BROADBAND_MODEM_QMI (_self);
-    GTask                            *task;
-    QmiClient                        *client;
-    GetProfileListContext            *ctx;
-    QmiMessageWdsGetProfileListInput *input;
-    GError                           *error = NULL;
+    QmiClient                                  *client;
+    GTask                                      *task;
+    GetProfileListContext                      *ctx;
+    g_autoptr(QmiMessageWdsGetProfileListInput) input = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_WMS, &client,
+                                      callback, user_data))
+        return;
 
     task = g_task_new (self, NULL, callback, user_data);
-    client = mm_shared_qmi_peek_client (MM_SHARED_QMI (self),
-                                        QMI_SERVICE_WDS,
-                                        MM_PORT_QMI_FLAG_DEFAULT,
-                                        &error);
-    if (!client) {
-        g_task_return_error (task, error);
-        g_object_unref (task);
-    }
-
     ctx = g_slice_new0 (GetProfileListContext);
-    ctx->client = g_object_ref (QMI_CLIENT_WDS (client));
+    ctx->client = QMI_CLIENT_WDS (g_object_ref (client));
     g_task_set_task_data (task, ctx, (GDestroyNotify) get_profile_list_context_free);
 
     input = qmi_message_wds_get_profile_list_input_new ();
@@ -2790,7 +2757,6 @@ modem_3gpp_load_profiles (MMIfaceModem3gpp    *_self,
                                      NULL,
                                      (GAsyncReadyCallback) get_profile_list_ready,
                                      NULL);
-    qmi_message_wds_get_profile_list_input_unref (input);
 }
 
 /*****************************************************************************/
