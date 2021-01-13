@@ -4545,9 +4545,9 @@ modem_3gpp_load_profiles_finish (MMIfaceModem3gpp  *self,
 }
 
 static void
-provisioned_contexts_ready (MbimDevice   *device,
-                            GAsyncResult *res,
-                            GTask        *task)
+load_provisioned_contexts_ready (MbimDevice   *device,
+                                 GAsyncResult *res,
+                                 GTask        *task)
 {
     g_autoptr(MbimMessage)                         response = NULL;
     g_autoptr(MbimProvisionedContextElementArray)  provisioned_contexts = NULL;
@@ -4594,7 +4594,7 @@ modem_3gpp_load_profiles (MMIfaceModem3gpp    *self,
                          message,
                          300,
                          NULL,
-                         (GAsyncReadyCallback)provisioned_contexts_ready,
+                         (GAsyncReadyCallback)load_provisioned_contexts_ready,
                          task);
 }
 
@@ -4602,22 +4602,38 @@ modem_3gpp_load_profiles (MMIfaceModem3gpp    *self,
 /* Create profile (3GPP interface) */
 
 static gboolean
-modem_3gpp_create_profile_finish (MMIfaceModem3gpp *self,
-                                  GAsyncResult *res,
-                                  GError **error)
+modem_3gpp_create_profile_finish (MMIfaceModem3gpp  *self,
+                                  GAsyncResult      *res,
+                                  GError           **error)
 {
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
-modem_3gpp_create_profile (MMIfaceModem3gpp *self,
-                           MM3gppProfile *profile,
-                           GAsyncReadyCallback callback,
-                           gpointer user_data)
+create_provisioned_context_ready (MbimDevice   *device,
+                                  GAsyncResult *res,
+                                  GTask        *task)
 {
-    MbimDevice *device;
-    MbimMessage *message;
-    GTask *task;
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                 *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response && mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error))
+        g_task_return_boolean (task, TRUE);
+    else
+        g_task_return_error (task, error);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_create_profile (MMIfaceModem3gpp    *self,
+                           MM3gppProfile       *profile,
+                           GAsyncReadyCallback  callback,
+                           gpointer             user_data)
+{
+    g_autoptr(MbimMessage)  message = NULL;
+    MbimDevice             *device;
+    GTask                  *task;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
@@ -4641,9 +4657,8 @@ modem_3gpp_create_profile (MMIfaceModem3gpp *self,
                          message,
                          300,
                          NULL,
-                         (GAsyncReadyCallback)provisioned_contexts_ready,
+                         (GAsyncReadyCallback)create_provisioned_context_ready,
                          task);
-    mbim_message_unref (message);
 }
 
 /*****************************************************************************/
