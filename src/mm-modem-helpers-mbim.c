@@ -199,9 +199,8 @@ mm_3gpp_network_info_list_from_mbim_providers (const MbimProvider *const *provid
 /*****************************************************************************/
 
 GList *
-mm_3gpp_profile_list_from_mbim_provisioned_contexts (
-    const MbimProvisionedContextElement *const *contexts,
-    guint n_contexts)
+mm_3gpp_profile_list_from_mbim_provisioned_contexts (const MbimProvisionedContextElement *const *contexts,
+                                                     guint                                       n_contexts)
 {
     GList *profiles = NULL;
     guint i;
@@ -209,13 +208,12 @@ mm_3gpp_profile_list_from_mbim_provisioned_contexts (
     for (i = 0; i < n_contexts; i++) {
         MM3gppProfile *profile;
 
-        profile = g_slice_new0 (MM3gppProfile);
-        profile->profile_id = contexts[i]->context_id;
-        profile->apn = g_strdup (contexts[i]->access_string);
-        profile->username = g_strdup (contexts[i]->user_name);
-        profile->password = g_strdup (contexts[i]->password);
-        profile->auth_type =
-            mm_bearer_allowed_auth_from_mbim_auth_protocol (contexts[i]->auth_protocol);
+        profile = mm_3gpp_profile_new ();
+        mm_3gpp_profile_set_id (profile, contexts[i]->context_id);
+        mm_3gpp_profile_set_apn (profile, contexts[i]->access_string);
+        mm_3gpp_profile_set_user (profile, contexts[i]->user_name);
+        mm_3gpp_profile_set_password (profile, contexts[i]->password);
+        mm_3gpp_profile_set_allowed_auth (profile, mm_bearer_allowed_auth_from_mbim_auth_protocol (contexts[i]->auth_protocol));
 
         profiles = g_list_prepend (profiles, profile);
     }

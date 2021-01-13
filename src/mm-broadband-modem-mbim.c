@@ -4527,20 +4527,34 @@ modem_3gpp_scan_networks (MMIfaceModem3gpp *self,
 /*****************************************************************************/
 /* Load profiles (3GPP interface) */
 
+typedef struct {
+    GList *profiles;
+} LoadProfilesContext;
+
+static void
+load_profiles_context_free (LoadProfilesContext *ctx)
+{
+    g_list_free_full (ctx->profiles, (GDestroyNotify) g_object_unref);
+    g_slice_free (LoadProfilesContext, ctx);
+}
+
 static gboolean
 modem_3gpp_load_profiles_finish (MMIfaceModem3gpp  *self,
                                  GAsyncResult      *res,
                                  GList            **out_list,
                                  GError           **error)
 {
-    GTask *task;
+    GTask *task = G_TASK (res);
 
-    task = G_TASK (res);
     if (!g_task_propagate_boolean (task, error))
         return FALSE;
 
-    if (out_list)
-        *out_list = mm_3gpp_profile_list_copy (g_task_get_task_data (task));
+    if (out_list) {
+        LoadProfilesContext *ctx;
+
+        ctx = g_task_get_task_data (task);
+        *out_list = g_steal_pointer (&ctx->profiles);
+    }
     return TRUE;
 }
 
@@ -4553,6 +4567,9 @@ load_provisioned_contexts_ready (MbimDevice   *device,
     g_autoptr(MbimProvisionedContextElementArray)  provisioned_contexts = NULL;
     guint32                                        n_provisioned_contexts;
     GError                                        *error = NULL;
+    LoadProfilesContext                           *ctx;
+
+    ctx = g_task_get_task_data (task);
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
@@ -4561,12 +4578,9 @@ load_provisioned_contexts_ready (MbimDevice   *device,
                                                           &n_provisioned_contexts,
                                                           &provisioned_contexts,
                                                           &error)) {
-        GList *profiles;
-
-        profiles = mm_3gpp_profile_list_from_mbim_provisioned_contexts (
-            (const MbimProvisionedContextElement *const *)provisioned_contexts,
-            n_provisioned_contexts);
-        g_task_set_task_data (task, profiles, (GDestroyNotify)mm_3gpp_profile_list_free);
+        ctx->profiles = mm_3gpp_profile_list_from_mbim_provisioned_contexts (
+                            (const MbimProvisionedContextElement *const *)provisioned_contexts,
+                            n_provisioned_contexts);
         g_task_return_boolean (task, TRUE);
     } else
         g_task_return_error (task, error);
@@ -4582,11 +4596,14 @@ modem_3gpp_load_profiles (MMIfaceModem3gpp    *self,
     g_autoptr(MbimMessage)  message = NULL;
     MbimDevice             *device;
     GTask                  *task;
+    LoadProfilesContext    *ctx;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
 
     task = g_task_new (self, NULL, callback, user_data);
+    ctx = g_slice_new0 (LoadProfilesContext);
+    g_task_set_task_data (task, ctx, (GDestroyNotify) load_profiles_context_free);
 
     mm_obj_dbg (self, "loading provisioned contexts...");
     message = mbim_message_provisioned_contexts_query_new (NULL);
@@ -4634,6 +4651,10 @@ modem_3gpp_create_profile (MMIfaceModem3gpp    *self,
     g_autoptr(MbimMessage)  message = NULL;
     MbimDevice             *device;
     GTask                  *task;
+    gint                    profile_id;
+    const gchar            *apn;
+    const gchar            *user;
+    const gchar            *password;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
@@ -4641,18 +4662,21 @@ modem_3gpp_create_profile (MMIfaceModem3gpp    *self,
     task = g_task_new (self, NULL, callback, user_data);
 
     mm_obj_dbg (self, "creating provisioned context...");
-    message = mbim_message_provisioned_contexts_set_new (
-        (gint)profile->profile_id == MM_3GPP_PROFILE_DYNAMIC_ID ?
-            MBIM_PROVISIONED_CONTEXT_DYNAMIC_ID :
-            profile->profile_id,
-        mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
-        profile->apn,
-        profile->username,
-        profile->password,
-        MBIM_COMPRESSION_NONE,
-        mm_bearer_allowed_auth_to_mbim_auth_protocol (profile->auth_type, self, NULL),
-        MM_BROADBAND_MODEM_MBIM (self)->priv->current_operator_id,
-        NULL);
+
+    profile_id = mm_3gpp_profile_get_id       (profile);
+    apn        = mm_3gpp_profile_get_apn      (profile);
+    user       = mm_3gpp_profile_get_user     (profile);
+    password   = mm_3gpp_profile_get_password (profile);
+
+    message = mbim_message_provisioned_contexts_set_new ((profile_id == MM_3GPP_PROFILE_UNKNOWN ? MBIM_PROVISIONED_CONTEXT_DYNAMIC_ID : (guint) profile_id),
+                                                         mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
+                                                         apn ? apn : "",
+                                                         user ? user : "",
+                                                         password ? password : "",
+                                                         MBIM_COMPRESSION_NONE,
+                                                         mm_bearer_allowed_auth_to_mbim_auth_protocol (mm_3gpp_profile_get_allowed_auth (profile), self, NULL),
+                                                         MM_BROADBAND_MODEM_MBIM (self)->priv->current_operator_id,
+                                                         NULL);
     mbim_device_command (device,
                          message,
                          300,

@@ -1771,41 +1771,6 @@ mm_3gpp_parse_cgdcont_read_response (const gchar *reply,
     return list;
 }
 
-void
-mm_3gpp_profile_free (MM3gppProfile *profile)
-{
-    g_free (profile->apn);
-    g_free (profile->username);
-    g_free (profile->password);
-    g_slice_free (MM3gppProfile, profile);
-}
-
-void
-mm_3gpp_profile_list_free (GList *list)
-{
-    g_list_free_full (list, (GDestroyNotify) mm_3gpp_profile_free);
-}
-
-static MM3gppProfile *
-mm_3gpp_profile_copy (MM3gppProfile *profile)
-{
-    MM3gppProfile *copy;
-
-    copy = g_slice_new0 (MM3gppProfile);
-    copy->profile_id = profile->profile_id;
-    copy->apn = g_strdup (profile->apn);
-    copy->username = g_strdup (profile->username);
-    copy->password = g_strdup (profile->password);
-    copy->auth_type = profile->auth_type;
-    return copy;
-}
-
-GList *
-mm_3gpp_profile_list_copy (GList *list)
-{
-    return g_list_copy_deep (list, (GCopyFunc)mm_3gpp_profile_copy, NULL);
-}
-
 /*************************************************************************/
 
 static void

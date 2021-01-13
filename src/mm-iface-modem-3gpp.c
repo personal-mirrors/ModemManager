@@ -95,12 +95,6 @@ get_private (MMIfaceModem3gpp *self)
     return priv;
 }
 
-#define MM_3GPP_PROFILE_ID        "profile-id"
-#define MM_3GPP_PROFILE_APN       "apn"
-#define MM_3GPP_PROFILE_AUTH_TYPE "auth-type"
-#define MM_3GPP_PROFILE_USERNAME  "username"
-#define MM_3GPP_PROFILE_PASSWORD  "password"
-
 /*****************************************************************************/
 
 void
@@ -1205,9 +1199,8 @@ create_profile_auth_ready (MMBaseModem                *self,
                            GAsyncResult               *res,
                            HandleCreateProfileContext *ctx)
 {
-    MM3gppProfile *profile;
-    GVariantDict   properties;
-    GError        *error = NULL;
+    g_autoptr(MM3gppProfile)  profile = NULL;
+    GError                   *error = NULL;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
@@ -1225,17 +1218,15 @@ create_profile_auth_ready (MMBaseModem                *self,
         return;
     }
 
-    profile = g_slice_new0 (MM3gppProfile);
-
-    g_variant_dict_init (&properties, ctx->dictionary);
-    if (!g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_ID, "u", &profile->profile_id))
-      profile->profile_id = MM_3GPP_PROFILE_DYNAMIC_ID;
-    g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_APN, "s", &profile->apn);
-    g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_AUTH_TYPE, "u", &profile->auth_type);
-    g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_USERNAME, "s", &profile->username);
-    g_variant_dict_lookup (&properties, MM_3GPP_PROFILE_PASSWORD, "s", &profile->password);
-
-    g_variant_dict_clear (&properties);
+    profile = mm_3gpp_profile_new_from_dictionary (ctx->dictionary, &error);
+    if (!profile) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_INVALID_ARGS,
+                                               "Cannot create profile: invalid profile settings");
+        handle_create_profile_context_free (ctx);
+        return;
+    }
 
     MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->create_profile (
         MM_IFACE_MODEM_3GPP (self),
@@ -1937,47 +1928,13 @@ mm_iface_modem_3gpp_reload_initial_eps_bearer (MMIfaceModem3gpp *self)
 
 /*****************************************************************************/
 
-static GVariant *
-profiles_build_result (const GList *profiles)
-{
-    const GList *l;
-    GVariantBuilder builder;
-
-    g_variant_builder_init (&builder, G_VARIANT_TYPE ("aa{sv}"));
-
-    for (l = profiles; l; l = g_list_next (l)) {
-        const MM3gppProfile *profile = l->data;
-
-        g_variant_builder_open (&builder, G_VARIANT_TYPE ("a{sv}"));
-
-        g_variant_builder_add (&builder, "{sv}",
-                               MM_3GPP_PROFILE_ID, g_variant_new_uint32 (profile->profile_id));
-        if (profile->apn) {
-            g_variant_builder_add (&builder, "{sv}",
-                                   MM_3GPP_PROFILE_APN, g_variant_new_string (profile->apn));
-        } else {
-            g_variant_builder_add (&builder, "{sv}", MM_3GPP_PROFILE_APN, g_variant_new_string (""));
-        }
-        g_variant_builder_add (&builder, "{sv}",
-                               MM_3GPP_PROFILE_AUTH_TYPE, g_variant_new_uint32 (profile->auth_type));
-        if (profile->username)
-            g_variant_builder_add (&builder, "{sv}",
-                                   MM_3GPP_PROFILE_USERNAME, g_variant_new_string (profile->username));
-        if (profile->password)
-            g_variant_builder_add (&builder, "{sv}",
-                                   MM_3GPP_PROFILE_PASSWORD, g_variant_new_string (profile->password));
-        g_variant_builder_close (&builder);
-    }
-
-    return g_variant_ref_sink (g_variant_builder_end (&builder));
-}
-
 void
 mm_iface_modem_3gpp_update_profiles (MMIfaceModem3gpp *self,
-                                     const GList *profiles)
+                                     const GList      *profiles)
 {
     MmGdbusModem3gpp *skeleton = NULL;
-    GVariant *variant;
+    GVariantBuilder   builder;
+    const GList      *l;
 
     g_object_get (self,
                   MM_IFACE_MODEM_3GPP_DBUS_SKELETON, &skeleton,
@@ -1985,9 +1942,16 @@ mm_iface_modem_3gpp_update_profiles (MMIfaceModem3gpp *self,
     if (!skeleton)
         return;
 
-    variant = profiles_build_result (profiles);
-    mm_gdbus_modem3gpp_set_profiles (skeleton, variant);
-    g_variant_unref (variant);
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("aa{sv}"));
+    for (l = profiles; l; l = g_list_next (l)) {
+        GVariant *dict;
+
+        dict = mm_3gpp_profile_get_dictionary (MM_3GPP_PROFILE (l->data));
+        g_variant_builder_add_value (&builder, dict);
+        g_variant_unref (dict);
+    }
+
+    mm_gdbus_modem3gpp_set_profiles (skeleton, g_variant_builder_end (&builder));
     g_object_unref (skeleton);
 }
 
@@ -2381,7 +2345,7 @@ load_profiles_ready (MMIfaceModem3gpp *self,
     }
 
     mm_iface_modem_3gpp_update_profiles (self, profiles);
-    mm_3gpp_profile_list_free (profiles);
+    g_list_free_full (profiles, (GDestroyNotify) g_object_unref);
 
 out:
     /* Go on to next step */

@@ -2594,7 +2594,7 @@ get_profile_list_context_free (GetProfileListContext *ctx)
     if (ctx->profile_ids)
         g_array_unref (ctx->profile_ids);
     g_list_free_full (ctx->wds_profiles, (GDestroyNotify) qmi_message_wds_get_profile_settings_output_unref);
-    mm_3gpp_profile_list_free (ctx->mm_profiles);
+    g_list_free_full (ctx->mm_profiles, (GDestroyNotify) g_object_unref);
     g_slice_free (GetProfileListContext, ctx);
 }
 
