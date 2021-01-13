@@ -433,6 +433,42 @@ mm_modem_3gpp_dup_initial_eps_bearer_path (MMModem3gpp *self)
         mm_gdbus_modem3gpp_dup_initial_eps_bearer (MM_GDBUS_MODEM3GPP (self)));
 }
 
+/**
+ * mm_modem_3gpp_get_profiles:
+ * @self: A #MMModem3gpp.
+ *
+ * Get the list of #MM3gppProfile items configured in the module.
+ *
+ * Returns: (transfer full) (element-type ModemManager.3gppProfile): a list of #MM3gppProfile
+ * objects, or #NULL if @error is set. The returned value should be freed with
+ * g_list_free_full() using g_object_unref() as #GDestroyNotify function.
+ *
+ * Since: 1.18
+ */
+GList *
+mm_modem_3gpp_get_profiles (MMModem3gpp *self)
+{
+    GList *profile_list = NULL;
+    GVariant *container, *child;
+    GVariantIter iter;
+
+    g_return_val_if_fail (MM_IS_MODEM_3GPP (self), NULL);
+
+    container = mm_gdbus_modem3gpp_get_profiles (MM_GDBUS_MODEM3GPP (self));
+    g_return_val_if_fail (g_variant_is_of_type (container, G_VARIANT_TYPE ("aa{sv}")), NULL);
+
+    g_variant_iter_init (&iter, container);
+    while ((child = g_variant_iter_next_value (&iter))) {
+        MM3gppProfile *profile;
+
+        profile = mm_3gpp_profile_new_from_dictionary (child, NULL);
+        profile_list = g_list_append (profile_list, profile);
+        g_variant_unref (child);
+    }
+
+    return profile_list;
+}
+
 /*****************************************************************************/
 
 /**

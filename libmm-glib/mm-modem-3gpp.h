@@ -92,6 +92,8 @@ gchar       *mm_modem_3gpp_dup_initial_eps_bearer_path (MMModem3gpp *self);
 MMBearerProperties *mm_modem_3gpp_get_initial_eps_bearer_settings  (MMModem3gpp *self);
 MMBearerProperties *mm_modem_3gpp_peek_initial_eps_bearer_settings (MMModem3gpp *self);
 
+GList *mm_modem_3gpp_get_profiles (MMModem3gpp *self);
+
 void     mm_modem_3gpp_register        (MMModem3gpp *self,
                                         const gchar *network_id,
                                         GCancellable *cancellable,
