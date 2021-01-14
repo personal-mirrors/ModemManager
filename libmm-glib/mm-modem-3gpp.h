@@ -31,6 +31,7 @@
 #include <ModemManager.h>
 
 #include "mm-bearer.h"
+#include "mm-3gpp-profile.h"
 #include "mm-gdbus-modem.h"
 
 G_BEGIN_DECLS
@@ -173,6 +174,19 @@ gboolean mm_modem_3gpp_set_initial_eps_bearer_settings_sync   (MMModem3gpp      
                                                                MMBearerProperties   *config,
                                                                GCancellable         *cancellable,
                                                                GError              **error);
+
+void     mm_modem_3gpp_create_profile        (MMModem3gpp          *self,
+                                              MM3gppProfile        *profile,
+                                              GCancellable         *cancellable,
+                                              GAsyncReadyCallback   callback,
+                                              gpointer              user_data);
+gboolean mm_modem_3gpp_create_profile_finish (MMModem3gpp          *self,
+                                              GAsyncResult         *res,
+                                              GError              **error);
+gboolean mm_modem_3gpp_create_profile_sync   (MMModem3gpp          *self,
+                                              MM3gppProfile        *profile,
+                                              GCancellable         *cancellable,
+                                              GError              **error);
 
 #ifndef MM_DISABLE_DEPRECATED
 

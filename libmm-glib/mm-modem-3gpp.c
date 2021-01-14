@@ -1296,6 +1296,105 @@ mm_modem_3gpp_set_initial_eps_bearer_settings_sync (MMModem3gpp         *self,
 
 /*****************************************************************************/
 
+/**
+ * mm_modem_3gpp_create_profile_finish:
+ * @self: A #MMModem3gpp.
+ * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to
+ *  mm_modem_3gpp_create_profile().
+ * @error: Return location for error or %NULL.
+ *
+ * Finishes an operation started with
+ * mm_modem_3gpp_create_profile().
+ *
+ * Returns: %TRUE if the operation was successful, %FALSE if @error is set.
+ *
+ * Since: 1.18
+ */
+gboolean
+mm_modem_3gpp_create_profile_finish (MMModem3gpp   *self,
+                                     GAsyncResult  *res,
+                                     GError       **error)
+{
+    return mm_gdbus_modem3gpp_call_create_profile_finish (MM_GDBUS_MODEM3GPP (self), res, error);
+}
+
+/**
+ * mm_modem_3gpp_create_profile:
+ * @self: A #MMModem3gpp.
+ * @profile: A #MM3gppProfile object with the profile settings.
+ * @cancellable: (allow-none): A #GCancellable or %NULL.
+ * @callback: A #GAsyncReadyCallback to call when the request is satisfied or
+ *  %NULL.
+ * @user_data: User data to pass to @callback.
+ *
+ * Asynchronously creates a new profile from the given settings.
+ *
+ * If @profile contains an explicit profile ID to use (i.e. initialized
+ * with mm_3gpp_profile_set_id()), and a profile with the given ID already
+ * exists, the method will fail.
+ *
+ * When the operation is finished, @callback will be invoked in the
+ * <link linkend="g-main-context-push-thread-default">thread-default main loop</link>
+ * of the thread you are calling this method from. You can then call
+ * mm_modem_3gpp_create_profile_finish() to get the result of
+ * the operation.
+ *
+ * Since: 1.18
+ */
+void
+mm_modem_3gpp_create_profile (MMModem3gpp         *self,
+                              MM3gppProfile       *profile,
+                              GCancellable        *cancellable,
+                              GAsyncReadyCallback  callback,
+                              gpointer             user_data)
+{
+    g_autoptr(GVariant) dictionary = NULL;
+
+    dictionary = mm_3gpp_profile_get_dictionary (profile);
+    mm_gdbus_modem3gpp_call_create_profile (MM_GDBUS_MODEM3GPP (self),
+                                            dictionary,
+                                            cancellable,
+                                            callback,
+                                            user_data);
+}
+
+/**
+ * mm_modem_3gpp_create_profile_sync:
+ * @self: A #MMModem3gpp.
+ * @profile: A #MM3gppProfile object with the profile settings.
+ * @cancellable: (allow-none): A #GCancellable or %NULL.
+ * @error: Return location for error or %NULL.
+ *
+ * Synchronously creates a profile from the given settings.
+ *
+ * If @profile contains an explicit profile ID to use (i.e. initialized
+ * with mm_3gpp_profile_set_id()), and a profile with the given ID already
+ * exists, the method will fail.
+ *
+ * The calling thread is blocked until a reply is received. See
+ * mm_modem_3gpp_create_profile() for the asynchronous version of this method.
+ *
+ * Returns: %TRUE if the operation was successful, %FALSE if @error is set.
+ *
+ * Since: 1.18
+ */
+gboolean
+mm_modem_3gpp_create_profile_sync (MMModem3gpp    *self,
+                                   MM3gppProfile  *profile,
+                                   GCancellable   *cancellable,
+                                   GError        **error)
+{
+    g_autoptr(GVariant) dictionary = NULL;
+
+    dictionary = mm_3gpp_profile_get_dictionary (profile);
+    return mm_gdbus_modem3gpp_call_create_profile_sync (MM_GDBUS_MODEM3GPP (self),
+                                                        dictionary,
+                                                        cancellable,
+                                                        error);
+}
+
+/*****************************************************************************/
+
 static void
 mm_modem_3gpp_init (MMModem3gpp *self)
 {
