@@ -128,8 +128,10 @@
         CreateProfile:
         @properties: a dictionary (signature <literal>a{sv}</literal>) of profile properties.
 
-        Creates a connection profile on this modem. See #org.freedesktop.ModemManager1.Modem.Modem3gpp.Profiles:Profiles
+        Creates a connection profile on this modem. See #org.freedesktop.ModemManager1.Modem.Modem3gpp:Profiles
         for the list of valid profile properties.
+
+        If <literal>"profile-id"</literal> is given and a profile with the given ID already exists, the method will fail.
     -->
     <method name="CreateProfile">
       <arg name="properties" type="a{sv}" direction="in" />
@@ -278,8 +280,6 @@
         <varlistentry><term><literal>"password"</literal></term>
           <listitem><para>Password (if any) required by the network, given as a string value (signature <literal>"s"</literal>). Optional.</para></listitem></varlistentry>
         </variablelist>
-
-        This is a read-only property.
     -->
     <property name="Profiles" type="aa{sv}" access="read" />
 
