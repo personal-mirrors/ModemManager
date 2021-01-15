@@ -266,7 +266,7 @@
         A list of dictionaries whose entries are:
         <variablelist>
         <varlistentry><term><literal>"profile-id"</literal></term>
-          <listitem><para>Unique identifier for this profile (signature <literal>"u"</literal>).</para></listitem></varlistentry>
+          <listitem><para>Unique identifier for this profile (signature <literal>"i"</literal>).</para></listitem></varlistentry>
         <varlistentry><term><literal>"apn"</literal></term>
           <listitem><para>Access Point Name, given as a string value (signature <literal>"s"</literal>).</para></listitem></varlistentry>
         <varlistentry><term><literal>"auth-type"</literal></term>
