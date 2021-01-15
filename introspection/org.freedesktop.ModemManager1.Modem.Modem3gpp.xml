@@ -269,7 +269,7 @@
           <listitem><para>Unique identifier for this profile (signature <literal>"i"</literal>).</para></listitem></varlistentry>
         <varlistentry><term><literal>"apn"</literal></term>
           <listitem><para>Access Point Name, given as a string value (signature <literal>"s"</literal>).</para></listitem></varlistentry>
-        <varlistentry><term><literal>"auth-type"</literal></term>
+        <varlistentry><term><literal>"allowed-auth"</literal></term>
           <listitem><para>The authentication method to use, given as a <link linkend="MMBearerAllowedAuth">MMBearerAllowedAuth</link> value (signature <literal>"u"</literal>). Optional.</para></listitem></varlistentry>
         <varlistentry><term><literal>"user"</literal></term>
           <listitem><para>User name (if any) required by the network, given as a string value (signature <literal>"s"</literal>). Optional.</para></listitem></varlistentry>
