@@ -67,6 +67,7 @@ ctrl_port_info_free (CtrlPortInfo *info)
     g_free (info->subsystem);
     g_free (info->name);
     g_free (info->physdev_uid);
+    g_free (info);
 }
 
 /*****************************************************************************/
