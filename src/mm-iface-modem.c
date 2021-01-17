@@ -5116,9 +5116,10 @@ interface_initialization_step (GTask *task)
                      * number of mux ids. */
                     n = 255;
                 }
-            } else
+            }
 #endif
-            {
+
+            if (n == 0) {
                 /* The maximum number of available/connected modems is guessed
                  * from the size of the data ports list. */
                 n = g_list_length (
