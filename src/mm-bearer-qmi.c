@@ -1829,6 +1829,8 @@ _connect (MMBaseBearer *_self,
     ctx->sio_port = sio_port;
 #if QMI_QRTR_SUPPORTED
     ctx->mux_id = mux_id;
+#else
+    g_assert (mux_id == 0);
 #endif
     ctx->data = g_object_ref (data);
     ctx->step = CONNECT_STEP_FIRST;
