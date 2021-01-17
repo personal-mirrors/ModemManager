@@ -376,8 +376,8 @@ handle_qrtr_device_added (MMBaseManager    *self,
                           guint             node_id,
                           MMQrtrBusWatcher *bus_watcher)
 {
-    MMKernelDevice *kernel_device;
-    QrtrNode       *node;
+    g_autoptr(MMKernelDevice)  kernel_device = NULL;
+    QrtrNode                  *node;
 
     node = mm_qrtr_bus_watcher_peek_node (bus_watcher, node_id);
 
