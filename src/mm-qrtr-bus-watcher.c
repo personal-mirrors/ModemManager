@@ -237,7 +237,7 @@ mm_qrtr_bus_watcher_class_init (MMQrtrBusWatcherClass *klass)
     g_type_class_add_private (object_class, sizeof (MMQrtrBusWatcherPrivate));
 
     /* Virtual methods */
-    object_class->dispose = finalize;
+    object_class->finalize = finalize;
 
     /**
      * QrtrBusWatcher::qrtr-device-added:
