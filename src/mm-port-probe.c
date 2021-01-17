@@ -496,14 +496,9 @@ wdm_probe_qmi (MMPortProbe *self)
 
 #if defined WITH_QMI
     {
-        MMPortSubsys subsys = MM_PORT_SUBSYS_USBMISC;
-
+        /* Create a port and try to open it */
         mm_obj_dbg (self, "probing QMI...");
 
-        if (g_str_equal (mm_kernel_device_get_subsystem (self->priv->port), "rpmsg"))
-            subsys = MM_PORT_SUBSYS_RPMSG;
-
-        /* Create a port and try to open it */
 #if QMI_QRTR_SUPPORTED
         if (MM_IS_KERNEL_DEVICE_QRTR (self->priv->port)) {
             g_autoptr(QrtrNode) node = NULL;
@@ -512,12 +507,17 @@ wdm_probe_qmi (MMPortProbe *self)
                 MM_KERNEL_DEVICE_QRTR (self->priv->port));
 
             /* Will set MM_PORT_SUBSYS_QRTR when creating the mm-port */
-            ctx->port_qmi = mm_port_qmi_new_from_node (
-                mm_kernel_device_get_name (self->priv->port), node);
+            ctx->port_qmi = mm_port_qmi_new_from_node (mm_kernel_device_get_name (self->priv->port), node);
         } else
 #endif /* QMI_QRTR_SUPPORTED */
-            ctx->port_qmi = mm_port_qmi_new (
-                mm_kernel_device_get_name (self->priv->port), subsys);
+        {
+            MMPortSubsys subsys = MM_PORT_SUBSYS_USBMISC;
+
+            if (g_str_equal (mm_kernel_device_get_subsystem (self->priv->port), "rpmsg"))
+                subsys = MM_PORT_SUBSYS_RPMSG;
+
+            ctx->port_qmi = mm_port_qmi_new (mm_kernel_device_get_name (self->priv->port), subsys);
+        }
 
         mm_port_qmi_open (ctx->port_qmi,
                           FALSE,
