@@ -372,9 +372,9 @@ device_added (MMBaseManager  *self,
 #if defined WITH_QMI && QMI_QRTR_SUPPORTED
 
 static void
-handle_qrtr_device_added (MMQrtrBusWatcher *bus_watcher,
+handle_qrtr_device_added (MMBaseManager    *self,
                           guint             node_id,
-                          MMBaseManager    *self)
+                          MMQrtrBusWatcher *bus_watcher)
 {
     MMKernelDevice *kernel_device;
     QrtrNode       *node;
@@ -387,9 +387,8 @@ handle_qrtr_device_added (MMQrtrBusWatcher *bus_watcher,
 }
 
 static void
-handle_qrtr_device_removed (MMQrtrBusWatcher *bus_watcher,
-                            guint             node_id,
-                            MMBaseManager    *self)
+handle_qrtr_device_removed (MMBaseManager    *self,
+                            guint             node_id)
 {
     g_autofree gchar *qrtr_device_name = NULL;
 
@@ -1462,8 +1461,8 @@ initable_init (GInitable     *initable,
     /* If autoscan enabled, list for QrtrBusWatcher events */
     if (self->priv->auto_scan) {
         g_object_connect (self->priv->qrtr_bus_watcher,
-                          "signal::" MM_QRTR_BUS_WATCHER_DEVICE_ADDED, G_CALLBACK (handle_qrtr_device_added), self,
-                          "signal::" MM_QRTR_BUS_WATCHER_DEVICE_REMOVED, G_CALLBACK (handle_qrtr_device_removed), self,
+                          "swapped-signal::" MM_QRTR_BUS_WATCHER_DEVICE_ADDED,   G_CALLBACK (handle_qrtr_device_added),   self,
+                          "swapped-signal::" MM_QRTR_BUS_WATCHER_DEVICE_REMOVED, G_CALLBACK (handle_qrtr_device_removed), self,
                           NULL);
     }
 #endif
