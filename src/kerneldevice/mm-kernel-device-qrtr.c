@@ -21,12 +21,8 @@
 #include <ModemManager-tags.h>
 
 #include "mm-kernel-device-qrtr.h"
-#include "mm-log-object.h"
 
-static void log_object_iface_init (MMLogObjectInterface *iface);
-
-G_DEFINE_TYPE_EXTENDED (MMKernelDeviceQrtr, mm_kernel_device_qrtr,  MM_TYPE_KERNEL_DEVICE, 0,
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_LOG_OBJECT, log_object_iface_init))
+G_DEFINE_TYPE (MMKernelDeviceQrtr, mm_kernel_device_qrtr,  MM_TYPE_KERNEL_DEVICE)
 
 enum {
     PROP_0,
@@ -152,16 +148,6 @@ mm_kernel_device_qrtr_new (QrtrNode *qrtr_node)
 
 /*****************************************************************************/
 
-static gchar *
-log_object_build_id (MMLogObject *_self)
-{
-    MMKernelDeviceQrtr *self;
-
-    self = MM_KERNEL_DEVICE_QRTR (_self);
-    return g_strdup_printf ("nodeid%u",
-                            qrtr_node_id (self->priv->node));
-}
-
 static void
 mm_kernel_device_qrtr_init (MMKernelDeviceQrtr *self)
 {
@@ -226,12 +212,6 @@ dispose (GObject *object)
 }
 
 static void
-log_object_iface_init (MMLogObjectInterface *iface)
-{
-    iface->build_id = log_object_build_id;
-}
-
-static void
 mm_kernel_device_qrtr_class_init (MMKernelDeviceQrtrClass *klass)
 {
     GObjectClass        *object_class        = G_OBJECT_CLASS (klass);
@@ -264,4 +244,3 @@ mm_kernel_device_qrtr_class_init (MMKernelDeviceQrtrClass *klass)
 
     g_object_class_install_properties (object_class, PROP_LAST, properties);
 }
-
