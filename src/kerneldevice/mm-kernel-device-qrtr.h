@@ -25,6 +25,12 @@
 
 #include "mm-kernel-device.h"
 
+/* Driver string reported for all QRTR nodes; not really a kernel driver */
+#define MM_KERNEL_DEVICE_QRTR_DRIVER "qrtr"
+
+/* Subsytem string reported for all QRTR nodes; not really a kernel subsystem */
+#define MM_KERNEL_DEVICE_QRTR_SUBSYSTEM "qrtr"
+
 #define MM_TYPE_KERNEL_DEVICE_QRTR            (mm_kernel_device_qrtr_get_type ())
 #define MM_KERNEL_DEVICE_QRTR(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_KERNEL_DEVICE_QRTR, MMKernelDeviceQrtr))
 #define MM_KERNEL_DEVICE_QRTR_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass),  MM_TYPE_KERNEL_DEVICE_QRTR, MMKernelDeviceQrtrClass))

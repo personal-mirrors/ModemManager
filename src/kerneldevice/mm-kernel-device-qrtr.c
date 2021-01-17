@@ -34,10 +34,8 @@ static GParamSpec *properties[PROP_LAST];
 
 struct _MMKernelDeviceQrtrPrivate {
     QrtrNode *node;
-    gchar    *driver;
     gchar    *name;
     gchar    *physdev_uid;
-    gchar    *subsystem;
 };
 
 /*****************************************************************************/
@@ -87,13 +85,7 @@ kernel_device_get_property (MMKernelDevice *_self,
 static const gchar *
 kernel_device_get_driver (MMKernelDevice *_self)
 {
-    MMKernelDeviceQrtr *self;
-
-    self = MM_KERNEL_DEVICE_QRTR (_self);
-    if (!self->priv->driver)
-        self->priv->driver = g_strdup ("qrtr");
-
-    return self->priv->driver;
+    return MM_KERNEL_DEVICE_QRTR_DRIVER;
 }
 
 static const gchar *
@@ -125,13 +117,7 @@ kernel_device_get_physdev_uid (MMKernelDevice *_self)
 static const gchar *
 kernel_device_get_subsystem (MMKernelDevice *_self)
 {
-    MMKernelDeviceQrtr *self;
-
-    self = MM_KERNEL_DEVICE_QRTR (_self);
-    if (!self->priv->subsystem)
-        self->priv->subsystem = g_strdup ("qrtr");
-
-    return self->priv->subsystem;
+    return MM_KERNEL_DEVICE_QRTR_SUBSYSTEM;
 }
 /*****************************************************************************/
 
@@ -202,10 +188,8 @@ dispose (GObject *object)
 {
     MMKernelDeviceQrtr *self = MM_KERNEL_DEVICE_QRTR (object);
 
-    g_clear_pointer (&self->priv->driver, g_free);
     g_clear_pointer (&self->priv->name, g_free);
     g_clear_pointer (&self->priv->physdev_uid, g_free);
-    g_clear_pointer (&self->priv->subsystem, g_free);
     g_object_unref (self->priv->node);
 
     G_OBJECT_CLASS (mm_kernel_device_qrtr_parent_class)->dispose (object);
