@@ -237,7 +237,7 @@ mm_kernel_device_get_property_as_int_hex (MMKernelDevice *self,
 
 void
 mm_kernel_device_override_physdev_uid (MMKernelDevice *self,
-                                       gchar          *value)
+                                       const gchar    *value)
 {
     if (MM_KERNEL_DEVICE_GET_CLASS (self)->override_physdev_uid)
         MM_KERNEL_DEVICE_GET_CLASS (self)->override_physdev_uid (self, value);

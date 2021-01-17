@@ -572,14 +572,14 @@ kernel_device_get_attribute (MMKernelDevice *_self,
 
 static void
 kernel_device_override_physdev_uid (MMKernelDevice *_self,
-                                    gchar          *value)
+                                    const gchar    *value)
 {
     MMKernelDeviceUdev *self;
 
     self = MM_KERNEL_DEVICE_UDEV (_self);
     if (self->priv->override_physdev_uid)
         g_free (self->priv->override_physdev_uid);
-    self->priv->override_physdev_uid = value;
+    self->priv->override_physdev_uid = g_strdup (value);
 }
 /*****************************************************************************/
 
