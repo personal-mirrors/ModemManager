@@ -72,64 +72,58 @@ qrtr_node_services_ready (QrtrNode      *node,
 
     node_id = qrtr_node_get_id (node);
     if (!qrtr_node_wait_for_services_finish (node, res, NULL)) {
-        mm_obj_err (
-            ctx->self, "failed to wait for services on Qrtr node %d", node_id);
+        mm_obj_warn (ctx->self, "failed to wait for services on qrtr node %u", node_id);
         g_hash_table_remove (ctx->self->priv->nodes, GUINT_TO_POINTER (node_id));
         device_context_free (ctx);
         return;
     }
-    mm_obj_info (ctx->self, "qrtr services ready for node id: %d", node_id);
-    g_signal_emit (ctx->self,
-                   signals[QRTR_DEVICE_ADDED],
-                   0,
-                   qrtr_node_get_id (node));
+
+    mm_obj_info (ctx->self, "qrtr services ready for node %u", node_id);
+    g_signal_emit (ctx->self, signals[QRTR_DEVICE_ADDED], 0, node_id);
     device_context_free (ctx);
 }
 
 static void
-handle_qrtr_node_added (QrtrBus  *qrtr_bus,
-                        guint32   node_id,
-                        gpointer  user_data)
+handle_qrtr_node_added (QrtrBus          *qrtr_bus,
+                        guint32           node_id,
+                        MMQrtrBusWatcher *self)
 {
-    MMQrtrBusWatcher *self;
-    DeviceContext    *ctx;
-    QrtrNode         *node;
-    GArray           *services;
-    QmiService        required_services[] = { QMI_SERVICE_WDS, QMI_SERVICE_NAS,
-                                              QMI_SERVICE_DMS};
+    g_autoptr(QrtrNode)      node = NULL;
+    g_autoptr(GArray)        services = NULL;
+    DeviceContext           *ctx;
+    static const QmiService  required_services[] = {
+        QMI_SERVICE_WDS,
+        QMI_SERVICE_NAS,
+        QMI_SERVICE_DMS
+    };
 
-    self = MM_QRTR_BUS_WATCHER (user_data);
-
-    mm_obj_dbg (self, "qrtr node added: %d", node_id);
+    mm_obj_dbg (self, "qrtr node %u added", node_id);
 
     node = qrtr_bus_get_node (qrtr_bus, node_id);
     if (!node) {
-        mm_obj_warn (self, "cannot find node with ID:%d", node_id);
+        mm_obj_warn (self, "cannot find node %u", node_id);
         return;
     }
 
     if (g_hash_table_contains (self->priv->nodes, GUINT_TO_POINTER (node_id))) {
-        mm_obj_warn (self, "qrtr Node %d was previously added", node_id);
-        g_object_unref (node);
+        mm_obj_warn (self, "qrtr node %u was previously added", node_id);
         return;
     }
 
-    /* node now owned by the Hash Table. */
-    g_hash_table_insert (self->priv->nodes, GUINT_TO_POINTER (node_id), node);
+    /* a full node reference now owned by the hash table */
+    g_hash_table_insert (self->priv->nodes, GUINT_TO_POINTER (node_id), g_object_ref (node));
+
+    mm_obj_dbg (self, "waiting for modem services on node %u", node_id);
 
     /* Check if the node provides services to be sure the node represents a
      * modem. */
-    services = g_array_sized_new (
-        FALSE, FALSE, sizeof (QmiService), G_N_ELEMENTS (required_services));
-    g_array_append_vals (
-        services, required_services, G_N_ELEMENTS (required_services));
-
-    mm_obj_dbg (self, "waiting for services on node %d", qrtr_node_get_id (node));
+    services = g_array_sized_new (FALSE, FALSE, sizeof (QmiService), G_N_ELEMENTS (required_services));
+    g_array_append_vals (services, required_services, G_N_ELEMENTS (required_services));
 
     /* Setup command context */
-    ctx              = g_slice_new0 (DeviceContext);
-    ctx->self        = g_object_ref (self);
-    ctx->node        = g_object_ref (node);
+    ctx       = g_slice_new0 (DeviceContext);
+    ctx->self = g_object_ref (self);
+    ctx->node = g_object_ref (node);
 
     qrtr_node_wait_for_services (node,
                                  services,
@@ -137,32 +131,25 @@ handle_qrtr_node_added (QrtrBus  *qrtr_bus,
                                  NULL,
                                  (GAsyncReadyCallback) qrtr_node_services_ready,
                                  ctx);
-
-    g_array_unref (services);
 }
 
 static void
-handle_qrtr_node_removed (QrtrBus  *qrtr_bus,
-                          guint32   node_id,
-                          gpointer  user_data)
+handle_qrtr_node_removed (QrtrBus          *qrtr_bus,
+                          guint32           node_id,
+                          MMQrtrBusWatcher *self)
 {
-    MMQrtrBusWatcher *self;
-    QrtrNode         *node;
+    QrtrNode *node;
 
-    self = MM_QRTR_BUS_WATCHER (user_data);
     node = qrtr_bus_get_node (qrtr_bus, node_id);
     if (!node) {
-        mm_obj_warn (self, "cannot find node with ID:%d", node_id);
+        mm_obj_warn (self, "cannot find node %u", node_id);
         return;
     }
 
     g_hash_table_remove (self->priv->nodes, GUINT_TO_POINTER (node_id));
-    mm_obj_info (self, "qrtr node removed: %d", node_id);
+    mm_obj_info (self, "qrtr node %u removed", node_id);
 
-    g_signal_emit (self,
-                   signals[QRTR_DEVICE_REMOVED],
-                   0,
-                   node_id);
+    g_signal_emit (self, signals[QRTR_DEVICE_REMOVED], 0, node_id);
 }
 
 /*****************************************************************************/
