@@ -275,7 +275,7 @@ base_modem_create_qrtr_port (MMBaseModem    *self,
                              MMPortType      ptype)
 {
     if (ptype == MM_PORT_TYPE_QMI) {
-        QrtrNode *node;
+        g_autoptr(QrtrNode) node = NULL;
 
         g_assert (MM_IS_KERNEL_DEVICE_QRTR (kernel_device));
 
