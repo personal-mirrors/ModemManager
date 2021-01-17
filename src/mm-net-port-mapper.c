@@ -37,12 +37,8 @@ struct _MMNetPortMapperClass {
 
 static void log_object_iface_init (MMLogObjectInterface *iface);
 
-G_DEFINE_TYPE_EXTENDED (MMNetPortMapper,
-                        mm_net_port_mapper,
-                        G_TYPE_OBJECT,
-                        0,
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_LOG_OBJECT,
-                                               log_object_iface_init))
+G_DEFINE_TYPE_EXTENDED (MMNetPortMapper, mm_net_port_mapper, G_TYPE_OBJECT, 0,
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_LOG_OBJECT, log_object_iface_init))
 
 /*****************************************************************************/
 
@@ -88,9 +84,9 @@ mm_net_port_mapper_register_port (MMNetPortMapper *self,
     g_assert_nonnull (net_iface_name);
 
     if (g_hash_table_lookup (self->ports, net_iface_name)) {
-        mm_obj_err (self,
-                    "the net port '%s' has already been registered",
-                    net_iface_name);
+        mm_obj_warn (self,
+                     "the net port '%s' has already been registered",
+                     net_iface_name);
         return;
     }
 
@@ -105,8 +101,8 @@ mm_net_port_mapper_register_port (MMNetPortMapper *self,
     ctrl_port_info->physdev_uid  = g_strdup (ctl_iface_physdev_uid);
     ctrl_port_info->mux_id       = net_iface_mux_id;
     ctrl_port_info->configure_cb = configure_cb;
-    g_hash_table_insert (
-        self->ports, g_strdup (net_iface_name), ctrl_port_info);
+
+    g_hash_table_insert (self->ports, g_strdup (net_iface_name), ctrl_port_info);
 }
 
 void
@@ -127,6 +123,7 @@ mm_net_port_mapper_unregister_port (MMNetPortMapper *self,
             return;
         }
     }
+
     mm_obj_info (self,
                 "unable to unregister control iface '%s' with subsystem '%s'",
                 ctl_iface_name,
@@ -139,11 +136,9 @@ mm_net_port_mapper_configure_net_interface (MMNetPortMapper *self,
 {
     CtrlPortInfo *ctrl_port_info;
 
-    ctrl_port_info = g_hash_table_lookup (
-        self->ports, mm_kernel_device_get_name (net_device));
-    if (ctrl_port_info->configure_cb)
-        (*ctrl_port_info->configure_cb) (net_device,
-                                         ctrl_port_info->physdev_uid);
+    ctrl_port_info = g_hash_table_lookup (self->ports, mm_kernel_device_get_name (net_device));
+    if (ctrl_port_info && ctrl_port_info->configure_cb)
+        ctrl_port_info->configure_cb (net_device, ctrl_port_info->physdev_uid);
 }
 
 gchar *
@@ -187,8 +182,10 @@ static void
 mm_net_port_mapper_init (MMNetPortMapper *self)
 {
     /* Setup the internal list of port objects */
-    self->ports = g_hash_table_new_full (
-        g_str_hash, g_str_equal, g_free, (GDestroyNotify) ctrl_port_info_free);
+    self->ports = g_hash_table_new_full (g_str_hash,
+                                         g_str_equal,
+                                         g_free,
+                                         (GDestroyNotify) ctrl_port_info_free);
 }
 
 static void
@@ -198,8 +195,7 @@ finalize (GObject *object)
 
     g_hash_table_destroy (self->ports);
 
-    if (G_OBJECT_CLASS (mm_net_port_mapper_parent_class)->finalize != NULL)
-        G_OBJECT_CLASS (mm_net_port_mapper_parent_class)->finalize (object);
+    G_OBJECT_CLASS (mm_net_port_mapper_parent_class)->finalize (object);
 }
 
 static void
