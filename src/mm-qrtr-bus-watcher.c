@@ -83,6 +83,7 @@ qrtr_node_services_ready (QrtrNode      *node,
                    signals[QRTR_DEVICE_ADDED],
                    0,
                    qrtr_node_get_id (node));
+    device_context_free (ctx);
 }
 
 static void
