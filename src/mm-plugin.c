@@ -781,13 +781,18 @@ mm_plugin_supports_port (MMPlugin            *self,
             probe_run_flags |= MM_PORT_PROBE_MBIM;
         else
             probe_run_flags |= MM_PORT_PROBE_AT;
-    } else if (g_str_equal (mm_kernel_device_get_subsystem (port), "rpmsg") ||
-               g_str_equal (mm_kernel_device_get_subsystem (port), "qrtr")) {
+    } else if (g_str_equal (mm_kernel_device_get_subsystem (port), "rpmsg")) {
         if (self->priv->at)
             probe_run_flags |= MM_PORT_PROBE_AT;
         if (self->priv->qmi)
             probe_run_flags |= MM_PORT_PROBE_QMI;
     }
+#if defined WITH_QMI && QMI_QRTR_SUPPORTED
+    else if (g_str_equal (mm_kernel_device_get_subsystem (port), "qrtr")) {
+        if (self->priv->qmi)
+            probe_run_flags |= MM_PORT_PROBE_QMI;
+    }
+#endif
 
     /* For potential AT ports, check for more things */
     if (probe_run_flags & MM_PORT_PROBE_AT) {
