@@ -93,10 +93,10 @@ peek_port_qmi_for_data_in_bam_dmux (MMBroadbandModemQmi  *self,
 #if defined WITH_QMI && QMI_QRTR_SUPPORTED
 
 static MMPortQmi *
-peek_port_qmi_for_data_in_qrtr (MMBroadbandModemQmi  *self,
-                                MMPort               *data,
-                                guint                *out_mux_id,
-                                GError              **error)
+peek_port_qmi_for_data_in_ipa (MMBroadbandModemQmi  *self,
+                               MMPort               *data,
+                               guint                *out_mux_id,
+                               GError              **error)
 {
     GList           *qrtr_qmi_ports = NULL;
     MMPortQmi       *found = NULL;
@@ -145,31 +145,36 @@ peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
 {
     MMKernelDevice *net_port;
     const gchar    *net_port_driver;
-    const gchar    *net_port_name;
-    gboolean        is_rmnet_data;
 
     g_assert (MM_IS_BROADBAND_MODEM_QMI (self));
     g_assert (mm_port_get_subsys (data) == MM_PORT_SUBSYS_NET);
 
     net_port        = mm_port_peek_kernel_device (data);
     net_port_driver = mm_kernel_device_get_driver (net_port);
-    net_port_name   = mm_kernel_device_get_name (net_port);
-    is_rmnet_data   = g_str_has_prefix (net_port_name, "rmnet_ipa0.");
-    if (g_strcmp0 (net_port_driver, "bam-dmux") != 0 && !is_rmnet_data) {
-        g_set_error (error,
-                     MM_CORE_ERROR,
-                     MM_CORE_ERROR_FAILED,
-                     "Unsupported QMI kernel driver for 'net/%s': %s",
-                     mm_port_get_device (data),
-                     net_port_driver);
-        return NULL;
-    }
+
+    if (g_strcmp0 (net_port_driver, "bam-dmux") == 0) {
 #if defined WITH_QMI && QMI_QRTR_SUPPORTED
-    if (is_rmnet_data)
-        return peek_port_qmi_for_data_in_qrtr (self, data, out_mux_id, error);
-    else
+        *out_mux_id = QMI_DEVICE_MUX_ID_UNBOUND;
+#else
+        *out_mux_id = 0;
 #endif
         return peek_port_qmi_for_data_in_bam_dmux (self, data, out_sio_port, error);
+    }
+
+#if defined WITH_QMI && QMI_QRTR_SUPPORTED
+    if (g_strcmp0 (net_port_driver, "ipa") == 0) {
+        *out_sio_port = QMI_SIO_PORT_NONE;
+        return peek_port_qmi_for_data_in_ipa (self, data, out_mux_id, error);
+    }
+#endif
+
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_FAILED,
+                 "Unsupported QMI kernel driver for 'net/%s': %s",
+                 mm_port_get_device (data),
+                 net_port_driver);
+    return NULL;
 }
 
 /*****************************************************************************/
