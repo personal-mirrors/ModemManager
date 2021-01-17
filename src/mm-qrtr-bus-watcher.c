@@ -64,15 +64,6 @@ device_context_free (DeviceContext *ctx)
 }
 
 static void
-remove_node (MMQrtrBusWatcher *self,
-             guint32           node_id)
-{
-    mm_obj_dbg (self, "removing node %d", node_id);
-    if (g_hash_table_contains (self->priv->nodes, GUINT_TO_POINTER (node_id)))
-        g_hash_table_remove (self->priv->nodes, GUINT_TO_POINTER (node_id));
-}
-
-static void
 qrtr_node_services_ready (QrtrNode      *node,
                           GAsyncResult  *res,
                           DeviceContext *ctx)
@@ -83,7 +74,7 @@ qrtr_node_services_ready (QrtrNode      *node,
     if (!qrtr_node_wait_for_services_finish (node, res, NULL)) {
         mm_obj_err (
             ctx->self, "failed to wait for services on Qrtr node %d", node_id);
-        remove_node (ctx->self, node_id);
+        g_hash_table_remove (ctx->self->priv->nodes, GUINT_TO_POINTER (node_id));
         device_context_free (ctx);
         return;
     }
@@ -161,14 +152,14 @@ handle_qrtr_node_removed (QrtrBus  *qrtr_bus,
         mm_obj_warn (self, "cannot find node with ID:%d", node_id);
         return;
     }
+
+    g_hash_table_remove (self->priv->nodes, GUINT_TO_POINTER (node_id));
     mm_obj_info (self, "qrtr node removed: %d", node_id);
 
     g_signal_emit (self,
                    signals[QRTR_DEVICE_REMOVED],
                    0,
                    node_id);
-
-    remove_node (self, node_id);
 }
 
 /*****************************************************************************/
