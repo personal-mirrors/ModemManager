@@ -506,7 +506,7 @@ wdm_probe_qmi (MMPortProbe *self)
         /* Create a port and try to open it */
 #if QMI_QRTR_SUPPORTED
         if (MM_IS_KERNEL_DEVICE_QRTR (self->priv->port)) {
-            QrtrNode *node;
+            g_autoptr(QrtrNode) node = NULL;
 
             node = mm_kernel_device_qrtr_get_node (
                 MM_KERNEL_DEVICE_QRTR (self->priv->port));
