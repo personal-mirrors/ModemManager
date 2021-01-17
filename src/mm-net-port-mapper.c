@@ -212,7 +212,7 @@ mm_net_port_mapper_class_init (MMNetPortMapperClass *klass)
 {
     GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
-    object_class->dispose = finalize;
+    object_class->finalize = finalize;
 }
 
 MM_DEFINE_SINGLETON_GETTER (MMNetPortMapper,
