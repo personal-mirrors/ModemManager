@@ -137,6 +137,8 @@ handle_qrtr_node_added (QrtrBus  *qrtr_bus,
                                  NULL,
                                  (GAsyncReadyCallback) qrtr_node_services_ready,
                                  ctx);
+
+    g_array_unref (services);
 }
 
 static void
