@@ -5105,14 +5105,17 @@ interface_initialization_step (GTask *task)
 
         if (!list) {
             guint n = 0;
-#if defined WITH_QMI && QMI_QRTR_SUPPORTED
-            MMPort *qmi_port = NULL;
 
+#if defined WITH_QMI && QMI_QRTR_SUPPORTED
             if (MM_IS_BROADBAND_MODEM_QMI (self)) {
-                qmi_port = MM_PORT (mm_broadband_modem_qmi_peek_port_qmi (
-                    MM_BROADBAND_MODEM_QMI (self)));
-                if (mm_port_get_subsys (qmi_port) == MM_PORT_SUBSYS_QRTR)
+                MMPort *qmi_port;
+
+                qmi_port = MM_PORT (mm_broadband_modem_qmi_peek_port_qmi (MM_BROADBAND_MODEM_QMI (self)));
+                if (mm_port_get_subsys (qmi_port) == MM_PORT_SUBSYS_QRTR) {
+                    /* The number of bearers supported by Qrtr devices is based on the max
+                     * number of mux ids. */
                     n = 255;
+                }
             } else
 #endif
             {
