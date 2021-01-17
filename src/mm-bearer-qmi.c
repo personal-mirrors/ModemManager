@@ -1687,7 +1687,11 @@ _connect (MMBaseBearer *_self,
     MMPort *data = NULL;
     MMPortQmi *qmi = NULL;
     QmiSioPort sio_port = QMI_SIO_PORT_NONE;
+#if QMI_QRTR_SUPPORTED
     guint mux_id = QMI_DEVICE_MUX_ID_UNBOUND;
+#else
+    guint mux_id = 0;
+#endif
     GError *error = NULL;
     const gchar *apn;
     GTask *task;
