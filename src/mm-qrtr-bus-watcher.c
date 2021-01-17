@@ -64,12 +64,6 @@ device_context_free (DeviceContext *ctx)
 }
 
 static void
-node_free (QrtrNode *node)
-{
-    g_object_unref (node);
-}
-
-static void
 remove_node (MMQrtrBusWatcher *self,
              guint32           node_id)
 {
@@ -204,8 +198,10 @@ mm_qrtr_bus_watcher_init (MMQrtrBusWatcher *self)
                                               MM_TYPE_QRTR_BUS_WATCHER,
                                               MMQrtrBusWatcherPrivate);
     /* Setup internal lists of device and node objects */
-    self->priv->nodes = g_hash_table_new_full (
-        g_direct_hash, g_direct_equal, NULL, (GDestroyNotify) node_free);
+    self->priv->nodes = g_hash_table_new_full (g_direct_hash,
+                                               g_direct_equal,
+                                               NULL,
+                                               (GDestroyNotify) g_object_unref);
 
     /* Create and setup QrtrBus */
     self->priv->qrtr_bus = qrtr_bus_new (NULL, NULL);
