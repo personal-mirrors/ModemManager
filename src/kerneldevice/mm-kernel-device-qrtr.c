@@ -40,6 +40,14 @@ struct _MMKernelDeviceQrtrPrivate {
 
 /*****************************************************************************/
 
+gchar *
+mm_kernel_device_qrtr_helper_build_name (guint32 node_id)
+{
+    return g_strdup_printf ("qrtr%u", node_id);
+}
+
+/*****************************************************************************/
+
 QrtrNode *
 mm_kernel_device_qrtr_get_node (MMKernelDeviceQrtr *self)
 {
@@ -47,6 +55,7 @@ mm_kernel_device_qrtr_get_node (MMKernelDeviceQrtr *self)
 }
 
 /*****************************************************************************/
+
 static gboolean
 kernel_device_cmp (MMKernelDevice *_a,
                    MMKernelDevice *_b)
@@ -95,8 +104,7 @@ kernel_device_get_name (MMKernelDevice *_self)
 
     self = MM_KERNEL_DEVICE_QRTR (_self);
     if (!self->priv->name)
-        self->priv->name = g_strdup_printf ("qrtr%d",
-                                            qrtr_node_get_id (self->priv->node));
+        self->priv->name = mm_kernel_device_qrtr_helper_build_name (qrtr_node_get_id (self->priv->node));
 
     return self->priv->name;
 }

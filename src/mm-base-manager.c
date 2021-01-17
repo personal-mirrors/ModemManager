@@ -391,18 +391,10 @@ handle_qrtr_device_removed (MMQrtrBusWatcher *bus_watcher,
                             guint             node_id,
                             MMBaseManager    *self)
 {
-    MMKernelDevice *kernel_device;
-    QrtrNode       *node;
+    g_autofree gchar *qrtr_device_name = NULL;
 
-    node = mm_qrtr_bus_watcher_peek_node (bus_watcher, node_id);
-
-    kernel_device = mm_kernel_device_qrtr_new (node);
-
-    device_removed (self,
-                    mm_kernel_device_get_subsystem (kernel_device),
-                    mm_kernel_device_get_name (kernel_device));
-
-    g_object_unref (kernel_device);
+    qrtr_device_name = mm_kernel_device_qrtr_helper_build_name (node_id);
+    device_removed (self, MM_KERNEL_DEVICE_QRTR_SUBSYSTEM, qrtr_device_name);
 }
 #endif
 

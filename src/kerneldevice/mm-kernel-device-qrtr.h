@@ -37,6 +37,9 @@
  * Qualcomm SoCs we use the same plugin name as common string. */
 #define MM_KERNEL_DEVICE_QRTR_PHYSDEV_UID "qcom-soc"
 
+/* Helper to create a unique device name from the QRTR node id */
+gchar *mm_kernel_device_qrtr_helper_build_name (guint32 node_id);
+
 #define MM_TYPE_KERNEL_DEVICE_QRTR            (mm_kernel_device_qrtr_get_type ())
 #define MM_KERNEL_DEVICE_QRTR(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_KERNEL_DEVICE_QRTR, MMKernelDeviceQrtr))
 #define MM_KERNEL_DEVICE_QRTR_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass),  MM_TYPE_KERNEL_DEVICE_QRTR, MMKernelDeviceQrtrClass))
