@@ -31,6 +31,12 @@
 /* Subsytem string reported for all QRTR nodes; not really a kernel subsystem */
 #define MM_KERNEL_DEVICE_QRTR_SUBSYSTEM "qrtr"
 
+/* Physical device UID string reported for all QRTR nodes; equal to the UID
+ * used in the 'qcom-soc' plugin, which is the only one support QRTR nodes for
+ * now. This UID must be equal for all ports on the same modem, and so for
+ * Qualcomm SoCs we use the same plugin name as common string. */
+#define MM_KERNEL_DEVICE_QRTR_PHYSDEV_UID "qcom-soc"
+
 #define MM_TYPE_KERNEL_DEVICE_QRTR            (mm_kernel_device_qrtr_get_type ())
 #define MM_KERNEL_DEVICE_QRTR(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_KERNEL_DEVICE_QRTR, MMKernelDeviceQrtr))
 #define MM_KERNEL_DEVICE_QRTR_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass),  MM_TYPE_KERNEL_DEVICE_QRTR, MMKernelDeviceQrtrClass))
