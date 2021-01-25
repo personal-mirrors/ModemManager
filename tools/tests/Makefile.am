@@ -31,7 +31,9 @@ test_stub_CPPFLAGS = \
 	-DTEST_SERVICES=\""$(abs_top_builddir)/tools/tests/services"\" \
 	$(NULL)
 
-TEST_PROGS += $(noinst_PROGRAMS)
+# Disable the test using python3 pygobject and gobject-introspection
+# as they are not ready (b/178312330).
+# TEST_PROGS += $(noinst_PROGRAMS)
 
 test-wrapper.sh: test-wrapper.sh.in
 	@sed \
