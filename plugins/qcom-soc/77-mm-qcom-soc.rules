@@ -31,9 +31,6 @@ SUBSYSTEM=="rpmsg", ENV{ID_MM_PORT_TYPE_QMI}!="1", ENV{ID_MM_PORT_TYPE_AT_SECOND
 SUBSYSTEM=="rpmsg", ATTR{name}=="DATA40*", ENV{ID_MM_PORT_IGNORE}="1"
 KERNEL=="rmnet_usb[0-9]*", ENV{ID_MM_PORT_IGNORE}="1"
 
-# explicitly ignore qrtr-ipa network ports like rmnet_ipa ports
-KERNEL=="rmnet_ipa[0-9]*", ENV{ID_MM_PORT_IGNORE}="1"
-
 # flag all rpmsg ports under this plugin as candidate
 KERNEL=="rpmsg[0-9]*", SUBSYSTEM=="rpmsg", ENV{ID_MM_CANDIDATE}="1"
 
