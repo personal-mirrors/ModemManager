@@ -176,6 +176,40 @@ mm_qrtr_bus_watcher_start_finish (MMQrtrBusWatcher  *self,
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
+typedef struct {
+    MMQrtrBusWatcher *self;
+    QrtrNode         *node;
+} ProcessExistingNodes;
+
+static gboolean
+process_existing_nodes_idle (ProcessExistingNodes *ctx)
+{
+    handle_qrtr_node_added (
+        ctx->self->priv->qrtr_bus, qrtr_node_get_id (ctx->node), ctx->self);
+
+    g_object_unref (ctx->self);
+    g_object_unref (ctx->node);
+    g_slice_free (ProcessExistingNodes, ctx);
+    return G_SOURCE_REMOVE;
+}
+
+static void
+process_existing_nodes (MMQrtrBusWatcher *self)
+{
+    GList                *nodes, *l;
+    QrtrNode             *node;
+    ProcessExistingNodes *ctx;
+
+    nodes = qrtr_bus_peek_nodes (self->priv->qrtr_bus);
+    for (l = nodes; l; l = g_list_next (l)) {
+        node      = l->data;
+        ctx       = g_slice_new (ProcessExistingNodes);
+        ctx->self = g_object_ref (self);
+        ctx->node = g_object_ref (node);
+        g_idle_add ((GSourceFunc) process_existing_nodes_idle, ctx);
+    }
+}
+
 static void
 qrtr_bus_ready (GObject      *source,
                 GAsyncResult *res,
@@ -202,6 +236,8 @@ qrtr_bus_ready (GObject      *source,
                                                     QRTR_BUS_SIGNAL_NODE_REMOVED,
                                                     G_CALLBACK (handle_qrtr_node_removed),
                                                     self);
+
+    process_existing_nodes (self);
 
     g_task_return_boolean (task, TRUE);
     g_object_unref (task);
