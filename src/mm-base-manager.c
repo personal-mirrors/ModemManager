@@ -1489,6 +1489,7 @@ initable_init (GInitable     *initable,
     if (!mm_context_get_test_no_qrtr ()) {
         /* Create and setup the QrtrBusWatcher */
         self->priv->qrtr_bus_watcher = mm_qrtr_bus_watcher_new ();
+        mm_qrtr_bus_watcher_start (self->priv->qrtr_bus_watcher, NULL, NULL);
         /* If autoscan enabled, list for QrtrBusWatcher events */
         if (self->priv->auto_scan) {
             g_object_connect (self->priv->qrtr_bus_watcher,

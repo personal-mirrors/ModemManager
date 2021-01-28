@@ -54,6 +54,13 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMQrtrBusWatcher, g_object_unref)
 
 MMQrtrBusWatcher *mm_qrtr_bus_watcher_new (void);
 
+void     mm_qrtr_bus_watcher_start        (MMQrtrBusWatcher    *self,
+                                           GAsyncReadyCallback  callback,
+                                           gpointer             user_data);
+gboolean mm_qrtr_bus_watcher_start_finish (MMQrtrBusWatcher    *self,
+                                           GAsyncResult        *res,
+                                           GError             **error);
+
 QrtrNode *mm_qrtr_bus_watcher_peek_node (MMQrtrBusWatcher *self,
                                          guint32           node_id);
 

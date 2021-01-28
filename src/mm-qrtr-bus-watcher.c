@@ -28,6 +28,9 @@ G_DEFINE_TYPE_EXTENDED (MMQrtrBusWatcher, mm_qrtr_bus_watcher, G_TYPE_OBJECT, 0,
 
 struct _MMQrtrBusWatcherPrivate {
     QrtrBus *qrtr_bus;
+    guint    node_added_id;
+    guint    node_removed_id;
+
     /* Map of NodeNumber -> QRTR nodes available */
     GHashTable *nodes;
 };
@@ -165,6 +168,62 @@ mm_qrtr_bus_watcher_peek_node (MMQrtrBusWatcher *self,
 
 /*****************************************************************************/
 
+gboolean
+mm_qrtr_bus_watcher_start_finish (MMQrtrBusWatcher  *self,
+                                  GAsyncResult      *res,
+                                  GError           **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+qrtr_bus_ready (GObject      *source,
+                GAsyncResult *res,
+                GTask        *task)
+{
+    MMQrtrBusWatcher *self;
+    GError           *error = NULL;
+
+    self = g_task_get_source_object (task);
+
+    self->priv->qrtr_bus = qrtr_bus_new_finish (res, &error);
+    if (!self->priv->qrtr_bus) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    /* Listen for bus events */
+    self->priv->node_added_id = g_signal_connect (self->priv->qrtr_bus,
+                                                  QRTR_BUS_SIGNAL_NODE_ADDED,
+                                                  G_CALLBACK (handle_qrtr_node_added),
+                                                  self);
+    self->priv->node_removed_id = g_signal_connect (self->priv->qrtr_bus,
+                                                    QRTR_BUS_SIGNAL_NODE_REMOVED,
+                                                    G_CALLBACK (handle_qrtr_node_removed),
+                                                    self);
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+void
+mm_qrtr_bus_watcher_start (MMQrtrBusWatcher    *self,
+                           GAsyncReadyCallback  callback,
+                           gpointer             user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    qrtr_bus_new (0, /* disable initial lookup wait */
+                  NULL,
+                  (GAsyncReadyCallback)qrtr_bus_ready,
+                  task);
+}
+
+/*****************************************************************************/
+
 MMQrtrBusWatcher *
 mm_qrtr_bus_watcher_new (void)
 {
@@ -183,19 +242,6 @@ mm_qrtr_bus_watcher_init (MMQrtrBusWatcher *self)
                                                g_direct_equal,
                                                NULL,
                                                (GDestroyNotify) g_object_unref);
-
-    /* Create and setup QrtrBus */
-    self->priv->qrtr_bus = qrtr_bus_new (NULL, NULL);
-
-    /* Listen for QrtrControlSocket events */
-    g_signal_connect (self->priv->qrtr_bus,
-                      QRTR_BUS_SIGNAL_NODE_ADDED,
-                      G_CALLBACK (handle_qrtr_node_added),
-                      self);
-    g_signal_connect (self->priv->qrtr_bus,
-                      QRTR_BUS_SIGNAL_NODE_REMOVED,
-                      G_CALLBACK (handle_qrtr_node_removed),
-                      self);
 }
 
 static void
@@ -205,6 +251,10 @@ finalize (GObject *object)
 
     g_hash_table_destroy (self->priv->nodes);
 
+    if (self->priv->node_added_id)
+        g_signal_handler_disconnect (self->priv->qrtr_bus, self->priv->node_added_id);
+    if (self->priv->node_removed_id)
+        g_signal_handler_disconnect (self->priv->qrtr_bus, self->priv->node_removed_id);
     g_clear_object (&self->priv->qrtr_bus);
 
     G_OBJECT_CLASS (mm_qrtr_bus_watcher_parent_class)->finalize (object);
