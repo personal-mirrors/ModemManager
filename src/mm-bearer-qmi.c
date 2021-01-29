@@ -39,8 +39,6 @@
 G_DEFINE_TYPE (MMBearerQmi, mm_bearer_qmi, MM_TYPE_BASE_BEARER)
 
 #define GLOBAL_PACKET_DATA_HANDLE 0xFFFFFFFF
-#define RMNET_IPA_DEFAULT_IFNAME "rmnet_ipa0"
-#define RMNET_IPA_IFNAME_PREFIX  "rmnet_ipa0."
 
 struct _MMBearerQmiPrivate {
     /* Cancellables available during a connection attempt */
@@ -435,6 +433,7 @@ typedef struct {
     MMBearerQmi *self;
     ConnectStep step;
     MMPort *data;
+    MMPort *parent_data;
     MMPortQmi *qmi;
     QmiSioPort sio_port;
     guint mux_id;
@@ -529,7 +528,8 @@ connect_context_free (ConnectContext *ctx)
     g_clear_object (&ctx->ipv4_config);
     g_clear_object (&ctx->ipv6_config);
     g_free (ctx->net_iface_link);
-    g_object_unref (ctx->data);
+    g_clear_object (&ctx->data);
+    g_clear_object (&ctx->parent_data);
     g_object_unref (ctx->qmi);
     g_object_unref (ctx->self);
     g_slice_free (ConnectContext, ctx);
@@ -1557,13 +1557,18 @@ connect_context_step (GTask *task)
     case CONNECT_STEP_CREATE_DATA_PORT:
         /* For devices without a net port (i.e. QRTR/IPA), create a net port. */
 #if QMI_QRTR_SUPPORTED
-        if (!ctx->data &&
+        if (!ctx->data && ctx->parent_data &&
             mm_port_get_subsys (MM_PORT (ctx->qmi)) == MM_PORT_SUBSYS_QRTR &&
             ctx->mux_id == QMI_DEVICE_MUX_ID_UNBOUND) {
+                const gchar      *parent_name;
+                g_autofree gchar *prefix = NULL;
+
+                parent_name = mm_kernel_device_get_name (mm_port_peek_kernel_device (ctx->parent_data));
+                prefix = g_strconcat (parent_name, ".", NULL);
                 qmi_device_add_link_with_flags (mm_port_qmi_peek_device (ctx->qmi),
                                                 QMI_DEVICE_MUX_ID_AUTOMATIC,
-                                                RMNET_IPA_DEFAULT_IFNAME,
-                                                RMNET_IPA_IFNAME_PREFIX,
+                                                parent_name,
+                                                prefix,
                                                 QMI_DEVICE_ADD_LINK_FLAGS_INGRESS_MAP_CKSUMV4 | QMI_DEVICE_ADD_LINK_FLAGS_EGRESS_MAP_CKSUMV4,
                                                 g_task_get_cancellable (task),
                                                 (GAsyncReadyCallback) qmi_device_add_link_ready,
@@ -1940,6 +1945,7 @@ _connect (MMBaseBearer *_self,
     ConnectContext *ctx;
     MMBaseModem *modem  = NULL;
     MMPort *data = NULL;
+    MMPort *parent_data = NULL;
     MMPortQmi *qmi = NULL;
     QmiSioPort sio_port = QMI_SIO_PORT_NONE;
 #if QMI_QRTR_SUPPORTED
@@ -1959,7 +1965,6 @@ _connect (MMBaseBearer *_self,
 
     /* Grab a data port */
     data = mm_base_modem_get_best_data_port (modem, MM_PORT_TYPE_NET);
- #if !QMI_QRTR_SUPPORTED
     if (!data) {
         g_task_report_new_error (
             self,
@@ -1971,35 +1976,21 @@ _connect (MMBaseBearer *_self,
             "No valid data port found to launch connection");
         goto out;
     }
-#endif
 
-    if (data) {
-        /* Each data port has a single QMI port associated */
-        qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (
-            MM_BROADBAND_MODEM_QMI (modem), data, &sio_port, &mux_id, &error);
-    } else {
-        /* QRTR doesn't need a data port yet, since it will be created later on.*/
-        GList *qrtr_qmi_ports;
-
-        qrtr_qmi_ports = mm_base_modem_find_ports (MM_BASE_MODEM (modem),
-                                                   MM_PORT_SUBSYS_QRTR,
-                                                   MM_PORT_TYPE_QMI,
-                                                   NULL);
-        if (!qrtr_qmi_ports)
-            g_set_error (&error,
-                         MM_CORE_ERROR,
-                         MM_CORE_ERROR_NOT_FOUND,
-                         "Couldn't find any QMI ports for QRTR device");
-        else
-            qmi = MM_PORT_QMI (qrtr_qmi_ports->data);
-
-        g_list_free_full (qrtr_qmi_ports, g_object_unref);
-    }
+    qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (
+        MM_BROADBAND_MODEM_QMI (modem), data, &sio_port, &mux_id, &error);
 
     if (!qmi) {
         g_task_report_error (self, callback, user_data, _connect, error);
         goto out;
     }
+
+    /* Some net ports(i.e. net ports createad by IPA) support multiple net links, so we don't
+       use the parent port for data, but to create the net links on top of it. */
+    if (g_strcmp0 (mm_kernel_device_get_driver (mm_port_peek_kernel_device (data)), "ipa") == 0 &&
+        mm_port_get_subsys (MM_PORT (qmi)) == MM_PORT_SUBSYS_QRTR &&
+        mux_id == QMI_DEVICE_MUX_ID_UNBOUND)
+        parent_data = g_steal_pointer (&data);
 
     /* Check whether we have an APN */
     apn = mm_bearer_properties_get_apn (mm_base_bearer_peek_config (_self));
@@ -2030,9 +2021,10 @@ _connect (MMBaseBearer *_self,
         goto out;
     }
 
-    mm_obj_dbg (self, "launching connection with QMI port (%s) and data port (%s)",
+    mm_obj_dbg (self, "launching connection with QMI port (%s) and %sdata port (%s)",
                 mm_port_get_device (MM_PORT (qmi)),
-                (data ? mm_port_get_device (data) : ""));
+                parent_data ? "parent " : "",
+                (data ? mm_port_get_device (data) : mm_port_get_device (parent_data)));
 
     ctx = g_slice_new0 (ConnectContext);
     ctx->self = g_object_ref (self);
@@ -2043,7 +2035,8 @@ _connect (MMBaseBearer *_self,
 #else
     g_assert (mux_id == 0);
 #endif
-    ctx->data = g_object_ref (data);
+    ctx->data = data ? g_object_ref (data) : NULL;
+    ctx->parent_data = parent_data ? g_object_ref (parent_data) : NULL;
     ctx->step = CONNECT_STEP_FIRST;
     ctx->ip_method = MM_BEARER_IP_METHOD_UNKNOWN;
 
@@ -2150,6 +2143,7 @@ _connect (MMBaseBearer *_self,
     g_clear_object (&operation_cancellable);
     g_clear_object (&qmi);
     g_clear_object (&data);
+    g_clear_object (&parent_data);
     g_clear_object (&modem);
 }
 
