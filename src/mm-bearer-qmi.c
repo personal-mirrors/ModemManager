@@ -1807,7 +1807,7 @@ _connect (MMBaseBearer *_self,
     /* Each data port has a single QMI port associated */
 
 #if QMI_QRTR_SUPPORTED //TODO(crbug.com/1103840): Remove hacks before merging to upstream
-    qmi = mm_broadband_modem_qmi_get_port_qmi (modem);
+    qmi = mm_broadband_modem_qmi_get_port_qmi (MM_BROADBAND_MODEM_QMI (modem));
 #else
     qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (MM_BROADBAND_MODEM_QMI (modem), data, &sio_port, &error);
 #endif
