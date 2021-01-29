@@ -25,6 +25,9 @@
 #define MM_IS_BROADBAND_MODEM_QMI_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass),  MM_TYPE_BROADBAND_MODEM_QMI))
 #define MM_BROADBAND_MODEM_QMI_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj),  MM_TYPE_BROADBAND_MODEM_QMI, MMBroadbandModemQmiClass))
 
+/* Chromium OS specific profile */
+#define MM_BROADBAND_MODEM_QMI_PROFILE_NAME    "CrOS_attach_PDN"
+
 typedef struct _MMBroadbandModemQmi MMBroadbandModemQmi;
 typedef struct _MMBroadbandModemQmiClass MMBroadbandModemQmiClass;
 typedef struct _MMBroadbandModemQmiPrivate MMBroadbandModemQmiPrivate;
