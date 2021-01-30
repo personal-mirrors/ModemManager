@@ -61,8 +61,7 @@ void mm_net_port_mapper_register_port (MMNetPortMapper *self,
                                        MMNetPortMapperConfigureNet configure);
 
 void mm_net_port_mapper_unregister_port (MMNetPortMapper *self,
-                                         const gchar     *ctl_iface_subsystem,
-                                         const gchar     *ctl_iface_name);
+                                         const gchar     *net_iface_name);
 G_END_DECLS
 
 #endif /* MM_NET_PORT_MAPPER_H */

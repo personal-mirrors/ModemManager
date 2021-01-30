@@ -107,27 +107,12 @@ mm_net_port_mapper_register_port (MMNetPortMapper *self,
 
 void
 mm_net_port_mapper_unregister_port (MMNetPortMapper *self,
-                                    const gchar     *ctl_iface_subsystem,
-                                    const gchar     *ctl_iface_name)
+                                    const gchar     *net_iface_name)
 {
-    GHashTableIter iter;
-    gpointer       key, val;
-
-    g_hash_table_iter_init (&iter, self->ports);
-    while (g_hash_table_iter_next (&iter, &key, &val)) {
-        CtrlPortInfo *ctrl_port_info = val;
-
-        if (g_str_equal (ctrl_port_info->name, ctl_iface_name) &&
-            g_str_equal (ctrl_port_info->subsystem, ctl_iface_subsystem)) {
-            g_hash_table_iter_remove (&iter);
-            return;
-        }
-    }
-
-    mm_obj_info (self,
-                "unable to unregister control iface '%s' with subsystem '%s'",
-                ctl_iface_name,
-                ctl_iface_subsystem);
+    if (!g_hash_table_remove (self->ports, net_iface_name))
+        mm_obj_info (self,
+                    "unable to unregister net iface '%s'",
+                    net_iface_name);
 }
 
 void
