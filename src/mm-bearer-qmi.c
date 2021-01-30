@@ -595,10 +595,12 @@ complete_connect (GTask                 *task,
     if (error && ctx->qmi && ctx->net_iface_link) {
         ctx->result = result;
         ctx->error = error;
+        mm_net_port_mapper_unregister_port (mm_net_port_mapper_get (),
+                                            ctx->net_iface_link);
         qmi_device_delete_link (mm_port_qmi_peek_device (ctx->qmi),
                                 ctx->net_iface_link,
-                                NULL,
                                 ctx->mux_id,
+                                NULL,
                                 (GAsyncReadyCallback) complete_connect_delete_link_ready,
                                 task);
         return;
@@ -2415,6 +2417,8 @@ disconnect_context_step (GTask *task)
     case DISCONNECT_DELETE_DATA_PORT:
 #if QMI_QRTR_SUPPORTED
         if (ctx->qmi && ctx->net_iface_link) {
+            mm_net_port_mapper_unregister_port (mm_net_port_mapper_get (),
+                                                ctx->net_iface_link);
             qmi_device_delete_link (mm_port_qmi_peek_device (ctx->qmi),
                                     ctx->net_iface_link,
                                     ctx->mux_id,
