@@ -101,22 +101,14 @@ peek_port_qmi_for_data_in_ipa (MMBroadbandModemQmi  *self,
     GList           *qrtr_qmi_ports = NULL;
     MMPortQmi       *found = NULL;
     MMKernelDevice  *net_port;
-    MMNetPortMapper *net_port_mapper;
     const gchar     *net_port_name;
-    const gchar     *parent_port_name;
 
     net_port      = mm_port_peek_kernel_device (data);
     net_port_name = mm_kernel_device_get_name (net_port);
 
-    /* Find the QMI port that was used to create the net port */
-    net_port_mapper = mm_net_port_mapper_get ();
-    parent_port_name = mm_net_port_mapper_get_ctrl_iface_name (net_port_mapper, net_port_name);
-    if (parent_port_name) {
-        qrtr_qmi_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
-                                                   MM_PORT_SUBSYS_QRTR,
-                                                   MM_PORT_TYPE_QMI,
-                                                   parent_port_name);
-    }
+    qrtr_qmi_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
+                                               MM_PORT_SUBSYS_QRTR,
+                                               MM_PORT_TYPE_QMI);
 
     if (!qrtr_qmi_ports) {
         g_set_error (error,
@@ -127,7 +119,10 @@ peek_port_qmi_for_data_in_ipa (MMBroadbandModemQmi  *self,
         return NULL;
     }
 
-    *out_mux_id = mm_net_port_mapper_get_mux_id (net_port_mapper, net_port_name);
+    /* TODO: Once the mux id is present as a sysfs attribute for links(not parent port)
+       read and use that value instead, so we can remove the net port mapper from this file. */
+    *out_mux_id = mm_net_port_mapper_get_mux_id (mm_net_port_mapper_get (), net_port_name);
+
     found = MM_PORT_QMI (qrtr_qmi_ports->data);
 
     g_list_free_full (qrtr_qmi_ports, g_object_unref);
