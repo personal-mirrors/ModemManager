@@ -75,7 +75,9 @@ qrtr_node_services_ready (QrtrNode      *node,
 
     node_id = qrtr_node_get_id (node);
     if (!qrtr_node_wait_for_services_finish (node, res, NULL)) {
-        mm_obj_warn (ctx->self, "failed to wait for services on qrtr node %u", node_id);
+        mm_obj_dbg (ctx->self,
+                    "qrtr node %u doesn't have required services to be considered a control node",
+                    node_id);
         g_hash_table_remove (ctx->self->priv->nodes, GUINT_TO_POINTER (node_id));
         device_context_free (ctx);
         return;
