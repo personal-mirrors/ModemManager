@@ -425,7 +425,7 @@ dnl-----------------------------------------------------------------------------
 dnl QRTR support (both as libqrtr-glib and libqmi-glib apis)
 dnl
 
-LIBQRTR_VERSION=1.27.4
+LIBQRTR_VERSION=1.1.0
 PKG_CHECK_MODULES(QRTR, [qrtr-glib >= $LIBQRTR_VERSION],[have_qrtr=yes],[have_qrtr=no])
 qmi_qrtr_supported=$($PKG_CONFIG --variable=qmi_qrtr_supported qmi-glib)
 
