@@ -36,6 +36,13 @@ build-qmi-qrtr-no-mbim:
     - tags
     - schedules
   script:
+    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
+    - pushd libqrtr-glib
+    - NOCONFIGURE=1 ./autogen.sh
+    - ./configure --prefix=/usr
+    - make
+    - make install
+    - popd
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
     - pushd libqmi
     - NOCONFIGURE=1 ./autogen.sh
@@ -149,6 +156,13 @@ build-default:
     - apt -y install gtk-doc-tools libglib2.0-doc gobject-introspection libsystemd-dev libpolkit-gobject-1-dev valac
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
     - pushd libmbim
+    - NOCONFIGURE=1 ./autogen.sh
+    - ./configure --prefix=/usr
+    - make
+    - make install
+    - popd
+    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
+    - pushd libqrtr-glib
     - NOCONFIGURE=1 ./autogen.sh
     - ./configure --prefix=/usr
     - make
