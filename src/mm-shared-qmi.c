@@ -3568,6 +3568,7 @@ uim_switch_get_slot_status_ready (QmiClientUim *client,
     g_autoptr(QmiMessageUimGetSlotStatusOutput) output = NULL;
     g_autoptr(QmiMessageUimSwitchSlotInput)     input = NULL;
     MMIfaceModem *self;
+    Private      *priv;
     GError       *error = NULL;
     GArray       *physical_slots = NULL;
     guint         i;
@@ -3611,6 +3612,13 @@ uim_switch_get_slot_status_ready (QmiClientUim *client,
                                  "SIM slot switch operation not needed");
         g_object_unref (task);
         return;
+    }
+
+    priv = get_private (MM_SHARED_QMI (self));
+    if (priv->uim_slot_status_indication_id) {
+        g_signal_handler_disconnect (client, priv->uim_slot_status_indication_id);
+        priv->uim_slot_status_indication_id = 0;
+        mm_obj_dbg (self, "disabling hotswap detection before slot switch.");
     }
 
     mm_obj_dbg (self, "requesting active logical id %d switch to SIM slot %u", active_logical_id, slot_number);
@@ -3779,40 +3787,24 @@ uim_slot_status_indication_cb (QmiClientUim                     *client,
                                QmiIndicationUimSlotStatusOutput *output,
                                MMSharedQmi                      *self)
 {
-    GArray            *physical_slots = NULL;
-    guint              i;
     g_autoptr(GError)  error = NULL;
 
     mm_obj_dbg (self, "received slot status indication");
 
     if (!qmi_indication_uim_slot_status_output_get_physical_slot_status (output,
-                                                                         &physical_slots,
+                                                                         NULL,
                                                                          &error)) {
         mm_obj_warn (self, "could not process slot status indication: %s", error->message);
         return;
     }
 
-    for (i = 0; i < physical_slots->len; i++) {
-        QmiPhysicalSlotStatusSlot *slot_status;
-
-        slot_status = &g_array_index (physical_slots, QmiPhysicalSlotStatusSlot, i);
-
-        /* We only care about active slot changes */
-        if (slot_status->physical_slot_status == QMI_UIM_SLOT_STATE_ACTIVE) {
-            g_autofree gchar *iccid = NULL;
-
-            if (slot_status->iccid && slot_status->iccid->len > 0) {
-                iccid = mm_bcd_to_string ((const guint8 *) slot_status->iccid->data, slot_status->iccid->len,
-                                          TRUE /* low_nybble_first */);
-            }
-
-            mm_iface_modem_check_for_sim_swap (MM_IFACE_MODEM (self),
-                                               i + 1, /* Slot index */
-                                               iccid,
-                                               NULL,
-                                               NULL);
-        }
-    }
+    /* A slot status indication means that
+     * 1) The physical slot to logical slot mapping has changed as a
+     * result of switching the slot. or,
+     * 2) A card has been removed from, or inserted to, the physical slot. or,
+     * 3) A physical slot is powered up or down. or,
+     * In all these cases, we must reprobe the modem to keep SIM objects updated */
+    mm_base_modem_process_sim_event (MM_BASE_MODEM (self));
 }
 
 static void
@@ -3982,6 +3974,28 @@ uim_slot_status_not_supported (GTask *task)
                                          task);
 }
 
+static gboolean
+enable_hot_swap (MMSharedQmi *self)
+{
+    Private *priv;
+
+    if (!self) {
+        mm_obj_dbg (self, "Could not find MMSharedQmi in enable_hotswap. Hot swap detection disabled");
+        return G_SOURCE_REMOVE;
+    }
+
+    priv                                = get_private (self);
+    priv->uim_slot_status_indication_id = g_signal_connect (priv->uim_client,
+                                                            "slot-status",
+                                                            G_CALLBACK (uim_slot_status_indication_cb),
+                                                            self);
+
+    mm_obj_dbg (self, "Monitoring slot status indications for hot swap");
+    return G_SOURCE_REMOVE;
+}
+
+#define SIM_BOOT_DELAY 3
+
 static void
 uim_check_get_slot_status_ready (QmiClientUim *client,
                                  GAsyncResult *res,
@@ -4015,10 +4029,14 @@ uim_check_get_slot_status_ready (QmiClientUim *client,
         return;
     }
 
-    mm_obj_dbg (self, "slot status retrieval succeeded: monitoring slot status indications");
+    /* Listen to slot status commands after accounting for any SIM's still booting
+     * after LOAD_SIM_SLOTS */
+    g_timeout_add_seconds (SIM_BOOT_DELAY, (GSourceFunc) enable_hot_swap, MM_SHARED_QMI(self));
+
     g_task_return_boolean (task, TRUE);
     g_object_unref (task);
 }
+
 
 static void
 uim_register_events_ready (QmiClientUim *client,
@@ -4038,15 +4056,11 @@ uim_register_events_ready (QmiClientUim *client,
     output = qmi_client_uim_register_events_finish (client, res, &error);
     if (output && qmi_message_uim_register_events_output_get_result (output, &error)) {
         g_assert (!priv->uim_slot_status_indication_id);
-        priv->uim_slot_status_indication_id = g_signal_connect (priv->uim_client,
-                                                                "slot-status",
-                                                                G_CALLBACK (uim_slot_status_indication_cb),
-                                                                self);
-        mm_obj_dbg (self, "registered for slot status indications");
 
-        /* Successful registration does not mean that the modem actually sends
-         * physical slot status indications; invoke Get Slot Status to find out if
-         * the modem really supports slot status. */
+        /* Check that the modem sends physical slot status indications; invoke
+         * Get Slot Status to find out if the modem really supports slot status.
+         * Install a callback for slot status indications if Get Slot Status is
+         * successful. */
         qmi_client_uim_get_slot_status (client,
                                         NULL,
                                         10,
