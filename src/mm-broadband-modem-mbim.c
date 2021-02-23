@@ -4771,30 +4771,23 @@ ussd_encode (const gchar  *command,
     g_autoptr(GByteArray) array = NULL;
 
     if (mm_charset_can_convert_to (command, MM_MODEM_CHARSET_GSM)) {
-        guint8  *gsm;
-        guint8  *packed;
-        guint32  len = 0;
-        guint32  packed_len = 0;
+        g_autoptr(GByteArray)  gsm = NULL;
+        guint8                *packed;
+        guint32                packed_len = 0;
 
         *scheme = MM_MODEM_GSM_USSD_SCHEME_7BIT;
-        gsm = mm_charset_utf8_to_unpacked_gsm (command, &len);
+        gsm = mm_modem_charset_bytearray_from_utf8 (command, MM_MODEM_CHARSET_GSM, FALSE, error);
         if (!gsm) {
-            g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
-                         "Failed to encode USSD command in GSM7 charset");
+            g_prefix_error (error, "Failed to encode USSD command in GSM7 charset: ");
             return NULL;
         }
-        packed = mm_charset_gsm_pack (gsm, len, 0, &packed_len);
-        g_free (gsm);
-
+        packed = mm_charset_gsm_pack (gsm->data, gsm->len, 0, &packed_len);
         array = g_byte_array_new_take (packed, packed_len);
     } else {
-        g_autoptr(GError) inner_error = NULL;
-
         *scheme = MM_MODEM_GSM_USSD_SCHEME_UCS2;
-        array = g_byte_array_sized_new (strlen (command) * 2);
-        if (!mm_modem_charset_byte_array_append (array, command, FALSE, MM_MODEM_CHARSET_UCS2, &inner_error)) {
-            g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
-                         "Failed to encode USSD command in UCS2 charset: %s", inner_error->message);
+        array = mm_modem_charset_bytearray_from_utf8 (command, MM_MODEM_CHARSET_UCS2, FALSE, error);
+        if (!array) {
+            g_prefix_error (error, "Failed to encode USSD command in UCS2 charset: ");
             return NULL;
         }
     }
@@ -4816,21 +4809,20 @@ ussd_decode (guint32      scheme,
     gchar *decoded = NULL;
 
     if (scheme == MM_MODEM_GSM_USSD_SCHEME_7BIT) {
-        g_autofree guint8  *unpacked = NULL;
-        guint32             unpacked_len;
+        g_autoptr(GByteArray)  unpacked_array = NULL;
+        guint8                *unpacked = NULL;
+        guint32                unpacked_len;
 
         unpacked = mm_charset_gsm_unpack ((const guint8 *)data->data, (data->len * 8) / 7, 0, &unpacked_len);
-        decoded = (gchar *) mm_charset_gsm_unpacked_to_utf8 (unpacked, unpacked_len);
+        unpacked_array = g_byte_array_new_take (unpacked, unpacked_len);
+
+        decoded = mm_modem_charset_bytearray_to_utf8 (unpacked_array, MM_MODEM_CHARSET_GSM, FALSE, error);
         if (!decoded)
-            g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
-                         "Error decoding USSD command in 0x%04x scheme (GSM7 charset)",
-                         scheme);
+            g_prefix_error (error, "Error decoding USSD command in 0x%04x scheme (GSM7 charset): ", scheme);
     } else if (scheme == MM_MODEM_GSM_USSD_SCHEME_UCS2) {
-        decoded = mm_modem_charset_byte_array_to_utf8 (data, MM_MODEM_CHARSET_UCS2);
+        decoded = mm_modem_charset_bytearray_to_utf8 (data, MM_MODEM_CHARSET_UCS2, FALSE, error);
         if (!decoded)
-            g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
-                         "Error decoding USSD command in 0x%04x scheme (UCS2 charset)",
-                         scheme);
+            g_prefix_error (error, "Error decoding USSD command in 0x%04x scheme (UCS2 charset): ", scheme);
     } else
         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
                      "Failed to decode USSD command in unsupported 0x%04x scheme", scheme);
