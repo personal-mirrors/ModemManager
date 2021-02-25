@@ -202,8 +202,7 @@ mm_broadband_modem_qmi_peek_port_qmi (MMBroadbandModemQmi *self)
 
     qmi_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
                                           MM_PORT_SUBSYS_UNKNOWN,
-                                          MM_PORT_TYPE_QMI,
-                                          NULL);
+                                          MM_PORT_TYPE_QMI);
 
     /* First QMI port in the list is the primary one always */
     if (qmi_ports)
@@ -269,8 +268,7 @@ peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
     /* Find the CDC-WDM port on the same USB interface as the given net port */
     cdc_wdm_qmi_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
                                                   MM_PORT_SUBSYS_USBMISC,
-                                                  MM_PORT_TYPE_QMI,
-                                                  NULL);
+                                                  MM_PORT_TYPE_QMI);
     for (l = cdc_wdm_qmi_ports; l && !found; l = g_list_next (l)) {
         const gchar *wdm_port_parent_path;
 
@@ -288,7 +286,7 @@ peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
                      MM_CORE_ERROR_NOT_FOUND,
                      "Couldn't find associated QMI port for 'net/%s'",
                      mm_port_get_device (data));
-    else
+    else if (out_sio_port)
         *out_sio_port = QMI_SIO_PORT_NONE;
 
     return found;
