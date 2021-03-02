@@ -177,8 +177,7 @@ mm_broadband_modem_huawei_get_at_port_list (MMBroadbandModemHuawei *self)
     /* Additional cdc-wdm ports used for dialing */
     cdc_wdm_at_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
                                                  MM_PORT_SUBSYS_USBMISC,
-                                                 MM_PORT_TYPE_AT,
-                                                 NULL);
+                                                 MM_PORT_TYPE_AT);
 
     return g_list_concat (out, cdc_wdm_at_ports);
 }
@@ -2201,8 +2200,7 @@ peek_port_at_for_data (MMBroadbandModemHuawei *self,
     /* Find the CDC-WDM port on the same USB interface as the given net port */
     cdc_wdm_at_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
                                                  MM_PORT_SUBSYS_USBMISC,
-                                                 MM_PORT_TYPE_AT,
-                                                 NULL);
+                                                 MM_PORT_TYPE_AT);
     for (l = cdc_wdm_at_ports; l && !found; l = g_list_next (l)) {
         const gchar  *wdm_port_parent_path;
 
@@ -2301,28 +2299,27 @@ encode (MMIfaceModem3gppUssd *self,
         guint *scheme,
         GError **error)
 {
-    gchar *hex;
-    guint8 *gsm, *packed;
-    guint32 len = 0, packed_len = 0;
+    g_autoptr(GByteArray)  gsm = NULL;
+    g_autofree guint8     *packed = NULL;
+    guint32                packed_len = 0;
+
+    gsm = mm_modem_charset_bytearray_from_utf8 (command, MM_MODEM_CHARSET_GSM, FALSE, error);
+    if (!gsm)
+        return NULL;
 
     *scheme = MM_MODEM_GSM_USSD_SCHEME_7BIT;
-    gsm = mm_charset_utf8_to_unpacked_gsm (command, &len);
 
     /* If command is a multiple of 7 characters long, Huawei firmwares
      * apparently want that padded.  Maybe all modems?
      */
-    if (len % 7 == 0) {
-        gsm = g_realloc (gsm, len + 1);
-        gsm[len] = 0x0d;
-        len++;
+    if (gsm->len % 7 == 0) {
+        static const guint8 padding = 0x0d;
+
+        g_byte_array_append (gsm, &padding, 1);
     }
 
-    packed = mm_charset_gsm_pack (gsm, len, 0, &packed_len);
-    hex = mm_utils_bin2hexstr (packed, packed_len);
-    g_free (packed);
-    g_free (gsm);
-
-    return hex;
+    packed = mm_charset_gsm_pack (gsm->data, gsm->len, 0, &packed_len);
+    return mm_utils_bin2hexstr (packed, packed_len);
 }
 
 static gchar *
@@ -2330,21 +2327,25 @@ decode (MMIfaceModem3gppUssd *self,
         const gchar *reply,
         GError **error)
 {
-    gchar *bin, *utf8;
-    guint8 *unpacked;
-    gsize bin_len;
-    guint32 unpacked_len;
+    g_autofree guint8    *bin = NULL;
+    gsize                 bin_len = 0;
+    g_autofree guint8    *unpacked = NULL;
+    guint32               unpacked_len;
+    g_autoptr(GByteArray) unpacked_array = NULL;
 
-    bin = mm_utils_hexstr2bin (reply, &bin_len);
-    unpacked = mm_charset_gsm_unpack ((guint8*) bin, (bin_len * 8) / 7, 0, &unpacked_len);
+    bin = mm_utils_hexstr2bin (reply, -1, &bin_len, error);
+    if (!bin)
+        return NULL;
+
+    unpacked = mm_charset_gsm_unpack (bin, (bin_len * 8) / 7, 0, &unpacked_len);
     /* if the last character in a 7-byte block is padding, then drop it */
     if ((bin_len % 7 == 0) && (unpacked[unpacked_len - 1] == 0x0d))
         unpacked_len--;
-    utf8 = (char*) mm_charset_gsm_unpacked_to_utf8 (unpacked, unpacked_len);
 
-    g_free (bin);
-    g_free (unpacked);
-    return utf8;
+    unpacked_array = g_byte_array_sized_new (unpacked_len);
+    g_byte_array_append (unpacked_array, unpacked, unpacked_len);
+
+    return mm_modem_charset_bytearray_to_utf8 (unpacked_array, MM_MODEM_CHARSET_GSM, FALSE, error);
 }
 
 /*****************************************************************************/

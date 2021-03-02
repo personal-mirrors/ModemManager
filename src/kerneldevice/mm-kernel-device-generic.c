@@ -27,6 +27,7 @@
 #include "mm-kernel-device-generic.h"
 #include "mm-kernel-device-generic-rules.h"
 #include "mm-log-object.h"
+#include "mm-utils.h"
 
 #if !defined UDEVRULESDIR
 # error UDEVRULESDIR is not defined
@@ -548,6 +549,12 @@ static const gchar *
 kernel_device_get_sysfs_path (MMKernelDevice *self)
 {
     return MM_KERNEL_DEVICE_GENERIC (self)->priv->sysfs_path;
+}
+
+static gint
+kernel_device_get_interface_number (MMKernelDevice *self)
+{
+    return (gint) MM_KERNEL_DEVICE_GENERIC (self)->priv->interface_number;
 }
 
 static gint
@@ -1172,6 +1179,7 @@ mm_kernel_device_generic_class_init (MMKernelDeviceGenericClass *klass)
     kernel_device_class->get_physdev_subsystem     = kernel_device_get_physdev_subsystem;
     kernel_device_class->get_physdev_manufacturer  = kernel_device_get_physdev_manufacturer;
     kernel_device_class->get_physdev_product       = kernel_device_get_physdev_product;
+    kernel_device_class->get_interface_number      = kernel_device_get_interface_number;
     kernel_device_class->get_interface_class       = kernel_device_get_interface_class;
     kernel_device_class->get_interface_subclass    = kernel_device_get_interface_subclass;
     kernel_device_class->get_interface_protocol    = kernel_device_get_interface_protocol;

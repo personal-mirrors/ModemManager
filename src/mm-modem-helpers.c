@@ -1289,9 +1289,9 @@ mm_3gpp_parse_cops_test_response (const gchar     *reply,
         info->operator_code = mm_get_string_unquoted_from_match_info (match_info, 4);
 
         /* The returned strings may be given in e.g. UCS2 */
-        mm_3gpp_normalize_operator (&info->operator_long,  cur_charset);
-        mm_3gpp_normalize_operator (&info->operator_short, cur_charset);
-        mm_3gpp_normalize_operator (&info->operator_code,  cur_charset);
+        mm_3gpp_normalize_operator (&info->operator_long,  cur_charset, log_object);
+        mm_3gpp_normalize_operator (&info->operator_short, cur_charset, log_object);
+        mm_3gpp_normalize_operator (&info->operator_code,  cur_charset, log_object);
 
         /* Only try for access technology with UMTS-format matches.
          * If none give, assume GSM */
@@ -4053,8 +4053,11 @@ mm_string_to_access_tech (const gchar *string)
 
 void
 mm_3gpp_normalize_operator (gchar          **operator,
-                            MMModemCharset   cur_charset)
+                            MMModemCharset   cur_charset,
+                            gpointer         log_object)
 {
+    g_autofree gchar *normalized = NULL;
+
     g_assert (operator);
 
     if (*operator == NULL)
@@ -4062,31 +4065,38 @@ mm_3gpp_normalize_operator (gchar          **operator,
 
     /* Despite +CSCS? may claim supporting UCS2, Some modems (e.g. Huawei)
      * always report the operator name in ASCII in a +COPS response. */
-    if (cur_charset == MM_MODEM_CHARSET_UCS2) {
-        gchar *tmp;
+    if (cur_charset != MM_MODEM_CHARSET_UNKNOWN) {
+        g_autoptr(GError) error = NULL;
 
-        tmp = g_strdup (*operator);
-        /* In this case we're already checking UTF-8 validity */
-        tmp = mm_charset_take_and_convert_to_utf8 (tmp, cur_charset);
-        if (tmp) {
-            g_clear_pointer (operator, g_free);
-            *operator = tmp;
+        normalized = mm_modem_charset_str_to_utf8 (*operator, -1, cur_charset, TRUE, &error);
+        if (normalized)
             goto out;
-        }
+
+        mm_obj_dbg (log_object, "couldn't convert operator string '%s' from charset '%s': %s",
+                    *operator,
+                    mm_modem_charset_to_string (cur_charset),
+                    error->message);
     }
 
     /* Charset is unknown or there was an error in conversion; try to see
      * if the contents we got are valid UTF-8 already. */
-    if (!g_utf8_validate (*operator, -1, NULL))
-        g_clear_pointer (operator, g_free);
+    if (g_utf8_validate (*operator, -1, NULL))
+        normalized = g_strdup (*operator);
 
 out:
 
     /* Some modems (Novatel LTE) return the operator name as "Unknown" when
      * it fails to obtain the operator name. Return NULL in such case.
      */
-    if (*operator && g_ascii_strcasecmp (*operator, "unknown") == 0)
+    if (!normalized || g_ascii_strcasecmp (normalized, "unknown") == 0) {
+        /* If normalization failed, just cleanup the string */
         g_clear_pointer (operator, g_free);
+        return;
+    }
+
+    mm_obj_dbg (log_object, "operator normalized '%s'->'%s'", *operator, normalized);
+    g_clear_pointer (operator, g_free);
+    *operator = g_steal_pointer (&normalized);
 }
 
 /*************************************************************************/
@@ -4326,10 +4336,9 @@ mm_3gpp_parse_emergency_numbers (const char *raw, GError **error)
         return NULL;
     }
 
-    bin = (guint8 *) mm_utils_hexstr2bin (raw, &binlen);
+    bin = mm_utils_hexstr2bin (raw, -1, &binlen, error);
     if (!bin) {
-        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
-                     "invalid raw emergency numbers list contents: %s", raw);
+        g_prefix_error (error, "invalid raw emergency numbers list contents: ");
         return NULL;
     }
 
@@ -5151,4 +5160,88 @@ mm_parse_supl_address (const gchar  *supl,
 out:
     g_strfreev (split);
     return valid;
+}
+
+/*****************************************************************************/
+
+gboolean
+mm_sim_parse_cpol_query_response (const gchar  *response,
+                                  gchar       **out_operator_code,
+                                  gboolean     *out_gsm_act,
+                                  gboolean     *out_gsm_compact_act,
+                                  gboolean     *out_utran_act,
+                                  gboolean     *out_eutran_act,
+                                  gboolean     *out_ngran_act,
+                                  GError      **error)
+{
+    g_autoptr(GMatchInfo)  match_info = NULL;
+    g_autoptr(GRegex)      r = NULL;
+    g_autofree gchar      *operator_code = NULL;
+    guint                  format = 0;
+    guint                  act = 0;
+    guint                  match_count;
+
+    r = g_regex_new ("\\+CPOL:\\s*\\d+,\\s*(\\d+),\\s*\"(\\d+)\""
+                     "(?:,\\s*(\\d+))?"     /* GSM_AcTn */
+                     "(?:,\\s*(\\d+))?"     /* GSM_Compact_AcTn */
+                     "(?:,\\s*(\\d+))?"     /* UTRAN_AcTn */
+                     "(?:,\\s*(\\d+))?"     /* E-UTRAN_AcTn */
+                     "(?:,\\s*(\\d+))?",    /* NG-RAN_AcTn */
+                     G_REGEX_RAW, 0, NULL);
+    g_regex_match (r, response, 0, &match_info);
+
+    if (!g_match_info_matches (match_info)) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Couldn't parse +CPOL reply: %s", response);
+        return FALSE;
+    }
+
+    match_count = g_match_info_get_match_count (match_info);
+    /* Remember that g_match_info_get_match_count() includes match #0 */
+    g_assert (match_count >= 3);
+
+    if (!mm_get_uint_from_match_info (match_info, 1, &format) ||
+        !(operator_code = mm_get_string_unquoted_from_match_info (match_info, 2))) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Couldn't parse +CPOL reply parameters: %s", response);
+        return FALSE;
+    }
+
+    if (format != 2) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "+CPOL reply not using numeric operator code: %s", response);
+        return FALSE;
+    }
+
+    if (out_operator_code) {
+        *out_operator_code = g_steal_pointer (&operator_code);
+    }
+    if (out_gsm_act)
+        *out_gsm_act = match_count >= 4 &&
+                       mm_get_uint_from_match_info (match_info, 3, &act) &&
+                       act != 0;
+    if (out_gsm_compact_act)
+        *out_gsm_compact_act = match_count >= 5 &&
+                               mm_get_uint_from_match_info (match_info, 4, &act) &&
+                               act != 0;
+    if (out_utran_act)
+        *out_utran_act = match_count >= 6 &&
+                         mm_get_uint_from_match_info (match_info, 5, &act) &&
+                         act != 0;
+    if (out_eutran_act)
+        *out_eutran_act = match_count >= 7 &&
+                          mm_get_uint_from_match_info (match_info, 6, &act) &&
+                          act != 0;
+    if (out_ngran_act)
+        *out_ngran_act = match_count >= 8 &&
+                         mm_get_uint_from_match_info (match_info, 7, &act) &&
+                         act != 0;
+
+    return TRUE;
 }

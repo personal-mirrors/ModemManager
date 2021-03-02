@@ -439,7 +439,8 @@ const gchar         *mm_3gpp_facility_to_acronym (MMModem3gppFacility  facility)
 MMModemAccessTechnology mm_string_to_access_tech (const gchar *string);
 
 void mm_3gpp_normalize_operator (gchar          **operator,
-                                 MMModemCharset   cur_charset);
+                                 MMModemCharset   cur_charset,
+                                 gpointer         log_object);
 
 gboolean mm_3gpp_parse_operator_id (const gchar *operator_id,
                                     guint16 *mcc,
@@ -528,6 +529,20 @@ gboolean mm_parse_supl_address (const gchar  *supl,
                                 guint32      *out_ip,
                                 guint16      *out_port,
                                 GError      **error);
+
+/*****************************************************************************/
+/* SIM specific helpers and utilities */
+/*****************************************************************************/
+
+/* +CPOL? response parser (for a single entry) - accepts only numeric operator format*/
+gboolean mm_sim_parse_cpol_query_response (const gchar  *response,
+                                           gchar       **out_operator_code,
+                                           gboolean     *out_gsm_act,
+                                           gboolean     *out_gsm_compact_act,
+                                           gboolean     *out_utran_act,
+                                           gboolean     *out_eutran_act,
+                                           gboolean     *out_ngran_act,
+                                           GError      **error);
 
 /*****************************************************************************/
 

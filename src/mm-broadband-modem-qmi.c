@@ -121,7 +121,7 @@ struct _MMBroadbandModemQmiPrivate {
     GTask *activation_task;
 
     /* Messaging helpers */
-    gboolean messaging_fallback_at;
+    gboolean messaging_fallback_at_only;
     gboolean messaging_unsolicited_events_enabled;
     gboolean messaging_unsolicited_events_setup;
     guint messaging_event_report_indication_id;
@@ -206,8 +206,7 @@ mm_broadband_modem_qmi_peek_port_qmi (MMBroadbandModemQmi *self)
 
     qmi_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
                                           MM_PORT_SUBSYS_UNKNOWN,
-                                          MM_PORT_TYPE_QMI,
-                                          NULL);
+                                          MM_PORT_TYPE_QMI);
 
     /* First QMI port in the list is the primary one always */
     if (qmi_ports)
@@ -273,8 +272,7 @@ peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
     /* Find the CDC-WDM port on the same USB interface as the given net port */
     cdc_wdm_qmi_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
                                                   MM_PORT_SUBSYS_USBMISC,
-                                                  MM_PORT_TYPE_QMI,
-                                                  NULL);
+                                                  MM_PORT_TYPE_QMI);
     for (l = cdc_wdm_qmi_ports; l && !found; l = g_list_next (l)) {
         const gchar *wdm_port_parent_path;
 
@@ -292,7 +290,7 @@ peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
                      MM_CORE_ERROR_NOT_FOUND,
                      "Couldn't find associated QMI port for 'net/%s'",
                      mm_port_get_device (data));
-    else
+    else if (out_sio_port)
         *out_sio_port = QMI_SIO_PORT_NONE;
 
     return found;
@@ -5555,9 +5553,9 @@ parent_messaging_check_support_ready (MMIfaceModemMessaging *_self,
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
 
-    self->priv->messaging_fallback_at = iface_modem_messaging_parent->check_support_finish (_self, res, NULL);
+    self->priv->messaging_fallback_at_only = iface_modem_messaging_parent->check_support_finish (_self, res, NULL);
 
-    g_task_return_boolean (task, self->priv->messaging_fallback_at);
+    g_task_return_boolean (task, self->priv->messaging_fallback_at_only);
     g_object_unref (task);
 }
 
@@ -5602,8 +5600,8 @@ messaging_load_supported_storages_finish (MMIfaceModemMessaging *_self,
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
     MMSmsStorage supported;
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         return iface_modem_messaging_parent->load_supported_storages_finish (_self, res, mem1, mem2, mem3, error);
     }
 
@@ -5630,8 +5628,8 @@ messaging_load_supported_storages (MMIfaceModemMessaging *_self,
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
     GTask *task;
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         iface_modem_messaging_parent->load_supported_storages (_self, callback, user_data);
         return;
     }
@@ -5651,8 +5649,8 @@ modem_messaging_setup_sms_format_finish (MMIfaceModemMessaging *_self,
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         return iface_modem_messaging_parent->setup_sms_format_finish (_self, res, error);
     }
 
@@ -5667,8 +5665,8 @@ modem_messaging_setup_sms_format (MMIfaceModemMessaging *_self,
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
     GTask *task;
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         return iface_modem_messaging_parent->setup_sms_format (_self, callback, user_data);
     }
 
@@ -5688,8 +5686,8 @@ messaging_set_default_storage_finish (MMIfaceModemMessaging *_self,
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         return iface_modem_messaging_parent->set_default_storage_finish (_self, res, error);
     }
 
@@ -5732,8 +5730,8 @@ messaging_set_default_storage (MMIfaceModemMessaging *_self,
     GArray *routes_array;
     QmiMessageWmsSetRoutesInputRouteListElement route;
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         iface_modem_messaging_parent->set_default_storage (_self, storage, callback, user_data);
         return;
     }
@@ -5817,8 +5815,8 @@ load_initial_sms_parts_finish (MMIfaceModemMessaging *_self,
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         return iface_modem_messaging_parent->load_initial_sms_parts_finish (_self, res, error);
     }
 
@@ -6196,8 +6194,8 @@ load_initial_sms_parts (MMIfaceModemMessaging *_self,
     GTask *task;
     QmiClient *client = NULL;
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         return iface_modem_messaging_parent->load_initial_sms_parts (_self, storage, callback, user_data);
     }
 
@@ -6218,7 +6216,7 @@ load_initial_sms_parts (MMIfaceModemMessaging *_self,
 }
 
 /*****************************************************************************/
-/* Setup/Cleanup unsolicited event handlers (Messaging interface) */
+/* Common setup/cleanup unsolicited event handlers (Messaging interface) */
 
 typedef struct {
     MMIfaceModemMessaging *self;
@@ -6331,57 +6329,23 @@ messaging_event_report_indication_cb (QmiClientNas *client,
 }
 
 static gboolean
-messaging_cleanup_unsolicited_events_finish (MMIfaceModemMessaging *_self,
-                                             GAsyncResult *res,
-                                             GError **error)
+common_setup_cleanup_messaging_unsolicited_events (MMBroadbandModemQmi  *self,
+                                                   gboolean              enable,
+                                                   GError              **error)
 {
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
-        return iface_modem_messaging_parent->cleanup_unsolicited_events_finish (_self, res, error);
-    }
-
-    return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static gboolean
-messaging_setup_unsolicited_events_finish (MMIfaceModemMessaging *_self,
-                                             GAsyncResult *res,
-                                             GError **error)
-{
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
-        return iface_modem_messaging_parent->setup_unsolicited_events_finish (_self, res, error);
-    }
-
-    return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static void
-common_setup_cleanup_messaging_unsolicited_events (MMBroadbandModemQmi *self,
-                                                   gboolean enable,
-                                                   GAsyncReadyCallback callback,
-                                                   gpointer user_data)
-{
-    GTask *task;
     QmiClient *client = NULL;
 
-    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_WMS, &client,
-                                      callback, user_data))
-        return;
-
-    task = g_task_new (self, NULL, callback, user_data);
+    client = mm_shared_qmi_peek_client (MM_SHARED_QMI (self),
+                                        QMI_SERVICE_WMS,
+                                        MM_PORT_QMI_FLAG_DEFAULT,
+                                        error);
+    if (!client)
+        return FALSE;
 
     if (enable == self->priv->messaging_unsolicited_events_setup) {
         mm_obj_dbg (self, "messaging unsolicited events already %s; skipping",
                     enable ? "setup" : "cleanup");
-        g_task_return_boolean (task, TRUE);
-        g_object_unref (task);
-        return;
+        return TRUE;
     }
 
     /* Store new state */
@@ -6401,44 +6365,119 @@ common_setup_cleanup_messaging_unsolicited_events (MMBroadbandModemQmi *self,
         self->priv->messaging_event_report_indication_id = 0;
     }
 
-    g_task_return_boolean (task, TRUE);
+    return TRUE;
+}
+
+/*****************************************************************************/
+/* Cleanup unsolicited event handlers (Messaging interface) */
+
+static gboolean
+messaging_cleanup_unsolicited_events_finish (MMIfaceModemMessaging  *self,
+                                             GAsyncResult           *res,
+                                             GError                **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+parent_messaging_cleanup_unsolicited_events_ready (MMIfaceModemMessaging *_self,
+                                                   GAsyncResult          *res,
+                                                   GTask                 *task)
+{
+    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
+    GError              *error = NULL;
+
+    if (!iface_modem_messaging_parent->cleanup_unsolicited_events_finish (_self, res, &error)) {
+        if (self->priv->messaging_fallback_at_only) {
+            g_task_return_error (task, error);
+            g_object_unref (task);
+            return;
+        }
+        mm_obj_dbg (self, "cleaning up parent messaging unsolicited events failed: %s", error->message);
+        g_clear_error (&error);
+    }
+
+    /* handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    /* Disable QMI indications */
+    if (!common_setup_cleanup_messaging_unsolicited_events (self, FALSE, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
     g_object_unref (task);
 }
 
 static void
-messaging_cleanup_unsolicited_events (MMIfaceModemMessaging *_self,
-                                      GAsyncReadyCallback callback,
-                                      gpointer user_data)
+messaging_cleanup_unsolicited_events (MMIfaceModemMessaging *self,
+                                      GAsyncReadyCallback    callback,
+                                      gpointer               user_data)
 {
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
+    /* Disable AT URCs parent and chain QMI indications disabling */
+    iface_modem_messaging_parent->cleanup_unsolicited_events (
+        self,
+        (GAsyncReadyCallback)parent_messaging_cleanup_unsolicited_events_ready,
+        g_task_new (self, NULL, callback, user_data));
+}
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
-        return iface_modem_messaging_parent->cleanup_unsolicited_events (_self, callback, user_data);
-    }
+/*****************************************************************************/
+/* Setup unsolicited event handlers (Messaging interface) */
 
-    common_setup_cleanup_messaging_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
-                                                       FALSE,
-                                                       callback,
-                                                       user_data);
+static gboolean
+messaging_setup_unsolicited_events_finish (MMIfaceModemMessaging  *self,
+                                           GAsyncResult           *res,
+                                           GError                **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
-messaging_setup_unsolicited_events (MMIfaceModemMessaging *_self,
-                                    GAsyncReadyCallback callback,
-                                    gpointer user_data)
+parent_messaging_setup_unsolicited_events_ready (MMIfaceModemMessaging *_self,
+                                                 GAsyncResult          *res,
+                                                 GTask                 *task)
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
+    GError              *error = NULL;
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
-        return iface_modem_messaging_parent->setup_unsolicited_events (_self, callback, user_data);
+    if (!iface_modem_messaging_parent->setup_unsolicited_events_finish (_self, res, &error)) {
+        if (self->priv->messaging_fallback_at_only) {
+            g_task_return_error (task, error);
+            g_object_unref (task);
+            return;
+        }
+        mm_obj_dbg (self, "setting up parent messaging unsolicited events failed: %s", error->message);
+        g_clear_error (&error);
     }
 
-    common_setup_cleanup_messaging_unsolicited_events (MM_BROADBAND_MODEM_QMI (self),
-                                                       TRUE,
-                                                       callback,
-                                                       user_data);
+    /* handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    /* Enable QMI indications */
+    if (!common_setup_cleanup_messaging_unsolicited_events (self, TRUE, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+messaging_setup_unsolicited_events (MMIfaceModemMessaging *self,
+                                    GAsyncReadyCallback    callback,
+                                    gpointer               user_data)
+{
+    /* Enable AT URCs parent and chain QMI indication enabling */
+    iface_modem_messaging_parent->setup_unsolicited_events (
+        self,
+        (GAsyncReadyCallback)parent_messaging_setup_unsolicited_events_ready,
+        g_task_new (self, NULL, callback, user_data));
 }
 
 /*****************************************************************************/
@@ -6455,8 +6494,8 @@ messaging_disable_unsolicited_events_finish (MMIfaceModemMessaging *_self,
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at && iface_modem_messaging_parent->disable_unsolicited_events_finish) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only && iface_modem_messaging_parent->disable_unsolicited_events_finish) {
         return iface_modem_messaging_parent->disable_unsolicited_events_finish (_self, res, error);
     }
 
@@ -6470,8 +6509,8 @@ messaging_enable_unsolicited_events_finish (MMIfaceModemMessaging *_self,
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         return iface_modem_messaging_parent->enable_unsolicited_events_finish (_self, res, error);
     }
 
@@ -6563,8 +6602,8 @@ messaging_disable_unsolicited_events (MMIfaceModemMessaging *_self,
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         /* Generic implementation doesn't actually have a method to disable
          * unsolicited messaging events */
         if (!iface_modem_messaging_parent->disable_unsolicited_events) {
@@ -6592,8 +6631,8 @@ messaging_enable_unsolicited_events (MMIfaceModemMessaging *_self,
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         return iface_modem_messaging_parent->enable_unsolicited_events (_self, callback, user_data);
     }
 
@@ -6611,8 +6650,8 @@ messaging_create_sms (MMIfaceModemMessaging *_self)
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
 
-    /* Handle fallback */
-    if (self->priv->messaging_fallback_at) {
+    /* Handle AT URC only fallback */
+    if (self->priv->messaging_fallback_at_only) {
         return iface_modem_messaging_parent->create_sms (_self);
     }
 
@@ -7477,8 +7516,8 @@ ussd_encode (const gchar                  *command,
         return (GArray *) g_steal_pointer (&barray);
     }
 
-    barray = g_byte_array_sized_new (command_len * 2);
-    if (!mm_modem_charset_byte_array_append (barray, command, FALSE, MM_MODEM_CHARSET_UCS2, &inner_error)) {
+    barray = mm_modem_charset_bytearray_from_utf8 (command, MM_MODEM_CHARSET_UCS2, FALSE, &inner_error);
+    if (!barray) {
         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
                      "Failed to encode USSD command in UCS2 charset: %s", inner_error->message);
         return NULL;
@@ -7502,11 +7541,9 @@ ussd_decode (QmiVoiceUssDataCodingScheme   scheme,
                          "Error decoding USSD command in 0x%04x scheme (ASCII charset)",
                          scheme);
     } else if (scheme == QMI_VOICE_USS_DATA_CODING_SCHEME_UCS2) {
-        decoded = mm_modem_charset_byte_array_to_utf8 ((GByteArray *) data, MM_MODEM_CHARSET_UCS2);
+        decoded = mm_modem_charset_bytearray_to_utf8 ((GByteArray *) data, MM_MODEM_CHARSET_UCS2, FALSE, error);
         if (!decoded)
-            g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
-                         "Error decoding USSD command in 0x%04x scheme (UCS2 charset)",
-                         scheme);
+            g_prefix_error (error, "Error decoding USSD command in 0x%04x scheme (UCS2 charset): ", scheme);
     } else
         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
                      "Failed to decode USSD command in unsupported 0x%04x scheme", scheme);
