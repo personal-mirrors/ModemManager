@@ -124,10 +124,17 @@ build-single-plugins:
     - make
     - make install
     - popd
+    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
+    - pushd libqrtr-glib
+    - NOCONFIGURE=1 ./autogen.sh
+    - ./configure --prefix=/usr
+    - make
+    - make install
+    - popd
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
     - pushd libqmi
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --enable-mbim-qmux --enable-collection=basic
+    - ./configure --prefix=/usr --enable-mbim-qmux --enable-qrtr --enable-collection=basic
     - make
     - make install
     - popd
