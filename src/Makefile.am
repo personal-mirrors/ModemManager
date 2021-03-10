@@ -149,6 +149,8 @@ libkerneldevice_la_CPPFLAGS = \
 libkerneldevice_la_SOURCES = \
 	kerneldevice/mm-kernel-device.h \
 	kerneldevice/mm-kernel-device.c \
+	kerneldevice/mm-kernel-device-helpers.h \
+	kerneldevice/mm-kernel-device-helpers.c \
 	kerneldevice/mm-kernel-device-generic.h \
 	kerneldevice/mm-kernel-device-generic.c \
 	kerneldevice/mm-kernel-device-generic-rules.h \
@@ -199,6 +201,8 @@ mm-port-enums-types.c: Makefile.am $(top_srcdir)/build-aux/mm-enums-template.c m
 libport_la_SOURCES = \
 	mm-port.c \
 	mm-port.h \
+	mm-port-net.c \
+	mm-port-net.h \
 	mm-port-serial.c \
 	mm-port-serial.h \
 	mm-port-serial-at.c \
@@ -209,6 +213,8 @@ libport_la_SOURCES = \
 	mm-port-serial-gps.h \
 	mm-serial-parsers.c \
 	mm-serial-parsers.h \
+	mm-netlink.h \
+	mm-netlink.c \
 	$(NULL)
 
 nodist_libport_la_SOURCES = $(PORT_ENUMS_GENERATED)

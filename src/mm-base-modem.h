@@ -29,8 +29,9 @@
 #include <mm-gdbus-modem.h>
 
 #include "mm-auth-provider.h"
-#include "mm-port.h"
 #include "mm-kernel-device.h"
+#include "mm-port.h"
+#include "mm-port-net.h"
 #include "mm-port-serial-at.h"
 #include "mm-port-serial-qcdm.h"
 #include "mm-port-serial-gps.h"
@@ -65,6 +66,9 @@ typedef struct _MMBaseModemPrivate MMBaseModemPrivate;
 #define MM_BASE_MODEM_REPROBE            "base-modem-reprobe"
 #define MM_BASE_MODEM_DATA_NET_SUPPORTED "base-modem-data-net-supported"
 #define MM_BASE_MODEM_DATA_TTY_SUPPORTED "base-modem-data-tty-supported"
+
+#define MM_BASE_MODEM_SIGNAL_LINK_PORT_GRABBED  "base-modem-link-port-grabbed"
+#define MM_BASE_MODEM_SIGNAL_LINK_PORT_RELEASED "base-modem-link-port-released"
 
 struct _MMBaseModem {
     MmGdbusObjectSkeleton parent;
@@ -103,6 +107,12 @@ struct _MMBaseModemClass {
     gboolean (*disable_finish) (MMBaseModem *self,
                                 GAsyncResult *res,
                                 GError **error);
+
+    /* signals */
+    void (* link_port_grabbed)  (MMBaseModem *self,
+                                 MMPort      *link_port);
+    void (* link_port_released) (MMBaseModem *self,
+                                 MMPort      *link_port);
 };
 
 GType mm_base_modem_get_type (void);
@@ -110,11 +120,28 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMBaseModem, g_object_unref)
 
 guint     mm_base_modem_get_dbus_id  (MMBaseModem *self);
 
-gboolean  mm_base_modem_grab_port    (MMBaseModem         *self,
-                                      MMKernelDevice      *kernel_device,
-                                      MMPortType           ptype,
-                                      MMPortSerialAtFlag   at_pflags,
-                                      GError             **error);
+gboolean  mm_base_modem_grab_port         (MMBaseModem         *self,
+                                           MMKernelDevice      *kernel_device,
+                                           MMPortType           ptype,
+                                           MMPortSerialAtFlag   at_pflags,
+                                           GError             **error);
+gboolean  mm_base_modem_grab_link_port    (MMBaseModem         *self,
+                                           MMKernelDevice      *kernel_device,
+                                           GError             **error);
+gboolean  mm_base_modem_release_link_port (MMBaseModem         *self,
+                                           const gchar         *subsystem,
+                                           const gchar         *name,
+                                           GError             **error);
+
+void      mm_base_modem_wait_link_port        (MMBaseModem          *self,
+                                               const gchar          *subsystem,
+                                               const gchar          *name,
+                                               guint                 timeout_ms,
+                                               GAsyncReadyCallback   callback,
+                                               gpointer              user_data);
+MMPort   *mm_base_modem_wait_link_port_finish (MMBaseModem          *self,
+                                               GAsyncResult         *res,
+                                               GError              **error);
 
 gboolean  mm_base_modem_has_at_port  (MMBaseModem *self);
 

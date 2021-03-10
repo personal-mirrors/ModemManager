@@ -670,17 +670,6 @@ mm_iface_modem_create_bearer (MMIfaceModem *self,
         return;
     }
 
-    if (mm_bearer_list_get_count (ctx->list) == mm_bearer_list_get_max (ctx->list)) {
-        g_task_return_new_error (
-            task,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_TOO_MANY,
-            "Cannot add new bearer: already reached maximum (%u)",
-            mm_bearer_list_get_count (ctx->list));
-        g_object_unref (task);
-        return;
-    }
-
     MM_IFACE_MODEM_GET_INTERFACE (self)->create_bearer (
         self,
         properties,
@@ -5094,44 +5083,38 @@ interface_initialization_step (GTask *task)
         /* fall-through */
 
     case INITIALIZATION_STEP_BEARERS: {
-        MMBearerList *list = NULL;
+        g_autoptr(MMBearerList) list = NULL;
 
         /* Bearers setup is meant to be loaded only once during the whole
-         * lifetime of the modem. The list may have been created by the object
-         * implementing the interface; if so use it. */
+         * lifetime of the modem, so check if it exists; and if it doesn't,
+         * create it right away. */
         g_object_get (self,
                       MM_IFACE_MODEM_BEARER_LIST, &list,
                       NULL);
 
         if (!list) {
-            guint n;
-
-            /* The maximum number of available/connected modems is guessed from
-             * the size of the data ports list. */
-            n = g_list_length (mm_base_modem_peek_data_ports (MM_BASE_MODEM (self)));
-            mm_obj_dbg (self, "allowed up to %u bearers", n);
-
-            /* Create new default list */
-            list = mm_bearer_list_new (n, n);
+            list = MM_IFACE_MODEM_GET_INTERFACE (self)->create_bearer_list (self);
             g_signal_connect (list,
                               "notify::" MM_BEARER_LIST_NUM_BEARERS,
                               G_CALLBACK (bearer_list_updated),
                               self);
+
+            mm_gdbus_modem_set_max_active_bearers (
+                ctx->skeleton,
+                mm_bearer_list_get_max_active (list));
+            mm_gdbus_modem_set_max_active_multiplexed_bearers (
+                ctx->skeleton,
+                mm_bearer_list_get_max_active_multiplexed (list));
+
+            /* MaxBearers set equal to MaxActiveBearers */
+            mm_gdbus_modem_set_max_bearers (
+                ctx->skeleton,
+                mm_gdbus_modem_get_max_active_bearers (ctx->skeleton));
+
             g_object_set (self,
                           MM_IFACE_MODEM_BEARER_LIST, list,
                           NULL);
         }
-
-        if (mm_gdbus_modem_get_max_bearers (ctx->skeleton) == 0)
-            mm_gdbus_modem_set_max_bearers (
-                ctx->skeleton,
-                mm_bearer_list_get_max (list));
-        if (mm_gdbus_modem_get_max_active_bearers (ctx->skeleton) == 0)
-            mm_gdbus_modem_set_max_active_bearers (
-                ctx->skeleton,
-                mm_bearer_list_get_max_active (list));
-        g_object_unref (list);
-
         ctx->step++;
     } /* fall-through */
 

@@ -65,6 +65,9 @@ gboolean   mm_port_qmi_close_finish (MMPortQmi            *self,
                                      GAsyncResult         *res,
                                      GError              **error);
 
+void       mm_port_qmi_set_net_driver (MMPortQmi   *self,
+                                       const gchar *net_driver);
+
 typedef enum {
     MM_PORT_QMI_FLAG_DEFAULT  = 0,
     MM_PORT_QMI_FLAG_WDS_IPV4 = 100,
@@ -94,6 +97,53 @@ QmiClient *mm_port_qmi_get_client  (MMPortQmi *self,
 
 QmiDevice *mm_port_qmi_peek_device (MMPortQmi *self);
 
-gboolean mm_port_qmi_llp_is_raw_ip (MMPortQmi *self);
+QmiDataEndpointType mm_port_qmi_get_endpoint_type             (MMPortQmi *self);
+guint               mm_port_qmi_get_endpoint_interface_number (MMPortQmi *self);
+
+QmiWdaLinkLayerProtocol       mm_port_qmi_get_link_layer_protocol       (MMPortQmi *self);
+QmiWdaDataAggregationProtocol mm_port_qmi_get_data_aggregation_protocol (MMPortQmi *self);
+guint                         mm_port_qmi_get_max_multiplexed_links     (MMPortQmi *self);
+
+typedef enum {
+    MM_PORT_QMI_SETUP_DATA_FORMAT_ACTION_QUERY,
+    MM_PORT_QMI_SETUP_DATA_FORMAT_ACTION_SET_DEFAULT,
+    MM_PORT_QMI_SETUP_DATA_FORMAT_ACTION_SET_MULTIPLEX,
+} MMPortQmiSetupDataFormatAction;
+
+void     mm_port_qmi_setup_data_format        (MMPortQmi                      *self,
+                                               MMPort                         *data,
+                                               MMPortQmiSetupDataFormatAction  action,
+                                               GAsyncReadyCallback             callback,
+                                               gpointer                        user_data);
+gboolean mm_port_qmi_setup_data_format_finish (MMPortQmi                      *self,
+                                               GAsyncResult                   *res,
+                                               GError                        **error);
+
+void   mm_port_qmi_setup_link        (MMPortQmi             *self,
+                                      MMPort                *data,
+                                      const gchar           *link_prefix_hint,
+                                      GAsyncReadyCallback    callback,
+                                      gpointer               user_data);
+gchar *mm_port_qmi_setup_link_finish (MMPortQmi             *self,
+                                      GAsyncResult          *res,
+                                      guint                 *mux_id,
+                                      GError               **error);
+
+void   mm_port_qmi_cleanup_link          (MMPortQmi            *self,
+                                          const gchar          *link_name,
+                                          guint                 mux_id,
+                                          GAsyncReadyCallback   callback,
+                                          gpointer              user_data);
+gboolean mm_port_qmi_cleanup_link_finish (MMPortQmi            *self,
+                                          GAsyncResult         *res,
+                                          GError              **error);
+
+void     mm_port_qmi_reset        (MMPortQmi            *self,
+                                   MMPort               *data,
+                                   GAsyncReadyCallback   callback,
+                                   gpointer              user_data);
+gboolean mm_port_qmi_reset_finish (MMPortQmi            *self,
+                                   GAsyncResult         *res,
+                                   GError              **error);
 
 #endif /* MM_PORT_QMI_H */

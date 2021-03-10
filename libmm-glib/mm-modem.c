@@ -395,6 +395,8 @@ mm_modem_get_current_capabilities (MMModem *self)
 
 /*****************************************************************************/
 
+#ifndef MM_DISABLE_DEPRECATED
+
 /**
  * mm_modem_get_max_bearers:
  * @self: a #MMModem.
@@ -412,6 +414,11 @@ mm_modem_get_current_capabilities (MMModem *self)
  * Returns: the maximum number of defined packet data bearers.
  *
  * Since: 1.0
+ * Deprecated: 1.18. There is no way to query the modem how many bearers
+ * it supports, so the value exposed in this property in all the different
+ * implementations is always equal to the one retrieved with
+ * mm_modem_get_max_active_bearers(), so there is no point in using this
+ * method.
  */
 guint
 mm_modem_get_max_bearers (MMModem *self)
@@ -421,19 +428,23 @@ mm_modem_get_max_bearers (MMModem *self)
     return mm_gdbus_modem_get_max_bearers (MM_GDBUS_MODEM (self));
 }
 
+#endif /* MM_DISABLE_DEPRECATED */
+
 /*****************************************************************************/
 
 /**
  * mm_modem_get_max_active_bearers:
  * @self: a #MMModem.
  *
- * Gets the maximum number of active packet data bearers this #MMModem supports.
+ * Gets the maximum number of active packet data bearers this #MMModem supports
+ * without enabling multiplexing support.
  *
  * POTS and CDMA2000-only devices support one active bearer, while GSM/UMTS
- * and LTE-capable devices (including LTE/CDMA devices) typically support
- * at least two active bearers.
+ * and LTE/5GNR capable devices (including 3GPP+3GPP3 multimode devices) may support
+ * one or more active bearers, depending on the amount of physical ports exposed
+ * by the device.
  *
- * Returns: the maximum number of defined packet data bearers.
+ * Returns: the maximum number of active packet data bearers.
  *
  * Since: 1.0
  */
@@ -443,6 +454,28 @@ mm_modem_get_max_active_bearers (MMModem *self)
     g_return_val_if_fail (MM_IS_MODEM (self), 0);
 
     return mm_gdbus_modem_get_max_active_bearers (MM_GDBUS_MODEM (self));
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_modem_get_max_active_multiplexed_bearers:
+ * @self: a #MMModem.
+ *
+ * Gets the maximum number of active packet data bearers this #MMModem supports
+ * after enabling multiplexing support on one single network interface.
+ *
+ * Returns: the maximum number of active packet data bearers, or 0 if
+ * multiplexing is not supported.
+ *
+ * Since: 1.18
+ */
+guint
+mm_modem_get_max_active_multiplexed_bearers (MMModem *self)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), 0);
+
+    return mm_gdbus_modem_get_max_active_multiplexed_bearers (MM_GDBUS_MODEM (self));
 }
 
 /*****************************************************************************/
