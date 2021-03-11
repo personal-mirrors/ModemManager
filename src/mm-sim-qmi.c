@@ -131,6 +131,21 @@ sim_ready_retry (GTask *task)
     g_timeout_add_seconds (SIM_READY_CHECKS_TIMEOUT_SECS, (GSourceFunc) sim_ready_retry_cb, task);
 }
 
+static gboolean
+sim_ready_cb (GTask *task)
+{
+    MMSimQmi *self;
+
+    self = g_task_get_source_object (task);
+    /* SIM is considered ready now */
+    mm_obj_dbg (self, "sim is ready");
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+    return G_SOURCE_REMOVE;
+}
+
+# define FW_SIM_DELAY_MSECS 1000
+
 static void
 uim_get_card_status_ready (QmiClientUim *client,
                            GAsyncResult *res,
@@ -153,10 +168,11 @@ uim_get_card_status_ready (QmiClientUim *client,
         return;
     }
 
-    /* SIM is considered ready now */
-    mm_obj_dbg (self, "sim is ready");
-    g_task_return_boolean (task, TRUE);
-    g_object_unref (task);
+    /* This is a hack to ungate esim development on chromeos until QC fixes the FW. b/182484170
+     * In multi-sim scenarios, the firmware might need extra time to
+     * clear stale imsi and home network information from the previous slot.
+     * This delay makes the firmware respond correctly to "Read Trasparent" and "Get Home Network" */
+    g_timeout_add (FW_SIM_DELAY_MSECS, (GSourceFunc) sim_ready_cb, task);
 }
 
 static void
