@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!--
+ ModemManager 1.0 Interface Specification
+
+   Copyright (C) 2020 Google, Inc.
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+
+  <!--
+      org.freedesktop.ModemManager1.Sar:
+      @short_description: The ModemManager Dynamic SAR interface.
+
+      The SAR interface Defines operations and properties for dynamic SAR.
+  -->
+  <interface name="org.freedesktop.ModemManager1.Modem.Sar">
+
+    <!--
+        Enable:
+        @enable: %TRUE to enable dynamic SAR and %FALSE to disable it.
+
+        Enable or disable dynamic SAR.
+
+        When enabled, the modem’s output power level can be dynamically updated.
+
+        When disabled, the modem will use the default output power level.
+    -->
+    <method name="Enable">
+      <arg name="enable" type="b" direction="in" />
+    </method>
+
+    <!--
+        SetSupportedPowerLevels:
+        @levels: list of power levels, the modem could report the amount of additional power levels it supports
+
+        Set the dynamic SAR power levels the device is currently allowed to use.
+    -->
+    <method name="SetSupportedPowerLevels">
+      <arg name="levels" type="au" direction="in" />
+    </method>
+
+    <!--
+        SetPowerLevel:
+        @level: the "default" power level (0) and then each modem could report the amount of additional power levels it supports
+
+        Set current dynamic SAR power level.
+    -->
+    <method name="SetPowerLevel">
+      <arg name="level" type="u" direction="in" />
+    </method>
+
+    <!--
+        State:
+
+        Boolean indicating whether dynamic SAR is currently enabled.
+    -->
+    <property name="State" type="b" access="read" />
+
+    <!--
+        PowerLevel:
+
+        A value specifying the current dynamic SAR power level of the modem.
+    -->
+    <property name="PowerLevel" type="u" access="read" />
+
+    <!--
+        SupportedPowerLevels:
+
+        List of levels,
+        specifying the power levels supported by the device.
+    -->
+    <property name="SupportedPowerLevels" type="au" access="read" />
+
+  </interface>
+</node>

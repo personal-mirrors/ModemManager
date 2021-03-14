@@ -134,6 +134,10 @@ GVariant          *mm_common_capability_combinations_array_to_variant  (const MM
 GVariant          *mm_common_capability_combinations_garray_to_variant (GArray *array);
 GVariant          *mm_common_build_capability_combinations_none        (void);
 
+GArray            *mm_common_power_levels_variant_to_garray            (GVariant *variant);
+GVariant          *mm_common_power_levels_array_to_variant             (const guint *levels,
+                                                                        guint n_levels);
+
 GArray                              *mm_common_oma_pending_network_initiated_sessions_variant_to_garray (GVariant *variant);
 MMOmaPendingNetworkInitiatedSession *mm_common_oma_pending_network_initiated_sessions_variant_to_array  (GVariant *variant,
                                                                                                          guint *n_modes);
