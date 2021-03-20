@@ -240,6 +240,7 @@ typedef enum {
 
 typedef struct {
     ConnectionStatusContextStep step;
+    gboolean                    enforce;
 } ConnectionStatusContext;
 
 static MMBearerConnectionStatus
@@ -318,13 +319,17 @@ connection_status_context_step (GTask *task)
             /* Connection status polling is an optional feature that must be
              * enabled explicitly via udev tags. If not set, out as unsupported.
              * Note that when connected via a muxed link, the udev tag should be
-             * checked on the master interface (lower device) */
-            if ((self->priv->data &&
+             * checked on the master interface (lower device)
+             *
+             * When quick resuming, this udev tag is ignored to forcefully
+             * refresh the connection status.
+             */
+            if ((!ctx->enforce && (self->priv->data &&
                  !mm_kernel_device_get_global_property_as_boolean (mm_port_peek_kernel_device (self->priv->data),
-                                                                   "ID_MM_QMI_CONNECTION_STATUS_POLLING_ENABLE")) ||
-                (self->priv->link &&
+                                                                   "ID_MM_QMI_CONNECTION_STATUS_POLLING_ENABLE"))) ||
+                (!ctx->enforce && (self->priv->link &&
                  !mm_kernel_device_get_global_property_as_boolean (mm_kernel_device_peek_lower_device (mm_port_peek_kernel_device (self->priv->link)),
-                                                                   "ID_MM_QMI_CONNECTION_STATUS_POLLING_ENABLE"))) {
+                                                                   "ID_MM_QMI_CONNECTION_STATUS_POLLING_ENABLE")))) {
                 g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
                                          "Connection status polling not required");
                 g_object_unref (task);
@@ -386,6 +391,33 @@ load_connection_status (MMBaseBearer        *self,
 
     ctx = g_new (ConnectionStatusContext, 1);
     ctx->step = CONNECTION_STATUS_CONTEXT_STEP_FIRST;
+    ctx->enforce = FALSE;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, ctx, g_free);
+
+    connection_status_context_step (task);
+}
+
+static gboolean
+reload_connection_status_finish (MMBaseBearer  *self,
+                                 GAsyncResult  *res,
+                                 GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+reload_connection_status (MMBaseBearer        *self,
+                          GAsyncReadyCallback  callback,
+                          gpointer             user_data)
+{
+    GTask                   *task;
+    ConnectionStatusContext *ctx;
+
+    ctx = g_new (ConnectionStatusContext, 1);
+    ctx->step = CONNECTION_STATUS_CONTEXT_STEP_FIRST;
+    ctx->enforce = TRUE;
 
     task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, g_free);
@@ -2619,6 +2651,8 @@ mm_bearer_qmi_class_init (MMBearerQmiClass *klass)
     base_bearer_class->disconnect = disconnect;
     base_bearer_class->disconnect_finish = disconnect_finish;
     base_bearer_class->report_connection_status = report_connection_status;
+    base_bearer_class->reload_connection_status = reload_connection_status;
+    base_bearer_class->reload_connection_status_finish = reload_connection_status_finish;
     base_bearer_class->reload_stats = reload_stats;
     base_bearer_class->reload_stats_finish = reload_stats_finish;
     base_bearer_class->load_connection_status = load_connection_status;

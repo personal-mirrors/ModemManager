@@ -134,6 +134,9 @@ struct _MMBaseBearerClass {
     MMBearerConnectionStatus (* load_connection_status_finish) (MMBaseBearer *bearer,
                                                                 GAsyncResult *res,
                                                                 GError **error);
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
     /* Reload connection status */
     void (* reload_connection_status) (MMBaseBearer *bearer,
                                        GAsyncReadyCallback callback,
@@ -141,6 +144,8 @@ struct _MMBaseBearerClass {
     gboolean (* reload_connection_status_finish) (MMBaseBearer *bearer,
                                                   GAsyncResult *res,
                                                   GError **error);
+
+#endif
 
     /* Reload statistics */
     void (* reload_stats) (MMBaseBearer *bearer,
@@ -192,6 +197,8 @@ void mm_base_bearer_report_connection_status_detailed (MMBaseBearer             
 /* When unknown, just pass NULL */
 #define mm_base_bearer_report_connection_status(self, status) mm_base_bearer_report_connection_status_detailed (self, status, NULL)
 
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
 /* Sync Broadband Bearer (async) */
 void     mm_base_bearer_sync        (MMBaseBearer *self,
                                      GAsyncReadyCallback callback,
@@ -199,5 +206,7 @@ void     mm_base_bearer_sync        (MMBaseBearer *self,
 gboolean mm_base_bearer_sync_finish (MMBaseBearer *self,
                                      GAsyncResult *res,
                                      GError **error);
+
+#endif
 
 #endif /* MM_BASE_BEARER_H */
