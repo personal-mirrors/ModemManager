@@ -18,6 +18,7 @@ ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="0007", ENV{.MM_USBIFNUM}=="04", ENV{
 #  ttyUSB1 (if #4): AT port
 #  ttyUSB2 (if #6): debug port (ignore)
 ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a0", ENV{.MM_USBIFNUM}=="04", ENV{ID_MM_PORT_IGNORE}="1"
+ACTION=="add|change|move", SUBSYSTEMS=="tty", ENV{ID_VENDOR_ID}=="2cb7", ENV{ID_MODEL_ID}=="01a0", ENV{ID_MM_PORT_IGNORE}="1"
 
 # Fibocom FM150
 #  ttyUSB0 (if #0): QCDM port
