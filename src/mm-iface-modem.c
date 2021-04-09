@@ -341,8 +341,8 @@ abort_invocation_if_state_not_reached (MMIfaceModem          *self,
 
 /*****************************************************************************/
 /* Helper method to load unlock required, considering retries */
-
-#define MAX_RETRIES 6
+/* Increase retries for chromeos devices in M90 and M91, b:184278156 */
+#define MAX_RETRIES 12
 
 typedef struct {
     guint retries;
