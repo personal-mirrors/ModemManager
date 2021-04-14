@@ -24,6 +24,13 @@
 
 #include <gmodule.h>
 
+#if defined WITH_QMI
+# include <libqmi-glib.h>
+#endif
+#if defined WITH_QRTR
+# include "mm-kernel-device-qrtr.h"
+# include "mm-qrtr-bus-watcher.h"
+#endif
 #if defined WITH_UDEV
 # include "mm-kernel-device-udev.h"
 #endif
@@ -97,6 +104,10 @@ struct _MMBaseManagerPrivate {
 #if defined WITH_UDEV
     /* The UDev client */
     GUdevClient *udev;
+#endif
+#if defined WITH_QRTR
+    /* The Qrtr Bus Watcher */
+    MMQrtrBusWatcher *qrtr_bus_watcher;
 #endif
 };
 
@@ -358,6 +369,34 @@ device_added (MMBaseManager  *self,
     /* Grab the port in the existing device. */
     mm_device_grab_port (device, port);
 }
+
+#if defined WITH_QRTR
+
+static void
+handle_qrtr_device_added (MMBaseManager    *self,
+                          guint             node_id,
+                          MMQrtrBusWatcher *bus_watcher)
+{
+    g_autoptr(MMKernelDevice)  kernel_device = NULL;
+    QrtrNode                  *node;
+
+    node = mm_qrtr_bus_watcher_peek_node (bus_watcher, node_id);
+
+    kernel_device = mm_kernel_device_qrtr_new (node);
+
+    device_added (self, kernel_device, TRUE, FALSE);
+}
+
+static void
+handle_qrtr_device_removed (MMBaseManager    *self,
+                            guint             node_id)
+{
+    g_autofree gchar *qrtr_device_name = NULL;
+
+    qrtr_device_name = mm_kernel_device_qrtr_helper_build_name (node_id);
+    device_removed (self, MM_KERNEL_DEVICE_QRTR_SUBSYSTEM, qrtr_device_name);
+}
+#endif
 
 static gboolean
 handle_kernel_event (MMBaseManager            *self,
@@ -1435,6 +1474,21 @@ initable_init (GInitable     *initable,
         g_signal_connect_swapped (self->priv->udev, "uevent", G_CALLBACK (handle_uevent), initable);
 #endif
 
+#if defined WITH_QRTR
+    if (!mm_context_get_test_no_qrtr ()) {
+        /* Create and setup the QrtrBusWatcher */
+        self->priv->qrtr_bus_watcher = mm_qrtr_bus_watcher_new ();
+        mm_qrtr_bus_watcher_start (self->priv->qrtr_bus_watcher, NULL, NULL);
+        /* If autoscan enabled, list for QrtrBusWatcher events */
+        if (self->priv->auto_scan) {
+            g_object_connect (self->priv->qrtr_bus_watcher,
+                              "swapped-signal::" MM_QRTR_BUS_WATCHER_DEVICE_ADDED,   G_CALLBACK (handle_qrtr_device_added),   self,
+                              "swapped-signal::" MM_QRTR_BUS_WATCHER_DEVICE_REMOVED, G_CALLBACK (handle_qrtr_device_removed), self,
+                              NULL);
+        }
+    }
+#endif
+
     /* Export the manager interface */
     if (!g_dbus_interface_skeleton_export (G_DBUS_INTERFACE_SKELETON (initable),
                                            self->priv->connection,
@@ -1478,6 +1532,11 @@ finalize (GObject *object)
 #if defined WITH_UDEV
     if (self->priv->udev)
         g_object_unref (self->priv->udev);
+#endif
+
+#if defined WITH_QRTR
+    if (self->priv->qrtr_bus_watcher)
+        g_object_unref (self->priv->qrtr_bus_watcher);
 #endif
 
     if (self->priv->filter)
