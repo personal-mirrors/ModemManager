@@ -1153,6 +1153,7 @@ typedef struct {
 
     /* configured device data format */
     QmiClient                     *wda;
+    gboolean                       wda_fallback_qmapv4;
     QmiWdaLinkLayerProtocol        wda_llp_current;
     QmiWdaLinkLayerProtocol        wda_llp_requested;
     QmiWdaDataAggregationProtocol  wda_ul_dap_current;
@@ -1398,6 +1399,18 @@ sync_wda_data_format (GTask *task)
                     qmi_wda_data_aggregation_protocol_get_string (ctx->wda_dl_dap_current),
                     qmi_wda_data_aggregation_protocol_get_string (ctx->wda_dl_dap_requested));
 
+    /* If WDA Get Data Format operations failed, we don't even try the Set */
+    if (ctx->wda_fallback_qmapv4) {
+        /* request reload */
+        ctx->wda_llp_current = QMI_WDA_LINK_LAYER_PROTOCOL_UNKNOWN;
+        ctx->wda_ul_dap_current = QMI_WDA_DATA_AGGREGATION_PROTOCOL_DISABLED;
+        ctx->wda_dl_dap_current = QMI_WDA_DATA_AGGREGATION_PROTOCOL_DISABLED;
+        /* Go on to next step */
+        ctx->step++;
+        internal_setup_data_format_context_step (task);
+        return;
+    }
+
     input = qmi_message_wda_set_data_format_input_new ();
     qmi_message_wda_set_data_format_input_set_link_layer_protocol (input, ctx->wda_llp_requested, NULL);
     qmi_message_wda_set_data_format_input_set_uplink_data_aggregation_protocol (input, ctx->wda_ul_dap_requested, NULL);
@@ -1531,6 +1544,24 @@ process_data_format_output (MMPortQmi                         *self,
 }
 
 static void
+get_data_format_fallback_qmapv4 (MMPortQmi                      *self,
+                                 InternalSetupDataFormatContext *ctx)
+{
+    mm_obj_dbg (self, "QRTR+IPA with unknown DAP: assuming QMAPv4");
+
+    /* We set all fields that would have been set on a correct
+     * process_data_format_output() call */
+    ctx->wda_llp_current = QMI_WDA_LINK_LAYER_PROTOCOL_RAW_IP;
+    ctx->wda_dap_supported = TRUE;
+    ctx->wda_ul_dap_current = QMI_WDA_DATA_AGGREGATION_PROTOCOL_QMAPV4;
+    ctx->wda_dl_dap_current = QMI_WDA_DATA_AGGREGATION_PROTOCOL_QMAPV4;
+    /* These next two fields can be set to 0; we don't really use them
+     * in RMNET */
+    ctx->wda_dl_dap_max_size_current = 0;
+    ctx->wda_dl_dap_max_datagrams_current = 0;
+}
+
+static void
 get_data_format_ready (QmiClientWda *client,
                        GAsyncResult *res,
                        GTask        *task)
@@ -1558,6 +1589,22 @@ get_data_format_ready (QmiClientWda *client,
             (self->priv->endpoint_type != QMI_DATA_ENDPOINT_TYPE_UNDEFINED)) {
             /* retry same step with endpoint info */
             ctx->use_endpoint = TRUE;
+            internal_setup_data_format_context_step (task);
+            return;
+        }
+
+        /* An 'invalid argument' error when querying data format is seen in
+         * QRTR+IPA based setups like the SDM845. When this happens, we fallback
+         * to QMAPV4. */
+        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_INVALID_ARGUMENT) &&
+            (self->priv->endpoint_type == QMI_DATA_ENDPOINT_TYPE_EMBEDDED) &&
+            (g_strcmp0 (self->priv->net_driver, "ipa") == 0) &&
+            (mm_port_get_subsys (MM_PORT (self)) == MM_PORT_SUBSYS_QRTR)) {
+            /* Assume QMAPv4 and skip the set operation */
+            ctx->wda_fallback_qmapv4 = TRUE;
+            get_data_format_fallback_qmapv4 (self, ctx);
+             /* Go on to next step */
+            ctx->step++;
             internal_setup_data_format_context_step (task);
             return;
         }
@@ -1645,22 +1692,27 @@ internal_setup_data_format_context_step (GTask *task)
         case INTERNAL_SETUP_DATA_FORMAT_STEP_GET_WDA_DATA_FORMAT:
             /* Only reload WDA data format if it was updated or on first loop */
             if (ctx->wda_llp_current == QMI_WDA_LINK_LAYER_PROTOCOL_UNKNOWN) {
-                g_autoptr(QmiMessageWdaGetDataFormatInput) input = NULL;
+                if (!ctx->wda_fallback_qmapv4) {
+                    g_autoptr(QmiMessageWdaGetDataFormatInput) input = NULL;
 
-                if (ctx->use_endpoint) {
-                    input = qmi_message_wda_get_data_format_input_new ();
-                    qmi_message_wda_get_data_format_input_set_endpoint_info (input,
-                                                                             self->priv->endpoint_type,
-                                                                             self->priv->endpoint_interface_number,
-                                                                             NULL);
+                    if (ctx->use_endpoint) {
+                        input = qmi_message_wda_get_data_format_input_new ();
+                        qmi_message_wda_get_data_format_input_set_endpoint_info (input,
+                                                                                 self->priv->endpoint_type,
+                                                                                 self->priv->endpoint_interface_number,
+                                                                                 NULL);
+                    }
+                    qmi_client_wda_get_data_format (QMI_CLIENT_WDA (ctx->wda),
+                                                    input,
+                                                    10,
+                                                    g_task_get_cancellable (task),
+                                                    (GAsyncReadyCallback) get_data_format_ready,
+                                                    task);
+                    return;
                 }
-                qmi_client_wda_get_data_format (QMI_CLIENT_WDA (ctx->wda),
-                                                input,
-                                                10,
-                                                g_task_get_cancellable (task),
-                                                (GAsyncReadyCallback) get_data_format_ready,
-                                                task);
-                return;
+
+                /* Fallback QMAPv4 in use, don't even attempt to query again */
+                get_data_format_fallback_qmapv4 (self, ctx);
             }
             ctx->step++;
             /* Fall through */
