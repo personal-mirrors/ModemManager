@@ -41,9 +41,9 @@
 static void iface_modem_firmware_init (MMIfaceModemFirmware *iface);
 #endif
 
-G_DEFINE_TYPE_EXTENDED (MMBroadbandModemFoxconnT99w175, mm_broadband_modem_foxconn_t99w175, MM_TYPE_BROADBAND_MODEM_MBIM, 0
+G_DEFINE_TYPE_EXTENDED (MMBroadbandModemFoxconnT99w175, mm_broadband_modem_foxconn_t99w175, MM_TYPE_BROADBAND_MODEM_MBIM, 0,
 #if defined WITH_QMI
-                        , G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_FIRMWARE, iface_modem_firmware_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_FIRMWARE, iface_modem_firmware_init)
 #endif
                         )
 
