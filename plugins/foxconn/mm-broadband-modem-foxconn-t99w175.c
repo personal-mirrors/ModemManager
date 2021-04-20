@@ -90,7 +90,7 @@ foxconn_get_firmware_version_ready (QmiClientDms *client,
         goto out;
 
     /* Create update settings now */
-    update_settings = mm_firmware_update_settings_new (MM_MODEM_FIRMWARE_UPDATE_METHOD_MBIM_QDU);
+    update_settings = mm_firmware_update_settings_new (MM_MODEM_FIRMWARE_UPDATE_METHOD_QMI_PDC);
 
     qmi_message_dms_foxconn_get_firmware_version_output_get_version (output, &str, NULL);
     mm_firmware_update_settings_set_version (update_settings, str);
