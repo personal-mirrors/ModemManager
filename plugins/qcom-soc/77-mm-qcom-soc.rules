@@ -33,4 +33,10 @@ KERNEL=="rmnet_usb[0-9]*", ENV{ID_MM_PORT_IGNORE}="1"
 # flag all rpmsg ports under this plugin as candidate
 KERNEL=="rpmsg[0-9]*", SUBSYSTEM=="rpmsg", ENV{ID_MM_CANDIDATE}="1"
 
+# SDM845 data aggregation settings
+KERNEL=="rmnet_ipa0", ENV{ID_MM_QMI_DL_DATA_AGGREGATION_PROTOCOL}="qmapv4"
+KERNEL=="rmnet_ipa0", ENV{ID_MM_QMI_UL_DATA_AGGREGATION_PROTOCOL}="qmapv4"
+KERNEL=="rmnet_ipa0", ENV{ID_MM_QMI_DL_DATA_AGGREGATION_MAX_SIZE}="8192"
+KERNEL=="rmnet_ipa0", ENV{ID_MM_QMI_DL_DATA_AGGREGATION_MAX_DATAGRAMS}="10"
+
 LABEL="mm_qcom_soc_end"
