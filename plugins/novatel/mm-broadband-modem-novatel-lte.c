@@ -635,49 +635,6 @@ scan_networks (MMIfaceModem3gpp *self,
 }
 
 /*****************************************************************************/
-/* Initializing the modem (during first enabling) */
-
-static const MMBaseModemAtCommand modem_init_sequence[] = {
-    /* Init command. ITU rec v.250 (6.1.1) says:
-     *   The DTE should not include additional commands on the same command line
-     *   after the Z command because such commands may be ignored.
-     * So run ATZ alone.
-     */
-    { "Z",       6, FALSE, mm_base_modem_response_processor_no_result_continue },
-
-    /* Temporarily force the modem into LTE only mode to prevent it from falling
-     * back to 3G.
-     * TODO(benchan): Remove this constraint
-     */
-    { "$NWPREFMODE=30", 6, FALSE, mm_base_modem_response_processor_continue_on_error },
-
-    { NULL }
-};
-
-static gboolean
-enabling_modem_init_finish (MMBroadbandModem *self,
-                            GAsyncResult *res,
-                            GError **error)
-{
-    return !!mm_base_modem_at_command_full_finish (MM_BASE_MODEM (self), res, error);
-}
-
-static void
-enabling_modem_init (MMBroadbandModem *self,
-                     GAsyncReadyCallback callback,
-                     gpointer user_data)
-{
-    mm_base_modem_at_sequence_full (MM_BASE_MODEM (self),
-                                    mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)),
-                                    modem_init_sequence,
-                                    NULL,  /* response_processor_context */
-                                    NULL,  /* response_processor_context_free */
-                                    NULL,  /* cancellable */
-                                    callback,
-                                    user_data);
-}
-
-/*****************************************************************************/
 
 MMBroadbandModemNovatelLte *
 mm_broadband_modem_novatel_lte_new (const gchar *device,
@@ -692,11 +649,6 @@ mm_broadband_modem_novatel_lte_new (const gchar *device,
                          MM_BASE_MODEM_PLUGIN, plugin,
                          MM_BASE_MODEM_VENDOR_ID, vendor_id,
                          MM_BASE_MODEM_PRODUCT_ID, product_id,
-                         /* Temporarily allows only EPS network registration status */
-                         /* TODO(benchan): Remove this constraint */
-                         MM_IFACE_MODEM_3GPP_CS_NETWORK_SUPPORTED, FALSE,
-                         MM_IFACE_MODEM_3GPP_PS_NETWORK_SUPPORTED, FALSE,
-                         MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED, TRUE,
                          NULL);
 }
 
@@ -743,8 +695,4 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
 static void
 mm_broadband_modem_novatel_lte_class_init (MMBroadbandModemNovatelLteClass *klass)
 {
-    MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
-
-    broadband_modem_class->enabling_modem_init = enabling_modem_init;
-    broadband_modem_class->enabling_modem_init_finish = enabling_modem_init_finish;
 }
