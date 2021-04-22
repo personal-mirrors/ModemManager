@@ -288,18 +288,6 @@ mm_base_modem_grab_port (MMBaseModem         *self,
         port = base_modem_create_ignored_port (self, name);
     else if (g_str_equal (subsys, "net"))
         port = base_modem_create_net_port (self, name);
-#if QMI_QRTR_SUPPORTED //TODO(crbug.com/1103840): Remove hacks before merging to upstream
-    else if (g_str_has_prefix (subsys, "virtual") &&
-             g_str_has_prefix (name, "rmnet_data0")) {
-        mm_obj_info (self, "@@ %s: virtual net port = %s", __FUNCTION__, name);
-        port = base_modem_create_net_port (self, name);
-    }
-    else if (g_str_has_prefix (subsys, "virtual") &&
-             g_str_has_prefix (name, "qmi")) {
-        mm_obj_info (self, "@@ %s: virtual qmi port = %s", __FUNCTION__, name);
-        port = base_modem_create_usbmisc_port (self, name, ptype);
-    }
-#endif
     else if (g_str_equal (subsys, "tty"))
         port = base_modem_create_tty_port (self, name, kernel_device, ptype);
     else if (g_str_equal (subsys, "usbmisc"))
