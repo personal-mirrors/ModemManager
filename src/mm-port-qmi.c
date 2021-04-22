@@ -228,10 +228,6 @@ typedef enum {
     PORT_OPEN_STEP_FIRST,
     PORT_OPEN_STEP_CHECK_OPENING,
     PORT_OPEN_STEP_CHECK_ALREADY_OPEN,
-#if QMI_QRTR_SUPPORTED //TODO(b/118897479): Remove hacks before merging to upstream
-    PORT_OPEN_STEP_OPEN_QRTR_NODE,
-    PORT_OPEN_STEP_WAIT_FOR_SERVICES,
-#endif
     PORT_OPEN_STEP_DEVICE_NEW,
     PORT_OPEN_STEP_OPEN_WITHOUT_DATA_FORMAT,
     PORT_OPEN_STEP_GET_KERNEL_DATA_FORMAT,
@@ -245,10 +241,6 @@ typedef enum {
 } PortOpenStep;
 
 typedef struct {
-#if QMI_QRTR_SUPPORTED //TODO(b/118897479): Remove hacks before merging to upstream
-    QrtrBus                     *qrtr_bus;
-    QrtrNode                    *node;
-#endif
     QmiDevice                   *device;
     QmiClient                   *wda;
     GError                      *error;
@@ -269,10 +261,6 @@ port_open_context_free (PortOpenContext *ctx)
                                    3, NULL, NULL, NULL);
     g_clear_object (&ctx->wda);
     g_clear_object (&ctx->device);
-#if QMI_QRTR_SUPPORTED //TODO(b/118897479): Remove hacks before merging to upstream
-    g_clear_object (&ctx->node);
-    g_clear_object (&ctx->qrtr_bus);
-#endif
     g_slice_free (PortOpenContext, ctx);
 }
 
@@ -487,68 +475,6 @@ qmi_device_new_ready (GObject *unused,
     port_open_step (task);
 }
 
-#if QMI_QRTR_SUPPORTED //TODO(b/118897479): Remove hacks before merging to upstream
-static void
-qrtr_node_services_ready (QrtrNode *node,
-                          GAsyncResult *res,
-                          GTask *task)
-{
-    PortOpenContext *ctx;
-
-    ctx = g_task_get_task_data (task);
-    if (!qrtr_node_wait_for_services_finish (node, res, &ctx->error)) {
-        /* Error creating the device */
-        ctx->step = PORT_OPEN_STEP_LAST;
-    } else {
-        /* Go on to next step */
-        ctx->step++;
-    }
-    port_open_step (task);
-}
-static void
-qrtr_node_ready (GObject *unused,
-                 GAsyncResult *res,
-                 GTask *task)
-{
-    PortOpenContext *ctx;
-
-    ctx = g_task_get_task_data (task);
-
-    ctx->node = qrtr_bus_wait_for_node_finish (ctx->qrtr_bus, res, &ctx->error);
-    if (!ctx->node)
-        /* Error creating the node */
-        ctx->step = PORT_OPEN_STEP_LAST;
-    else
-        /* Go on to next step */
-        ctx->step++;
-    port_open_step (task);
-}
-
-static void
-qrtr_bus_ready (GObject *unused,
-                GAsyncResult *res,
-                GTask *task)
-{
-    PortOpenContext *ctx;
-
-    ctx = g_task_get_task_data (task);
-
-    ctx->qrtr_bus = qrtr_bus_new_finish (res, &ctx->error);
-    if (!ctx->qrtr_bus) {
-        /* Error creating the bus */
-        ctx->step = PORT_OPEN_STEP_LAST;
-        port_open_step (task);
-    } else {
-        qrtr_bus_wait_for_node (ctx->qrtr_bus,
-                                0,
-                                20,
-                                g_task_get_cancellable (task),
-                                (GAsyncReadyCallback) qrtr_node_ready,
-                                task);
-    }
-}
-#endif
-
 static void
 port_open_step (GTask *task)
 {
@@ -586,57 +512,7 @@ port_open_step (GTask *task)
         ctx->step++;
         /* Fall through */
 
-#if QMI_QRTR_SUPPORTED //TODO(b/118897479): Remove hacks before merging to upstream
-    case PORT_OPEN_STEP_OPEN_QRTR_NODE:
-        self->priv->in_progress = TRUE;
-
-        mm_obj_info (self, "Creating QRTR bus and fetching node 0...");
-        qrtr_bus_new (20000,
-                      g_task_get_cancellable (task),
-                      (GAsyncReadyCallback) qrtr_bus_ready,
-                      task);
-
-        return;
-
-    case PORT_OPEN_STEP_WAIT_FOR_SERVICES: {
-        GArray *services;
-        QmiService required_services[] = {
-            QMI_SERVICE_DMS,
-            QMI_SERVICE_WDA,
-            QMI_SERVICE_WDS,
-            QMI_SERVICE_NAS,
-            QMI_SERVICE_UIM,
-            QMI_SERVICE_PDC,
-            QMI_SERVICE_WMS
-        };
-
-        services = g_array_sized_new (FALSE,
-                                      FALSE,
-                                      sizeof (QmiService),
-                                      G_N_ELEMENTS (required_services));
-        g_array_append_vals (services,
-                             required_services,
-                             G_N_ELEMENTS (required_services));
-
-        mm_obj_info (self,"Waiting for services...");
-        qrtr_node_wait_for_services (ctx->node,
-                                     services,
-                                     10000,
-                                     NULL,
-                                     (GAsyncReadyCallback) qrtr_node_services_ready,
-                                     task);
-        return;
-    }
-#endif
-
     case PORT_OPEN_STEP_DEVICE_NEW: {
-#if QMI_QRTR_SUPPORTED //TODO(b/118897479): Remove hacks before merging to upstream
-        mm_obj_info (self, "Creating QMI device from QRTR node...");
-        qmi_device_new_from_node (ctx->node,
-                                  g_task_get_cancellable (task),
-                                  (GAsyncReadyCallback) qmi_device_new_ready,
-                                  task);
-#else
         GFile *file;
         gchar *fullpath;
 
@@ -656,7 +532,6 @@ port_open_step (GTask *task)
 
         g_free (fullpath);
         g_object_unref (file);
-#endif
         return;
     }
 
