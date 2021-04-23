@@ -86,8 +86,8 @@ gboolean   mm_port_qmi_close_finish (MMPortQmi            *self,
                                      GAsyncResult         *res,
                                      GError              **error);
 
-void       mm_port_qmi_set_net_driver (MMPortQmi   *self,
-                                       const gchar *net_driver);
+void       mm_port_qmi_set_net_port_details (MMPortQmi *self,
+                                             MMPort    *net);
 
 typedef enum {
     MM_PORT_QMI_FLAG_DEFAULT  = 0,

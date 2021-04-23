@@ -21,6 +21,7 @@
 #include <libqmi-glib.h>
 
 #include <ModemManager.h>
+#include <ModemManager-tags.h>
 #include <mm-errors-types.h>
 
 #include "mm-port-qmi.h"
@@ -53,10 +54,17 @@ struct _MMPortQmiPrivate {
     gboolean   in_progress;
     QmiDevice *qmi_device;
     GList     *services;
-    gchar     *net_driver;
 #if defined WITH_QRTR
     QrtrNode  *node;
 #endif
+
+    /* net port details */
+    gchar                         *net_driver;
+    gboolean                       static_dap_settings;
+    QmiWdaDataAggregationProtocol  static_ul_dap;
+    QmiWdaDataAggregationProtocol  static_dl_dap;
+    guint32                        static_dl_dap_max_datagrams;
+    guint32                        static_dl_dap_max_size;
 
     /* endpoint info */
     gulong              endpoint_info_signal_id;
@@ -1398,6 +1406,18 @@ sync_wda_data_format (GTask *task)
                     qmi_wda_data_aggregation_protocol_get_string (ctx->wda_dl_dap_current),
                     qmi_wda_data_aggregation_protocol_get_string (ctx->wda_dl_dap_requested));
 
+    /* If we're using static DAP settings, we won't update anything */
+    if (self->priv->static_dap_settings) {
+        /* request reload */
+        ctx->wda_llp_current = QMI_WDA_LINK_LAYER_PROTOCOL_UNKNOWN;
+        ctx->wda_ul_dap_current = QMI_WDA_DATA_AGGREGATION_PROTOCOL_DISABLED;
+        ctx->wda_dl_dap_current = QMI_WDA_DATA_AGGREGATION_PROTOCOL_DISABLED;
+        /* Go on to next step */
+        ctx->step++;
+        internal_setup_data_format_context_step (task);
+        return;
+    }
+
     input = qmi_message_wda_set_data_format_input_new ();
     qmi_message_wda_set_data_format_input_set_link_layer_protocol (input, ctx->wda_llp_requested, NULL);
     qmi_message_wda_set_data_format_input_set_uplink_data_aggregation_protocol (input, ctx->wda_ul_dap_requested, NULL);
@@ -1627,8 +1647,9 @@ internal_setup_data_format_context_step (GTask *task)
             /* Fall through */
 
         case INTERNAL_SETUP_DATA_FORMAT_STEP_ALLOCATE_WDA_CLIENT:
-            /* Only allocate new WDA client on first loop */
-            if (ctx->data_format_combination_i < 0) {
+            /* Only allocate new WDA client on first loop, and only if
+             * not using static DAP settings */
+            if (ctx->data_format_combination_i < 0 && !self->priv->static_dap_settings) {
                 g_assert (!ctx->wda);
                 qmi_device_allocate_client (ctx->device,
                                             QMI_SERVICE_WDA,
@@ -1645,22 +1666,33 @@ internal_setup_data_format_context_step (GTask *task)
         case INTERNAL_SETUP_DATA_FORMAT_STEP_GET_WDA_DATA_FORMAT:
             /* Only reload WDA data format if it was updated or on first loop */
             if (ctx->wda_llp_current == QMI_WDA_LINK_LAYER_PROTOCOL_UNKNOWN) {
-                g_autoptr(QmiMessageWdaGetDataFormatInput) input = NULL;
+                /* If using static settings, no need to query anything */
+                if (!self->priv->static_dap_settings) {
+                    g_autoptr(QmiMessageWdaGetDataFormatInput) input = NULL;
 
-                if (ctx->use_endpoint) {
-                    input = qmi_message_wda_get_data_format_input_new ();
-                    qmi_message_wda_get_data_format_input_set_endpoint_info (input,
-                                                                             self->priv->endpoint_type,
-                                                                             self->priv->endpoint_interface_number,
-                                                                             NULL);
+                    if (ctx->use_endpoint) {
+                        input = qmi_message_wda_get_data_format_input_new ();
+                        qmi_message_wda_get_data_format_input_set_endpoint_info (input,
+                                                                                 self->priv->endpoint_type,
+                                                                                 self->priv->endpoint_interface_number,
+                                                                                 NULL);
+                    }
+                    qmi_client_wda_get_data_format (QMI_CLIENT_WDA (ctx->wda),
+                                                    input,
+                                                    10,
+                                                    g_task_get_cancellable (task),
+                                                    (GAsyncReadyCallback) get_data_format_ready,
+                                                    task);
+                    return;
                 }
-                qmi_client_wda_get_data_format (QMI_CLIENT_WDA (ctx->wda),
-                                                input,
-                                                10,
-                                                g_task_get_cancellable (task),
-                                                (GAsyncReadyCallback) get_data_format_ready,
-                                                task);
-                return;
+
+                /* Propagate static settings; if given we'll assume raw-ip */
+                ctx->wda_llp_current = QMI_WDA_LINK_LAYER_PROTOCOL_RAW_IP;
+                ctx->wda_ul_dap_current = self->priv->static_ul_dap;
+                ctx->wda_dl_dap_current = self->priv->static_dl_dap;
+                ctx->wda_dl_dap_max_datagrams_current = self->priv->static_dl_dap_max_datagrams;
+                ctx->wda_dl_dap_max_size_current = self->priv->static_dl_dap_max_size;
+                ctx->wda_dap_supported = TRUE;
             }
             ctx->step++;
             /* Fall through */
@@ -2359,13 +2391,98 @@ mm_port_qmi_is_open (MMPortQmi *self)
 
 /*****************************************************************************/
 
-void
-mm_port_qmi_set_net_driver (MMPortQmi   *self,
-                            const gchar *net_driver)
+static gboolean
+wda_data_aggregation_protocol_from_string (const gchar                    *str,
+                                           QmiWdaDataAggregationProtocol  *out,
+                                           GError                        **error)
 {
+    GType       type;
+    GEnumClass *enum_class;
+    GEnumValue *enum_value;
+
+    type = qmi_wda_data_aggregation_protocol_get_type ();
+    enum_class = G_ENUM_CLASS (g_type_class_ref (type));
+    enum_value = g_enum_get_value_by_nick (enum_class, str);
+
+    if (enum_value)
+        *out = (QmiWdaDataAggregationProtocol)enum_value->value;
+    else {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                     "Invalid data aggregation protocol given: %s", str);
+    }
+    g_type_class_unref (enum_class);
+    return !!enum_value;
+}
+
+void
+mm_port_qmi_set_net_port_details (MMPortQmi *self,
+                                  MMPort    *net)
+{
+    MMKernelDevice    *net_device;
+    const gchar       *dl_dap_str;
+    gint               dl_dap_max_size_value;
+    const gchar       *ul_dap_str;
+    g_autoptr(GError)  error = NULL;
+
+    net_device = mm_port_peek_kernel_device (net);
+
+    /* Net port driver */
     g_assert (MM_IS_PORT_QMI (self));
     g_assert (!self->priv->net_driver);
-    self->priv->net_driver = g_strdup (net_driver);
+    self->priv->net_driver = g_strdup (mm_kernel_device_get_driver (net_device));
+
+    /* Net port static data aggregation settings */
+
+    dl_dap_str = mm_kernel_device_get_global_property (net_device, ID_MM_QMI_DL_DATA_AGGREGATION_PROTOCOL);
+    if (!dl_dap_str) {
+        mm_obj_dbg (self, "Static data aggregation settings not given");
+        return;
+    }
+    if (!wda_data_aggregation_protocol_from_string (dl_dap_str, &self->priv->static_dl_dap, &error)) {
+        mm_obj_warn (self, "Couldn't load DL data aggregation protocol: %s", error->message);
+        return;
+    }
+    mm_obj_dbg (self, "Static DL data aggregation protocol loaded: %s", qmi_wda_data_aggregation_protocol_get_string (self->priv->static_dl_dap));
+
+    if (!mm_kernel_device_has_global_property (net_device,ID_MM_QMI_DL_DATA_AGGREGATION_MAX_SIZE)) {
+        mm_obj_warn (self, "Couldn't load DL data aggregation max size: not given");
+        return;
+    }
+    dl_dap_max_size_value = mm_kernel_device_get_global_property_as_int (net_device, ID_MM_QMI_DL_DATA_AGGREGATION_MAX_SIZE);
+    if (dl_dap_max_size_value <= 0) {
+        mm_obj_warn (self, "Couldn't load DL data aggregation max size: invalid value: %d", dl_dap_max_size_value);
+        return;
+    }
+    self->priv->static_dl_dap_max_size = (guint32) dl_dap_max_size_value;
+    mm_obj_dbg (self, "Static DL data aggregation max size loaded: %u", self->priv->static_dl_dap_max_size);
+
+    /* If DL DAP and DL max datagrams given, use static DAP settings */
+    self->priv->static_dap_settings = TRUE;
+
+    /* DL max datagrams, OPTIONAL */
+    if (!mm_kernel_device_has_global_property (net_device,ID_MM_QMI_DL_DATA_AGGREGATION_MAX_DATAGRAMS)) {
+        mm_obj_dbg (self, "Couldn't load DL data aggregation max datagrams: not given");
+    } else {
+        gint dl_dap_max_datagrams_value;
+
+        dl_dap_max_datagrams_value = mm_kernel_device_get_global_property_as_int (net_device, ID_MM_QMI_DL_DATA_AGGREGATION_MAX_DATAGRAMS);
+        if (dl_dap_max_datagrams_value <= 0)
+            mm_obj_dbg (self, "Couldn't load DL data aggregation max datagrams: invalid value: %d", dl_dap_max_datagrams_value);
+        else {
+            self->priv->static_dl_dap_max_datagrams = (guint32) dl_dap_max_datagrams_value;
+            mm_obj_dbg (self, "Static DL data aggregation max datagrams loaded: %u", self->priv->static_dl_dap_max_datagrams);
+        }
+    }
+
+    /* UL DAP, OPTIONAL */
+    ul_dap_str = mm_kernel_device_get_global_property (net_device, ID_MM_QMI_UL_DATA_AGGREGATION_PROTOCOL);
+    if (!ul_dap_str) {
+        mm_obj_dbg (self, "Couldn't load UL data aggregation protocol: not given");
+    } else if (!wda_data_aggregation_protocol_from_string (ul_dap_str, &self->priv->static_ul_dap, &error)) {
+        mm_obj_warn (self, "Couldn't load UL data aggregation protocol: %s", error->message);
+        g_clear_error (&error);
+    } else
+        mm_obj_dbg (self, "Static UL data aggregation protocol loaded: %s", qmi_wda_data_aggregation_protocol_get_string (self->priv->static_ul_dap));
 }
 
 /*****************************************************************************/

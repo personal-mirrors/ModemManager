@@ -275,4 +275,76 @@
  */
 #define ID_MM_TTY_FLOW_CONTROL "ID_MM_TTY_FLOW_CONTROL"
 
+/**
+ * ID_MM_QMI_UL_DATA_AGGREGATION_PROTOCOL:
+ *
+ * The data aggregation protocol to use in the downlink, given as the nickname
+ * string of the #QmiWdaDataAggregationProtocol enum value.
+ *
+ * E.g. the numeric value provided by the 'dataformat_ul_data_aggregation_protocol'
+ * field in Android's 'netmgr_config.xml' is the value in the #QmiWdaDataAggregationProtocol
+ * enum type.
+ *
+ * <note><para>
+ * This udev tag should only be used when there is no way to query for the data
+ * aggregation settings dynamically (e.g. in some Qualcomm SoCs).
+ * </para></note>
+ *
+ * Since: 1.18
+ */
+#define ID_MM_QMI_UL_DATA_AGGREGATION_PROTOCOL "ID_MM_QMI_UL_DATA_AGGREGATION_PROTOCOL"
+
+/**
+ * ID_MM_QMI_DL_DATA_AGGREGATION_PROTOCOL:
+ *
+ * The data aggregation protocol to use in the downlink, given as the nickname
+ * string of the #QmiWdaDataAggregationProtocol enum value.
+ *
+ * E.g. the numeric value provided by the 'dataformat_dl_data_aggregation_protocol'
+ * field in Android's 'netmgr_config.xml' is the value in the #QmiWdaDataAggregationProtocol
+ * enum type.
+ *
+ * <note><para>
+ * This udev tag should only be used when there is no way to query for the data
+ * aggregation settings dynamically (e.g. in some Qualcomm SoCs).
+ * </para></note>
+ *
+ * Since: 1.18
+ */
+#define ID_MM_QMI_DL_DATA_AGGREGATION_PROTOCOL "ID_MM_QMI_DL_DATA_AGGREGATION_PROTOCOL"
+
+/**
+ * ID_MM_QMI_DL_DATA_AGGREGATION_MAX_SIZE:
+ *
+ * The data aggregation max size to use in the downlink, given as a numeric value in
+ * decimal format.
+ *
+ * E.g. as provided by the 'dataformat_agg_dl_size' field in Android's 'netmgr_config.xml'.
+ *
+ * <note><para>
+ * This udev tag should only be used when there is no way to query for the data
+ * aggregation settings dynamically (e.g. in some Qualcomm SoCs).
+ * </para></note>
+ *
+ * Since: 1.18
+ */
+#define ID_MM_QMI_DL_DATA_AGGREGATION_MAX_SIZE "ID_MM_QMI_DL_DATA_AGGREGATION_MAX_SIZE"
+
+/**
+ * ID_MM_QMI_DL_DATA_AGGREGATION_MAX_DATAGRAMS:
+ *
+ * The data aggregation max datagrams to use in the downlink, given as a numeric value in
+ * decimal format.
+ *
+ * E.g. as provided by the 'dataformat_agg_dl_pkt' field in Android's 'netmgr_config.xml'.
+ *
+ * <note><para>
+ * This udev tag should only be used when there is no way to query for the data
+ * aggregation settings dynamically (e.g. in some Qualcomm SoCs).
+ * </para></note>
+ *
+ * Since: 1.18
+ */
+#define ID_MM_QMI_DL_DATA_AGGREGATION_MAX_DATAGRAMS "ID_MM_QMI_DL_DATA_AGGREGATION_MAX_DATAGRAMS"
+
 #endif /* MM_TAGS_H */
