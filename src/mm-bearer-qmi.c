@@ -421,15 +421,15 @@ typedef enum {
     CONNECT_STEP_IP_METHOD,
     CONNECT_STEP_IPV4,
     CONNECT_STEP_WDS_CLIENT_IPV4,
-    CONNECT_STEP_IP_FAMILY_IPV4,
     CONNECT_STEP_BIND_DATA_PORT_IPV4,
+    CONNECT_STEP_IP_FAMILY_IPV4,
     CONNECT_STEP_ENABLE_INDICATIONS_IPV4,
     CONNECT_STEP_START_NETWORK_IPV4,
     CONNECT_STEP_GET_CURRENT_SETTINGS_IPV4,
     CONNECT_STEP_IPV6,
     CONNECT_STEP_WDS_CLIENT_IPV6,
-    CONNECT_STEP_IP_FAMILY_IPV6,
     CONNECT_STEP_BIND_DATA_PORT_IPV6,
+    CONNECT_STEP_IP_FAMILY_IPV6,
     CONNECT_STEP_ENABLE_INDICATIONS_IPV6,
     CONNECT_STEP_START_NETWORK_IPV6,
     CONNECT_STEP_GET_CURRENT_SETTINGS_IPV6,
@@ -579,135 +579,6 @@ complete_connect (GTask                 *task,
 }
 
 static void connect_context_step (GTask *task);
-
-static void
-start_network_ready (QmiClientWds *client,
-                     GAsyncResult *res,
-                     GTask *task)
-{
-    MMBearerQmi *self;
-    ConnectContext *ctx;
-    GError *error = NULL;
-    QmiMessageWdsStartNetworkOutput *output;
-
-    self = g_task_get_source_object (task);
-    ctx  = g_task_get_task_data (task);
-
-    g_assert (ctx->running_ipv4 || ctx->running_ipv6);
-    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
-
-    output = qmi_client_wds_start_network_finish (client, res, &error);
-    if (output &&
-        !qmi_message_wds_start_network_output_get_result (output, &error)) {
-        /* No-effect errors should be ignored. The modem will keep the
-         * connection active as long as there is a WDS client which requested
-         * to start the network. If ModemManager crashed while a connection was
-         * active, we would be leaving an unreleased WDS client around and the
-         * modem would just keep connected. */
-        if (g_error_matches (error,
-                             QMI_PROTOCOL_ERROR,
-                             QMI_PROTOCOL_ERROR_NO_EFFECT)) {
-            g_error_free (error);
-            error = NULL;
-            if (ctx->running_ipv4)
-                ctx->packet_data_handle_ipv4 = GLOBAL_PACKET_DATA_HANDLE;
-            else
-                ctx->packet_data_handle_ipv6 = GLOBAL_PACKET_DATA_HANDLE;
-
-            /* Fall down to a successful connection */
-        } else {
-            mm_obj_info (self, "couldn't start network: %s", error->message);
-            if (g_error_matches (error,
-                                 QMI_PROTOCOL_ERROR,
-                                 QMI_PROTOCOL_ERROR_CALL_FAILED)) {
-                QmiWdsCallEndReason cer;
-                QmiWdsVerboseCallEndReasonType verbose_cer_type;
-                gint16 verbose_cer_reason;
-
-                if (qmi_message_wds_start_network_output_get_call_end_reason (
-                        output,
-                        &cer,
-                        NULL))
-                    mm_obj_info (self, "call end reason (%u): %s", cer, qmi_wds_call_end_reason_get_string (cer));
-
-                if (qmi_message_wds_start_network_output_get_verbose_call_end_reason (
-                        output,
-                        &verbose_cer_type,
-                        &verbose_cer_reason,
-                        NULL))
-                    mm_obj_info (self, "verbose call end reason (%u,%d): [%s] %s",
-                                 verbose_cer_type,
-                                 verbose_cer_reason,
-                                 qmi_wds_verbose_call_end_reason_type_get_string (verbose_cer_type),
-                                 qmi_wds_verbose_call_end_reason_get_string (verbose_cer_type, verbose_cer_reason));
-            }
-        }
-    }
-
-    if (error) {
-        if (ctx->running_ipv4)
-            ctx->error_ipv4 = error;
-        else
-            ctx->error_ipv6 = error;
-    } else {
-        if (ctx->running_ipv4)
-            qmi_message_wds_start_network_output_get_packet_data_handle (output, &ctx->packet_data_handle_ipv4, NULL);
-        else
-            qmi_message_wds_start_network_output_get_packet_data_handle (output, &ctx->packet_data_handle_ipv6, NULL);
-    }
-
-    if (output)
-        qmi_message_wds_start_network_output_unref (output);
-
-    /* Keep on */
-    ctx->step++;
-    connect_context_step (task);
-}
-
-static QmiMessageWdsStartNetworkInput *
-build_start_network_input (ConnectContext *ctx)
-{
-    QmiMessageWdsStartNetworkInput *input;
-    gboolean has_user, has_password;
-
-    g_assert (ctx->running_ipv4 || ctx->running_ipv6);
-    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
-
-    input = qmi_message_wds_start_network_input_new ();
-
-    if (ctx->apn && ctx->apn[0])
-        qmi_message_wds_start_network_input_set_apn (input, ctx->apn, NULL);
-
-    has_user     = (ctx->user     && ctx->user[0]);
-    has_password = (ctx->password && ctx->password[0]);
-
-    /* Need to add auth info? */
-    if (has_user || has_password || ctx->auth != QMI_WDS_AUTHENTICATION_NONE) {
-        /* We define a valid auth preference if we have either user or password, or an explicit
-         * request for one to be set. If no explicit one was given, default to CHAP. */
-        qmi_message_wds_start_network_input_set_authentication_preference (
-            input,
-            (ctx->auth != QMI_WDS_AUTHENTICATION_NONE) ? ctx->auth : QMI_WDS_AUTHENTICATION_CHAP,
-            NULL);
-
-        if (has_user)
-            qmi_message_wds_start_network_input_set_username (input, ctx->user, NULL);
-        if (has_password)
-            qmi_message_wds_start_network_input_set_password (input, ctx->password, NULL);
-    }
-
-    /* Only add the IP family preference TLV if explicitly requested a given
-     * family. This TLV may be newer than the Start Network command itself, so
-     * we'll just allow the case where none is specified. */
-    if (!ctx->no_ip_family_preference) {
-        qmi_message_wds_start_network_input_set_ip_family_preference (
-            input,
-            (ctx->running_ipv6 ? QMI_WDS_IP_FAMILY_IPV6 : QMI_WDS_IP_FAMILY_IPV4),
-            NULL);
-    }
-
-    return input;
-}
 
 static void
 qmi_inet4_ntop (guint32 address, char *buf, const gsize buflen)
@@ -1019,87 +890,132 @@ get_current_settings (GTask *task, QmiClientWds *client)
 }
 
 static void
-bind_data_port_ready (QmiClientWds *client,
-                      GAsyncResult *res,
-                      GTask        *task)
-{
-    ConnectContext                             *ctx;
-    GError                                     *error = NULL;
-    g_autoptr(QmiMessageWdsBindDataPortOutput)  output = NULL;
-
-    ctx  = g_task_get_task_data (task);
-
-    g_assert (ctx->running_ipv4 || ctx->running_ipv6);
-    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
-
-    output = qmi_client_wds_bind_data_port_finish (client, res, &error);
-    if (!output || !qmi_message_wds_bind_data_port_output_get_result (output, &error)) {
-        g_prefix_error (&error, "Couldn't bind data port: ");
-        complete_connect (task, NULL, error);
-        return;
-    }
-
-    /* Keep on */
-    ctx->step++;
-    connect_context_step (task);
-}
-
-static void
-bind_mux_data_port_ready (QmiClientWds *client,
-                          GAsyncResult *res,
-                          GTask        *task)
-{
-    ConnectContext                                *ctx;
-    GError                                        *error = NULL;
-    g_autoptr(QmiMessageWdsBindMuxDataPortOutput)  output = NULL;
-
-    ctx  = g_task_get_task_data (task);
-
-    g_assert (ctx->running_ipv4 || ctx->running_ipv6);
-    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
-
-    output = qmi_client_wds_bind_mux_data_port_finish (client, res, &error);
-    if (!output || !qmi_message_wds_bind_mux_data_port_output_get_result (output, &error)) {
-        g_prefix_error (&error, "Couldn't bind mux data port: ");
-        complete_connect (task, NULL, error);
-        return;
-    }
-
-    /* Keep on */
-    ctx->step++;
-    connect_context_step (task);
-}
-
-static void
-set_ip_family_ready (QmiClientWds *client,
+start_network_ready (QmiClientWds *client,
                      GAsyncResult *res,
                      GTask *task)
 {
     MMBearerQmi *self;
     ConnectContext *ctx;
     GError *error = NULL;
-    QmiMessageWdsSetIpFamilyOutput *output;
+    QmiMessageWdsStartNetworkOutput *output;
 
     self = g_task_get_source_object (task);
-    ctx = g_task_get_task_data (task);
+    ctx  = g_task_get_task_data (task);
 
     g_assert (ctx->running_ipv4 || ctx->running_ipv6);
     g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
 
-    output = qmi_client_wds_set_ip_family_finish (client, res, &error);
-    if (output) {
-        qmi_message_wds_set_ip_family_output_get_result (output, &error);
-        qmi_message_wds_set_ip_family_output_unref (output);
+    output = qmi_client_wds_start_network_finish (client, res, &error);
+    if (output &&
+        !qmi_message_wds_start_network_output_get_result (output, &error)) {
+        /* No-effect errors should be ignored. The modem will keep the
+         * connection active as long as there is a WDS client which requested
+         * to start the network. If ModemManager crashed while a connection was
+         * active, we would be leaving an unreleased WDS client around and the
+         * modem would just keep connected. */
+        if (g_error_matches (error,
+                             QMI_PROTOCOL_ERROR,
+                             QMI_PROTOCOL_ERROR_NO_EFFECT)) {
+            g_error_free (error);
+            error = NULL;
+            if (ctx->running_ipv4)
+                ctx->packet_data_handle_ipv4 = GLOBAL_PACKET_DATA_HANDLE;
+            else
+                ctx->packet_data_handle_ipv6 = GLOBAL_PACKET_DATA_HANDLE;
+
+            /* Fall down to a successful connection */
+        } else {
+            mm_obj_info (self, "couldn't start network: %s", error->message);
+            if (g_error_matches (error,
+                                 QMI_PROTOCOL_ERROR,
+                                 QMI_PROTOCOL_ERROR_CALL_FAILED)) {
+                QmiWdsCallEndReason cer;
+                QmiWdsVerboseCallEndReasonType verbose_cer_type;
+                gint16 verbose_cer_reason;
+
+                if (qmi_message_wds_start_network_output_get_call_end_reason (
+                        output,
+                        &cer,
+                        NULL))
+                    mm_obj_info (self, "call end reason (%u): %s", cer, qmi_wds_call_end_reason_get_string (cer));
+
+                if (qmi_message_wds_start_network_output_get_verbose_call_end_reason (
+                        output,
+                        &verbose_cer_type,
+                        &verbose_cer_reason,
+                        NULL))
+                    mm_obj_info (self, "verbose call end reason (%u,%d): [%s] %s",
+                                 verbose_cer_type,
+                                 verbose_cer_reason,
+                                 qmi_wds_verbose_call_end_reason_type_get_string (verbose_cer_type),
+                                 qmi_wds_verbose_call_end_reason_get_string (verbose_cer_type, verbose_cer_reason));
+            }
+        }
     }
 
     if (error) {
-        mm_obj_dbg (self, "couldn't set IP family preference: %s", error->message);
-        g_error_free (error);
+        if (ctx->running_ipv4)
+            ctx->error_ipv4 = error;
+        else
+            ctx->error_ipv6 = error;
+    } else {
+        if (ctx->running_ipv4)
+            qmi_message_wds_start_network_output_get_packet_data_handle (output, &ctx->packet_data_handle_ipv4, NULL);
+        else
+            qmi_message_wds_start_network_output_get_packet_data_handle (output, &ctx->packet_data_handle_ipv6, NULL);
     }
+
+    if (output)
+        qmi_message_wds_start_network_output_unref (output);
 
     /* Keep on */
     ctx->step++;
     connect_context_step (task);
+}
+
+static QmiMessageWdsStartNetworkInput *
+build_start_network_input (ConnectContext *ctx)
+{
+    QmiMessageWdsStartNetworkInput *input;
+    gboolean has_user, has_password;
+
+    g_assert (ctx->running_ipv4 || ctx->running_ipv6);
+    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
+
+    input = qmi_message_wds_start_network_input_new ();
+
+    if (ctx->apn && ctx->apn[0])
+        qmi_message_wds_start_network_input_set_apn (input, ctx->apn, NULL);
+
+    has_user     = (ctx->user     && ctx->user[0]);
+    has_password = (ctx->password && ctx->password[0]);
+
+    /* Need to add auth info? */
+    if (has_user || has_password || ctx->auth != QMI_WDS_AUTHENTICATION_NONE) {
+        /* We define a valid auth preference if we have either user or password, or an explicit
+         * request for one to be set. If no explicit one was given, default to CHAP. */
+        qmi_message_wds_start_network_input_set_authentication_preference (
+            input,
+            (ctx->auth != QMI_WDS_AUTHENTICATION_NONE) ? ctx->auth : QMI_WDS_AUTHENTICATION_CHAP,
+            NULL);
+
+        if (has_user)
+            qmi_message_wds_start_network_input_set_username (input, ctx->user, NULL);
+        if (has_password)
+            qmi_message_wds_start_network_input_set_password (input, ctx->password, NULL);
+    }
+
+    /* Only add the IP family preference TLV if explicitly requested a given
+     * family. This TLV may be newer than the Start Network command itself, so
+     * we'll just allow the case where none is specified. */
+    if (!ctx->no_ip_family_preference) {
+        qmi_message_wds_start_network_input_set_ip_family_preference (
+            input,
+            (ctx->running_ipv6 ? QMI_WDS_IP_FAMILY_IPV6 : QMI_WDS_IP_FAMILY_IPV4),
+            NULL);
+    }
+
+    return input;
 }
 
 static void
@@ -1303,6 +1219,90 @@ cleanup_event_report_unsolicited_events (MMBearerQmi *self,
 }
 
 static void
+set_ip_family_ready (QmiClientWds *client,
+                     GAsyncResult *res,
+                     GTask *task)
+{
+    MMBearerQmi *self;
+    ConnectContext *ctx;
+    GError *error = NULL;
+    QmiMessageWdsSetIpFamilyOutput *output;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    g_assert (ctx->running_ipv4 || ctx->running_ipv6);
+    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
+
+    output = qmi_client_wds_set_ip_family_finish (client, res, &error);
+    if (output) {
+        qmi_message_wds_set_ip_family_output_get_result (output, &error);
+        qmi_message_wds_set_ip_family_output_unref (output);
+    }
+
+    if (error) {
+        mm_obj_dbg (self, "couldn't set IP family preference: %s", error->message);
+        g_error_free (error);
+    }
+
+    /* Keep on */
+    ctx->step++;
+    connect_context_step (task);
+}
+
+static void
+bind_data_port_ready (QmiClientWds *client,
+                      GAsyncResult *res,
+                      GTask        *task)
+{
+    ConnectContext                             *ctx;
+    GError                                     *error = NULL;
+    g_autoptr(QmiMessageWdsBindDataPortOutput)  output = NULL;
+
+    ctx  = g_task_get_task_data (task);
+
+    g_assert (ctx->running_ipv4 || ctx->running_ipv6);
+    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
+
+    output = qmi_client_wds_bind_data_port_finish (client, res, &error);
+    if (!output || !qmi_message_wds_bind_data_port_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't bind data port: ");
+        complete_connect (task, NULL, error);
+        return;
+    }
+
+    /* Keep on */
+    ctx->step++;
+    connect_context_step (task);
+}
+
+static void
+bind_mux_data_port_ready (QmiClientWds *client,
+                          GAsyncResult *res,
+                          GTask        *task)
+{
+    ConnectContext                                *ctx;
+    GError                                        *error = NULL;
+    g_autoptr(QmiMessageWdsBindMuxDataPortOutput)  output = NULL;
+
+    ctx  = g_task_get_task_data (task);
+
+    g_assert (ctx->running_ipv4 || ctx->running_ipv6);
+    g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
+
+    output = qmi_client_wds_bind_mux_data_port_finish (client, res, &error);
+    if (!output || !qmi_message_wds_bind_mux_data_port_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't bind mux data port: ");
+        complete_connect (task, NULL, error);
+        return;
+    }
+
+    /* Keep on */
+    ctx->step++;
+    connect_context_step (task);
+}
+
+static void
 qmi_port_allocate_client_ready (MMPortQmi *qmi,
                                 GAsyncResult *res,
                                 GTask *task)
@@ -1323,13 +1323,15 @@ qmi_port_allocate_client_ready (MMPortQmi *qmi,
     }
 
     if (ctx->running_ipv4)
-        ctx->client_ipv4 = QMI_CLIENT_WDS (mm_port_qmi_get_client (qmi,
-                                                                   QMI_SERVICE_WDS,
-                                                                   MM_PORT_QMI_FLAG_WDS_IPV4));
+        ctx->client_ipv4 = QMI_CLIENT_WDS (mm_port_qmi_get_client (
+                                               qmi,
+                                               QMI_SERVICE_WDS,
+                                               MM_PORT_QMI_FLAG_WITH_MUX_ID (MM_PORT_QMI_FLAG_WDS_IPV4, ctx->mux_id)));
     else
-        ctx->client_ipv6 = QMI_CLIENT_WDS (mm_port_qmi_get_client (qmi,
-                                                                   QMI_SERVICE_WDS,
-                                                                   MM_PORT_QMI_FLAG_WDS_IPV6));
+        ctx->client_ipv6 = QMI_CLIENT_WDS (mm_port_qmi_get_client (
+                                               qmi,
+                                               QMI_SERVICE_WDS,
+                                               MM_PORT_QMI_FLAG_WITH_MUX_ID (MM_PORT_QMI_FLAG_WDS_IPV6, ctx->mux_id)));
 
     /* Keep on */
     ctx->step++;
@@ -1558,7 +1560,6 @@ connect_context_step (GTask *task)
     }
 
     case CONNECT_STEP_SETUP_LINK:
-
         /* if muxing has been enabled in the port, we need to create a new link
          * interface. */
         if (MM_PORT_QMI_DAP_IS_SUPPORTED_QMAP (ctx->dap)) {
@@ -1621,12 +1622,12 @@ connect_context_step (GTask *task)
 
         client = mm_port_qmi_get_client (ctx->qmi,
                                          QMI_SERVICE_WDS,
-                                         MM_PORT_QMI_FLAG_WDS_IPV4);
+                                         MM_PORT_QMI_FLAG_WITH_MUX_ID (MM_PORT_QMI_FLAG_WDS_IPV4, ctx->mux_id));
         if (!client) {
-            mm_obj_dbg (self, "allocating IPv4-specific WDS client");
+            mm_obj_dbg (self, "allocating IPv4-specific WDS client (mux id %u)", ctx->mux_id);
             mm_port_qmi_allocate_client (ctx->qmi,
                                          QMI_SERVICE_WDS,
-                                         MM_PORT_QMI_FLAG_WDS_IPV4,
+                                         MM_PORT_QMI_FLAG_WITH_MUX_ID (MM_PORT_QMI_FLAG_WDS_IPV4, ctx->mux_id),
                                          g_task_get_cancellable (task),
                                          (GAsyncReadyCallback)qmi_port_allocate_client_ready,
                                          task);
@@ -1636,27 +1637,6 @@ connect_context_step (GTask *task)
         ctx->client_ipv4 = QMI_CLIENT_WDS (client);
         ctx->step++;
     } /* fall through */
-
-    case CONNECT_STEP_IP_FAMILY_IPV4:
-        /* If client is new enough, select IP family */
-        if (!ctx->no_ip_family_preference) {
-            QmiMessageWdsSetIpFamilyInput *input;
-
-            mm_obj_dbg (self, "setting default IP family to: IPv4");
-            input = qmi_message_wds_set_ip_family_input_new ();
-            qmi_message_wds_set_ip_family_input_set_preference (input, QMI_WDS_IP_FAMILY_IPV4, NULL);
-            qmi_client_wds_set_ip_family (ctx->client_ipv4,
-                                          input,
-                                          10,
-                                          g_task_get_cancellable (task),
-                                          (GAsyncReadyCallback)set_ip_family_ready,
-                                          task);
-            qmi_message_wds_set_ip_family_input_unref (input);
-            return;
-        }
-
-        ctx->step++;
-        /* fall through */
 
     case CONNECT_STEP_BIND_DATA_PORT_IPV4:
         /* If SIO port given, bind client to it */
@@ -1694,6 +1674,27 @@ connect_context_step (GTask *task)
                                                g_task_get_cancellable (task),
                                                (GAsyncReadyCallback)bind_mux_data_port_ready,
                                                task);
+            return;
+        }
+
+        ctx->step++;
+        /* fall through */
+
+    case CONNECT_STEP_IP_FAMILY_IPV4:
+        /* If client is new enough, select IP family */
+        if (!ctx->no_ip_family_preference) {
+            QmiMessageWdsSetIpFamilyInput *input;
+
+            mm_obj_dbg (self, "setting default IP family to: IPv4");
+            input = qmi_message_wds_set_ip_family_input_new ();
+            qmi_message_wds_set_ip_family_input_set_preference (input, QMI_WDS_IP_FAMILY_IPV4, NULL);
+            qmi_client_wds_set_ip_family (ctx->client_ipv4,
+                                          input,
+                                          10,
+                                          g_task_get_cancellable (task),
+                                          (GAsyncReadyCallback)set_ip_family_ready,
+                                          task);
+            qmi_message_wds_set_ip_family_input_unref (input);
             return;
         }
 
@@ -1757,12 +1758,12 @@ connect_context_step (GTask *task)
 
         client = mm_port_qmi_get_client (ctx->qmi,
                                          QMI_SERVICE_WDS,
-                                         MM_PORT_QMI_FLAG_WDS_IPV6);
+                                         MM_PORT_QMI_FLAG_WITH_MUX_ID (MM_PORT_QMI_FLAG_WDS_IPV6, ctx->mux_id));
         if (!client) {
-            mm_obj_dbg (self, "allocating IPv6-specific WDS client");
+            mm_obj_dbg (self, "allocating IPv6-specific WDS client (mux id %u)", ctx->mux_id);
             mm_port_qmi_allocate_client (ctx->qmi,
                                          QMI_SERVICE_WDS,
-                                         MM_PORT_QMI_FLAG_WDS_IPV6,
+                                         MM_PORT_QMI_FLAG_WITH_MUX_ID (MM_PORT_QMI_FLAG_WDS_IPV6, ctx->mux_id),
                                          g_task_get_cancellable (task),
                                          (GAsyncReadyCallback)qmi_port_allocate_client_ready,
                                          task);
@@ -1772,24 +1773,6 @@ connect_context_step (GTask *task)
         ctx->client_ipv6 = QMI_CLIENT_WDS (client);
         ctx->step++;
     } /* fall through */
-
-    case CONNECT_STEP_IP_FAMILY_IPV6: {
-        QmiMessageWdsSetIpFamilyInput *input;
-
-        g_assert (ctx->no_ip_family_preference == FALSE);
-
-        mm_obj_dbg (self, "setting default IP family to: IPv6");
-        input = qmi_message_wds_set_ip_family_input_new ();
-        qmi_message_wds_set_ip_family_input_set_preference (input, QMI_WDS_IP_FAMILY_IPV6, NULL);
-        qmi_client_wds_set_ip_family (ctx->client_ipv6,
-                                      input,
-                                      10,
-                                      g_task_get_cancellable (task),
-                                      (GAsyncReadyCallback)set_ip_family_ready,
-                                      task);
-        qmi_message_wds_set_ip_family_input_unref (input);
-        return;
-    }
 
     case CONNECT_STEP_BIND_DATA_PORT_IPV6:
         /* If SIO port given, bind client to it */
@@ -1832,6 +1815,24 @@ connect_context_step (GTask *task)
 
         ctx->step++;
         /* fall through */
+
+    case CONNECT_STEP_IP_FAMILY_IPV6: {
+        QmiMessageWdsSetIpFamilyInput *input;
+
+        g_assert (ctx->no_ip_family_preference == FALSE);
+
+        mm_obj_dbg (self, "setting default IP family to: IPv6");
+        input = qmi_message_wds_set_ip_family_input_new ();
+        qmi_message_wds_set_ip_family_input_set_preference (input, QMI_WDS_IP_FAMILY_IPV6, NULL);
+        qmi_client_wds_set_ip_family (ctx->client_ipv6,
+                                      input,
+                                      10,
+                                      g_task_get_cancellable (task),
+                                      (GAsyncReadyCallback)set_ip_family_ready,
+                                      task);
+        qmi_message_wds_set_ip_family_input_unref (input);
+        return;
+    }
 
     case CONNECT_STEP_ENABLE_INDICATIONS_IPV6:
         common_setup_cleanup_packet_service_status_unsolicited_events (ctx->self,
