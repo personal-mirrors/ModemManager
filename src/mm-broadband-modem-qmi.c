@@ -8396,7 +8396,11 @@ set_initial_eps_bearer_power_down_ready (MMIfaceModem *self,
         return;
     }
 
-    ctx->step++;
+    if (MM_BROADBAND_MODEM_QMI(self)->priv->mm_owned_attach_pdn) {
+       ctx->step = SET_INITIAL_EPS_BEARER_SETTINGS_STEP_MODIFY_PROFILE;
+    } else {
+       ctx->step++;
+    }
     set_initial_eps_bearer_settings_step (task);
 }
 
