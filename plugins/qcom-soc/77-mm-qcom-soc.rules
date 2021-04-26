@@ -33,4 +33,7 @@ KERNEL=="rmnet_usb[0-9]*", ENV{ID_MM_PORT_IGNORE}="1"
 # flag all rpmsg ports under this plugin as candidate
 KERNEL=="rpmsg[0-9]*", SUBSYSTEM=="rpmsg", ENV{ID_MM_CANDIDATE}="1"
 
+# TODO(b/175305412): flag rmnet_data0 port under this plugin as candidate.
+KERNEL=="rmnet_data0", SUBSYSTEM=="net", ENV{ID_MM_CANDIDATE}="1"
+
 LABEL="mm_qcom_soc_end"
