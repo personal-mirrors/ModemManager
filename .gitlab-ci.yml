@@ -2,7 +2,7 @@ include:
   - project: freedesktop/ci-templates
     ref: 290b79e0e78eab67a83766f4e9691be554fc4afd
     file:
-    - templates/debian.yml
+    - templates/ubuntu.yml
 
 stages:
   - container prep
@@ -11,14 +11,18 @@ stages:
 .common_variables:
   variables:
     FDO_UPSTREAM_REPO: mobile-broadband/ModemManager
-    FDO_DISTRIBUTION_VERSION: 'buster'
-    FDO_DISTRIBUTION_TAG: '2020-04-08.4'
-    FDO_DISTRIBUTION_PACKAGES: ca-certificates git gcc autoconf automake libtool libgettextpo-dev libgirepository1.0-dev libglib2.0-dev libgudev-1.0-dev python3-dbus python3-gi autopoint xsltproc dbus autoconf-archive gettext
-                               gtk-doc-tools libglib2.0-doc gobject-introspection libsystemd-dev libpolkit-gobject-1-dev valac
+    FDO_DISTRIBUTION_VERSION: '20.04'
+    FDO_DISTRIBUTION_TAG: '2021-04-28.2'
+    FDO_DISTRIBUTION_PACKAGES: ca-certificates git gcc autoconf automake libtool
+                               libgettextpo-dev libgirepository1.0-dev libglib2.0-dev
+                               libgudev-1.0-dev python3-dbus python3-gi autopoint
+                               xsltproc dbus autoconf-archive gettext gtk-doc-tools
+                               libglib2.0-doc gobject-introspection libsystemd-dev
+                               libpolkit-gobject-1-dev valac
 
 build container:
   extends:
-  - .fdo.container-build@debian
+  - .fdo.container-build@ubuntu
   - .common_variables
   stage: container prep
   only:
@@ -31,7 +35,7 @@ build container:
 build-no-qmi:
   stage: build
   extends:
-  - .fdo.distribution-image@debian
+  - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
     - master
@@ -42,12 +46,12 @@ build-no-qmi:
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
     - pushd libmbim
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection
     - make
     - make install
     - popd
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/tmp/build-no-qmi --disable-gtk-doc --without-qmi
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --without-qmi
     - make
     - make check
     - make install
@@ -55,7 +59,7 @@ build-no-qmi:
 build-qmi-qrtr-no-mbim:
   stage: build
   extends:
-  - .fdo.distribution-image@debian
+  - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
     - master
@@ -66,19 +70,19 @@ build-qmi-qrtr-no-mbim:
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
     - pushd libqrtr-glib
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection
     - make
     - make install
     - popd
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
     - pushd libqmi
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --disable-mbim-qmux --enable-qrtr --enable-collection=basic
+    - ./configure --prefix=/usr  --disable-gtk-doc --disable-introspection --disable-mbim-qmux --enable-qrtr --enable-collection=basic
     - make
     - make install
     - popd
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/tmp/build-qmi-qrtr-no-mbim --disable-gtk-doc --without-mbim
+    - ./configure --prefix=/usr  --disable-gtk-doc --disable-introspection --without-mbim
     - make
     - make check
     - make install
@@ -86,7 +90,7 @@ build-qmi-qrtr-no-mbim:
 build-qmi-no-qrtr-no-mbim:
   stage: build
   extends:
-  - .fdo.distribution-image@debian
+  - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
     - master
@@ -97,12 +101,12 @@ build-qmi-no-qrtr-no-mbim:
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
     - pushd libqmi
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --disable-mbim-qmux --disable-qrtr --enable-collection=basic
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --disable-mbim-qmux --disable-qrtr --enable-collection=basic
     - make
     - make install
     - popd
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/tmp/build-qmi-no-qrtr-no-mbim --disable-gtk-doc --without-mbim
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --without-mbim
     - make
     - make check
     - make install
@@ -110,7 +114,7 @@ build-qmi-no-qrtr-no-mbim:
 build-no-qmi-no-mbim:
   stage: build
   extends:
-  - .fdo.distribution-image@debian
+  - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
     - master
@@ -119,7 +123,7 @@ build-no-qmi-no-mbim:
     - schedules
   script:
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/tmp/build-no-qmi-no-mbim --disable-gtk-doc --without-qmi --without-mbim
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --without-qmi --without-mbim
     - make
     - make check
     - make install
@@ -127,7 +131,7 @@ build-no-qmi-no-mbim:
 build-qmi-newest-commands:
   stage: build
   extends:
-  - .fdo.distribution-image@debian
+  - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
     - master
@@ -138,12 +142,12 @@ build-qmi-newest-commands:
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
     - pushd libqmi
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --disable-mbim-qmux --enable-collection=basic
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --disable-mbim-qmux --enable-collection=basic
     - make
     - make install
     - popd
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/tmp/build-qmi-newest-commands --disable-gtk-doc --without-mbim CFLAGS="-DWITH_NEWEST_QMI_COMMANDS"
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --without-mbim CFLAGS="-DWITH_NEWEST_QMI_COMMANDS"
     - make
     - make check
     - make install
@@ -151,7 +155,7 @@ build-qmi-newest-commands:
 build-single-plugins:
   stage: build
   extends:
-  - .fdo.distribution-image@debian
+  - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
     - schedules
@@ -159,21 +163,21 @@ build-single-plugins:
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
     - pushd libmbim
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection
     - make
     - make install
     - popd
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
     - pushd libqrtr-glib
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection
     - make
     - make install
     - popd
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
     - pushd libqmi
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --enable-mbim-qmux --enable-qrtr --enable-collection=basic
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --enable-mbim-qmux --enable-qrtr --enable-collection=basic
     - make
     - make install
     - popd
@@ -184,7 +188,7 @@ build-single-plugins:
                     novatel novatel-lte option option-hso pantech
                     qcom-soc quectel samsung sierra-legacy sierra simtech
                     telit thuraya tplink ublox via wavecom x22x zte; do
-        ./configure --prefix=/usr --disable-gtk-doc --disable-all-plugins --enable-plugin-$plugin;
+        ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --disable-all-plugins --enable-plugin-$plugin;
         make;
         make clean;
       done
@@ -192,7 +196,7 @@ build-single-plugins:
 build-default:
   stage: build
   extends:
-  - .fdo.distribution-image@debian
+  - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
     - master
@@ -205,26 +209,26 @@ build-default:
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
     - pushd libmbim
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr
+    - ./configure --prefix=/usr --disable-gtk-doc --enable-introspection
     - make
     - make install
     - popd
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
     - pushd libqrtr-glib
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr
+    - ./configure --prefix=/usr --disable-gtk-doc --enable-introspection
     - make
     - make install
     - popd
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
     - pushd libqmi
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --enable-mbim-qmux --enable-qrtr --enable-collection=basic
+    - ./configure --prefix=/usr --disable-gtk-doc --enable-introspection --enable-mbim-qmux --enable-qrtr --enable-collection=basic
     - make
     - make install
     - popd
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --enable-gtk-doc --with-polkit=strict --with-suspend-resume=systemd --with-systemdsystemunitdir=/lib/systemd/system
+    - ./configure --prefix=/usr --enable-gtk-doc --enable-introspection --with-polkit=strict --with-suspend-resume=systemd --with-systemdsystemunitdir=/lib/systemd/system
     - make
     - make check
     - make install
