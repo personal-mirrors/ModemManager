@@ -49,6 +49,11 @@ void                   mm_bearer_connect_result_set_multiplexed  (MMBearerConnec
                                                                   gboolean               multiplexed);
 gboolean               mm_bearer_connect_result_get_multiplexed  (MMBearerConnectResult *result);
 
+/* profile id, if known */
+void                   mm_bearer_connect_result_set_profile_id   (MMBearerConnectResult *result,
+                                                                  gint                   profile_id);
+gint                   mm_bearer_connect_result_get_profile_id   (MMBearerConnectResult *result);
+
 /*****************************************************************************/
 
 /* Default timeout values to be used in the steps of a connection or
@@ -150,10 +155,11 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMBaseBearer, g_object_unref)
 
 void         mm_base_bearer_export   (MMBaseBearer *self);
 
-const gchar        *mm_base_bearer_get_path    (MMBaseBearer *self);
-MMBearerStatus      mm_base_bearer_get_status  (MMBaseBearer *self);
-MMBearerProperties *mm_base_bearer_peek_config (MMBaseBearer *self);
-MMBearerProperties *mm_base_bearer_get_config  (MMBaseBearer *self);
+const gchar        *mm_base_bearer_get_path       (MMBaseBearer *self);
+MMBearerStatus      mm_base_bearer_get_status     (MMBaseBearer *self);
+MMBearerProperties *mm_base_bearer_peek_config    (MMBaseBearer *self);
+MMBearerProperties *mm_base_bearer_get_config     (MMBaseBearer *self);
+gint                mm_base_bearer_get_profile_id (MMBaseBearer *self);
 
 void     mm_base_bearer_connect        (MMBaseBearer *self,
                                         GAsyncReadyCallback callback,

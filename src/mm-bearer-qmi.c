@@ -28,6 +28,7 @@
 #include <libmm-glib.h>
 
 #include "mm-iface-modem.h"
+#include "mm-iface-modem-3gpp-profile-manager.h"
 #include "mm-bearer-qmi.h"
 #include "mm-modem-helpers-qmi.h"
 #include "mm-port-enums-types.h"
@@ -414,6 +415,7 @@ static void cleanup_event_report_unsolicited_events (MMBearerQmi *self,
 
 typedef enum {
     CONNECT_STEP_FIRST,
+    CONNECT_STEP_LOAD_PROFILE_SETTINGS,
     CONNECT_STEP_OPEN_QMI_PORT,
     CONNECT_STEP_SETUP_DATA_FORMAT,
     CONNECT_STEP_SETUP_LINK,
@@ -438,43 +440,45 @@ typedef enum {
 
 typedef struct {
     MMBearerQmi *self;
-    ConnectStep step;
-    MMPort *data;
-    MMPortQmi *qmi;
-    QmiSioPort sio_port;
-    MMBearerMultiplexSupport multiplex;
-    gboolean explicit_qmi_open;
-    gchar *user;
-    gchar *password;
-    gchar *apn;
-    QmiWdsAuthentication auth;
-    gboolean no_ip_family_preference;
+    MMBaseModem *modem;
+    ConnectStep  step;
+    MMPort      *data;
+    MMPortQmi   *qmi;
+    QmiSioPort   sio_port;
 
+    gint                  profile_id;
+    MMBearerIpMethod      ip_method;
+    gboolean              explicit_qmi_open;
+    gchar                *user;
+    gchar                *password;
+    gchar                *apn;
+    QmiWdsAuthentication  auth;
+    gboolean              no_ip_family_preference;
+
+    MMBearerMultiplexSupport       multiplex;
     QmiWdaDataAggregationProtocol  dap;
     guint                          mux_id;
     gchar                         *link_prefix_hint;
     gchar                         *link_name;
     MMPort                        *link;
 
-    MMBearerIpMethod ip_method;
-
-    gboolean ipv4;
-    gboolean running_ipv4;
-    QmiClientWds *client_ipv4;
-    guint packet_service_status_ipv4_indication_id;
-    guint event_report_ipv4_indication_id;
-    guint32 packet_data_handle_ipv4;
+    gboolean          ipv4;
+    gboolean          running_ipv4;
+    QmiClientWds     *client_ipv4;
+    guint             packet_service_status_ipv4_indication_id;
+    guint             event_report_ipv4_indication_id;
+    guint32           packet_data_handle_ipv4;
     MMBearerIpConfig *ipv4_config;
-    GError *error_ipv4;
+    GError           *error_ipv4;
 
-    gboolean ipv6;
-    gboolean running_ipv6;
-    QmiClientWds *client_ipv6;
-    guint packet_service_status_ipv6_indication_id;
-    guint event_report_ipv6_indication_id;
-    guint32 packet_data_handle_ipv6;
+    gboolean          ipv6;
+    gboolean          running_ipv6;
+    QmiClientWds     *client_ipv6;
+    guint             packet_service_status_ipv6_indication_id;
+    guint             event_report_ipv6_indication_id;
+    guint32           packet_data_handle_ipv6;
     MMBearerIpConfig *ipv6_config;
-    GError *error_ipv6;
+    GError           *error_ipv6;
 } ConnectContext;
 
 static void
@@ -544,8 +548,9 @@ connect_context_free (ConnectContext *ctx)
     g_clear_object (&ctx->ipv6_config);
 
     g_clear_object (&ctx->data);
-    g_object_unref (ctx->qmi);
-    g_object_unref (ctx->self);
+    g_clear_object (&ctx->qmi);
+    g_clear_object (&ctx->modem);
+    g_clear_object (&ctx->self);
     g_slice_free (ConnectContext, ctx);
 }
 
@@ -977,32 +982,30 @@ static QmiMessageWdsStartNetworkInput *
 build_start_network_input (ConnectContext *ctx)
 {
     QmiMessageWdsStartNetworkInput *input;
-    gboolean has_user, has_password;
 
     g_assert (ctx->running_ipv4 || ctx->running_ipv6);
     g_assert (!(ctx->running_ipv4 && ctx->running_ipv6));
 
     input = qmi_message_wds_start_network_input_new ();
 
-    if (ctx->apn && ctx->apn[0])
-        qmi_message_wds_start_network_input_set_apn (input, ctx->apn, NULL);
+    /* When requesting to connect through a profile, add the profile-id setting */
+    if (ctx->profile_id != MM_3GPP_PROFILE_ID_UNKNOWN) {
+        g_assert (ctx->profile_id <= (gint)G_MAXUINT8);
+        qmi_message_wds_start_network_input_set_profile_index_3gpp (input, (guint8)ctx->profile_id, NULL);
+    } else {
+        /* If user gives empty string as APN, we also skip setting it in the
+         * request. */
+        if (ctx->apn && ctx->apn[0])
+            qmi_message_wds_start_network_input_set_apn (input, ctx->apn, NULL);
 
-    has_user     = (ctx->user     && ctx->user[0]);
-    has_password = (ctx->password && ctx->password[0]);
-
-    /* Need to add auth info? */
-    if (has_user || has_password || ctx->auth != QMI_WDS_AUTHENTICATION_NONE) {
-        /* We define a valid auth preference if we have either user or password, or an explicit
-         * request for one to be set. If no explicit one was given, default to CHAP. */
-        qmi_message_wds_start_network_input_set_authentication_preference (
-            input,
-            (ctx->auth != QMI_WDS_AUTHENTICATION_NONE) ? ctx->auth : QMI_WDS_AUTHENTICATION_CHAP,
-            NULL);
-
-        if (has_user)
-            qmi_message_wds_start_network_input_set_username (input, ctx->user, NULL);
-        if (has_password)
-            qmi_message_wds_start_network_input_set_password (input, ctx->password, NULL);
+        /* Auth info */
+        qmi_message_wds_start_network_input_set_authentication_preference (input, ctx->auth, NULL);
+        if (ctx->auth != QMI_WDS_AUTHENTICATION_NONE) {
+            if (ctx->user)
+                qmi_message_wds_start_network_input_set_username (input, ctx->user, NULL);
+            if (ctx->user)
+                qmi_message_wds_start_network_input_set_password (input, ctx->password, NULL);
+        }
     }
 
     /* Only add the IP family preference TLV if explicitly requested a given
@@ -1483,6 +1486,66 @@ qmi_port_open_ready (MMPortQmi *qmi,
     connect_context_step (task);
 }
 
+static gboolean
+load_ip_type_settings_from_profile (ConnectContext *ctx,
+                                    MM3gppProfile  *profile,
+                                    GError        **error)
+{
+    MMBearerIpFamily ip_family;
+
+    ip_family = mm_3gpp_profile_get_ip_type (profile);
+    if (mm_3gpp_normalize_ip_family (&ip_family))
+        ctx->no_ip_family_preference = TRUE;
+    if (ip_family & MM_BEARER_IP_FAMILY_IPV4)
+        ctx->ipv4 = TRUE;
+    if (ip_family & MM_BEARER_IP_FAMILY_IPV6)
+        ctx->ipv6 = TRUE;
+    if (ip_family & MM_BEARER_IP_FAMILY_IPV4V6) {
+        ctx->ipv4 = TRUE;
+        ctx->ipv6 = TRUE;
+    }
+    if (!ctx->ipv4 && !ctx->ipv6) {
+        g_autofree gchar *str = NULL;
+
+        str = mm_bearer_ip_family_build_string_from_mask (ip_family);
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                     "Unsupported IP type requested: '%s'", str);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static void
+get_profile_ready (MMIfaceModem3gppProfileManager *modem,
+                   GAsyncResult                   *res,
+                   GTask                          *task)
+{
+    ConnectContext           *ctx;
+    GError                   *error = NULL;
+    g_autoptr(MM3gppProfile)  profile = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    profile = mm_iface_modem_3gpp_profile_manager_get_profile_finish (modem, res, &error);
+    if (!profile) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (!load_ip_type_settings_from_profile (ctx, profile, &error)) {
+        g_prefix_error (&error, "Couldn't load ip type settings from profile: ");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    /* Keep on */
+    ctx->step++;
+    connect_context_step (task);
+}
+
 static void
 connect_context_step (GTask *task)
 {
@@ -1515,11 +1578,24 @@ connect_context_step (GTask *task)
 
     switch (ctx->step) {
     case CONNECT_STEP_FIRST:
-        g_assert (ctx->ipv4 || ctx->ipv6);
+        ctx->step++;
+        /* fall through */
+
+    case CONNECT_STEP_LOAD_PROFILE_SETTINGS:
+        if (ctx->profile_id != MM_3GPP_PROFILE_ID_UNKNOWN) {
+            mm_obj_dbg (self, "loading connection settings from profile '%d'...", ctx->profile_id);
+            mm_iface_modem_3gpp_profile_manager_get_profile (
+                MM_IFACE_MODEM_3GPP_PROFILE_MANAGER (ctx->modem),
+                ctx->profile_id,
+                (GAsyncReadyCallback)get_profile_ready,
+                task);
+            return;
+        }
         ctx->step++;
         /* fall through */
 
     case CONNECT_STEP_OPEN_QMI_PORT:
+        g_assert (ctx->ipv4 || ctx->ipv6);
         /* If we're explicitly opening the port (e.g. using a different cdc-wdm
          * port because the primary one is already connected by a different
          * bearer), then make sure we also close it if anything goes wrong and
@@ -1942,6 +2018,9 @@ connect_context_step (GTask *task)
                                                        ctx->ipv6_config);
         mm_bearer_connect_result_set_multiplexed (connect_result, !!ctx->link);
 
+        if (ctx->profile_id != MM_3GPP_PROFILE_ID_UNKNOWN)
+            mm_bearer_connect_result_set_profile_id (connect_result, ctx->profile_id);
+
         complete_connect (task, connect_result, NULL);
         return;
     }
@@ -1958,178 +2037,142 @@ cancel_operation_cancellable (GCancellable *cancellable,
     g_cancellable_cancel (operation_cancellable);
 }
 
-static void
-_connect (MMBaseBearer *_self,
-          GCancellable *cancellable,
-          GAsyncReadyCallback callback,
-          gpointer user_data)
+static gboolean
+load_settings_from_bearer (MMBearerQmi         *self,
+                           MMBaseModem         *modem,
+                           ConnectContext      *ctx,
+                           MMBearerProperties  *properties,
+                           GError             **error)
 {
-    MMBearerQmi *self = MM_BEARER_QMI (_self);
-    MMBearerProperties *properties = NULL;
-    ConnectContext *ctx;
-    MMBaseModem *modem  = NULL;
-    MMPort *data = NULL;
-    MMPortQmi *qmi = NULL;
-    QmiSioPort sio_port = QMI_SIO_PORT_NONE;
-    GError *error = NULL;
-    const gchar *apn;
-    GTask *task;
-    GCancellable *operation_cancellable = NULL;
-
-    g_object_get (self,
-                  MM_BASE_BEARER_MODEM, &modem,
-                  NULL);
-    g_assert (modem);
-
-    /* Grab a data port */
-    data = mm_base_modem_get_best_data_port (modem, MM_PORT_TYPE_NET);
-    if (!data) {
-        g_task_report_new_error (
-            self,
-            callback,
-            user_data,
-            _connect,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_NOT_FOUND,
-            "No valid data port found to launch connection");
-        goto out;
-    }
-
-    /* Each data port has a single QMI port associated */
-    qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (MM_BROADBAND_MODEM_QMI (modem), data, &sio_port, &error);
-    if (!qmi) {
-        g_task_report_error (
-            self,
-            callback,
-            user_data,
-            _connect,
-            error);
-        goto out;
-    }
-
-    /* Check whether we have an APN */
-    apn = mm_bearer_properties_get_apn (mm_base_bearer_peek_config (_self));
-
-    /* Is this a 3GPP only modem and no APN was given? If so, error */
-    if (mm_iface_modem_is_3gpp_only (MM_IFACE_MODEM (modem)) && !apn) {
-        g_task_report_new_error (
-            self,
-            callback,
-            user_data,
-            _connect,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_INVALID_ARGS,
-            "3GPP connection logic requires APN setting");
-        goto out;
-    }
-
-    /* Is this a 3GPP2 only modem and APN was given? If so, error */
-    if (mm_iface_modem_is_cdma_only (MM_IFACE_MODEM (modem)) && apn) {
-        g_task_report_new_error (
-            self,
-            callback,
-            user_data,
-            _connect,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_INVALID_ARGS,
-            "3GPP2 doesn't support APN setting");
-        goto out;
-    }
-
-    ctx = g_slice_new0 (ConnectContext);
-    ctx->self = g_object_ref (self);
-    ctx->qmi = g_object_ref (qmi);
-    ctx->sio_port = sio_port;
-    ctx->dap = mm_port_qmi_get_data_aggregation_protocol (ctx->qmi);
-    ctx->mux_id = QMI_DEVICE_MUX_ID_UNBOUND;
-    ctx->data = g_object_ref (data);
-    ctx->step = CONNECT_STEP_FIRST;
-    ctx->ip_method = MM_BEARER_IP_METHOD_UNKNOWN;
+    MMBearerAllowedAuth  bearer_auth;
+    GError              *inner_error = NULL;
+    const gchar         *str;
 
     /* If no multiplex setting given by the user, assume requested */
-    ctx->multiplex = MM_BEARER_MULTIPLEX_SUPPORT_REQUESTED;
+    ctx->multiplex = mm_bearer_properties_get_multiplex (properties);
+    if (ctx->multiplex == MM_BEARER_MULTIPLEX_SUPPORT_UNKNOWN)
+        ctx->multiplex = MM_BEARER_MULTIPLEX_SUPPORT_REQUESTED;
 
-    g_object_get (self,
-                  MM_BASE_BEARER_CONFIG, &properties,
-                  NULL);
+    /* The link prefix hint given must be modem-specific */
+    if (ctx->multiplex == MM_BEARER_MULTIPLEX_SUPPORT_REQUESTED ||
+        ctx->multiplex == MM_BEARER_MULTIPLEX_SUPPORT_REQUIRED) {
+        ctx->link_prefix_hint = g_strdup_printf ("qmapmux%u.", mm_base_modem_get_dbus_id (MM_BASE_MODEM (modem)));
+    }
+
+    /* If profile id is given, we'll launch the connection specifying the profile id in use
+     * exclusively, so we ignore any additional user provided setting */
+    ctx->profile_id = mm_bearer_properties_get_profile_id (properties);
+    if (ctx->profile_id != MM_3GPP_PROFILE_ID_UNKNOWN) {
+        /* Is this a 3GPP2 only modem and profile id was given? If so, error, as we don't support
+         * 3GPP2 profiles in ModemManager */
+        if (mm_iface_modem_is_cdma_only (MM_IFACE_MODEM (modem))) {
+            g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                         "3GPP2 doesn't support profile id setting");
+            return FALSE;
+        }
+        /* All done now, we'll need to load IP type settings later on once
+         * we load the real profile to use */
+        return TRUE;
+    }
+
+    /* APN settings */
+    ctx->apn = g_strdup (mm_bearer_properties_get_apn (properties));
+    /* Is this a 3GPP only modem and no APN was given? If so, error */
+    if (mm_iface_modem_is_3gpp_only (MM_IFACE_MODEM (modem)) && !ctx->apn) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                     "3GPP connection logic requires APN setting");
+        return FALSE;
+    }
+    /* Is this a 3GPP2 only modem and APN was given? If so, error */
+    if (mm_iface_modem_is_cdma_only (MM_IFACE_MODEM (modem)) && ctx->apn) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                     "3GPP2 doesn't support APN setting");
+        return FALSE;
+    }
+
+    /* IP type settings */
+    if (!load_ip_type_settings_from_profile (ctx, mm_bearer_properties_peek_3gpp_profile (properties), error))
+        return FALSE;
+
+    /* Auth settings; in we treat user/password empty strings as no strings */
+    str = mm_bearer_properties_get_user (properties);
+    if (str && str[0])
+        ctx->user = g_strdup (str);
+    str = mm_bearer_properties_get_password (properties);
+    if (str && str[0])
+        ctx->password = g_strdup (str);
+
+    if (!ctx->user && !ctx->password)
+        ctx->auth = QMI_WDS_AUTHENTICATION_NONE;
+    else {
+        bearer_auth = mm_bearer_properties_get_allowed_auth (properties);
+        ctx->auth = mm_bearer_allowed_auth_to_qmi_authentication (bearer_auth, self, &inner_error);
+        if (inner_error) {
+            g_propagate_error (error, inner_error);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static void
+_connect (MMBaseBearer        *_self,
+          GCancellable        *cancellable,
+          GAsyncReadyCallback  callback,
+          gpointer             user_data)
+{
+    MMBearerQmi                   *self = MM_BEARER_QMI (_self);
+    ConnectContext                *ctx;
+    GError                        *error = NULL;
+    GTask                         *task;
+    g_autoptr(GCancellable)        operation_cancellable = NULL;
+    g_autoptr(MMBaseModem)         modem  = NULL;
+    g_autoptr(MMBearerProperties)  properties = NULL;
 
     operation_cancellable = g_cancellable_new ();
     task = g_task_new (self, operation_cancellable, callback, user_data);
     g_task_set_check_cancellable (task, FALSE);
+
+    g_object_get (self,
+                  MM_BASE_BEARER_MODEM, &modem,
+                  MM_BASE_BEARER_CONFIG, &properties,
+                  NULL);
+    g_assert (modem);
+
+    ctx = g_slice_new0 (ConnectContext);
+    ctx->self = g_object_ref (self);
+    ctx->modem = g_object_ref (modem);
+    ctx->mux_id = QMI_DEVICE_MUX_ID_UNBOUND;
+    ctx->sio_port = QMI_SIO_PORT_NONE;
+    ctx->step = CONNECT_STEP_FIRST;
+    ctx->ip_method = MM_BEARER_IP_METHOD_UNKNOWN;
     g_task_set_task_data (task, ctx, (GDestroyNotify)connect_context_free);
 
-    if (properties) {
-        MMBearerAllowedAuth      auth;
-        MMBearerIpFamily         ip_family;
-        MMBearerMultiplexSupport multiplex;
-
-        ctx->apn = g_strdup (mm_bearer_properties_get_apn (properties));
-        ctx->user = g_strdup (mm_bearer_properties_get_user (properties));
-        ctx->password = g_strdup (mm_bearer_properties_get_password (properties));
-
-        ip_family = mm_bearer_properties_get_ip_type (properties);
-        if (mm_3gpp_normalize_ip_family (&ip_family))
-            ctx->no_ip_family_preference = TRUE;
-
-        if (ip_family & MM_BEARER_IP_FAMILY_IPV4)
-            ctx->ipv4 = TRUE;
-        if (ip_family & MM_BEARER_IP_FAMILY_IPV6)
-            ctx->ipv6 = TRUE;
-        if (ip_family & MM_BEARER_IP_FAMILY_IPV4V6) {
-            ctx->ipv4 = TRUE;
-            ctx->ipv6 = TRUE;
-        }
-
-        if (!ctx->ipv4 && !ctx->ipv6) {
-            gchar *str;
-
-            str = mm_bearer_ip_family_build_string_from_mask (ip_family);
-            g_task_return_new_error (
-                task,
-                MM_CORE_ERROR,
-                MM_CORE_ERROR_UNSUPPORTED,
-                "Unsupported IP type requested: '%s'",
-                str);
-            g_object_unref (task);
-            g_free (str);
-            goto out;
-        }
-
-        auth = mm_bearer_properties_get_allowed_auth (properties);
-        g_object_unref (properties);
-
-        if (auth == MM_BEARER_ALLOWED_AUTH_UNKNOWN) {
-            /* We'll default to CHAP later if needed */
-            ctx->auth = QMI_WDS_AUTHENTICATION_NONE;
-        } else if (auth & (MM_BEARER_ALLOWED_AUTH_PAP |
-                           MM_BEARER_ALLOWED_AUTH_CHAP |
-                           MM_BEARER_ALLOWED_AUTH_NONE)) {
-            /* Only PAP and/or CHAP or NONE are supported */
-            ctx->auth = mm_bearer_allowed_auth_to_qmi_authentication (auth);
-        } else {
-            gchar *str;
-
-            str = mm_bearer_allowed_auth_build_string_from_mask (auth);
-            g_task_return_new_error (
-                task,
-                MM_CORE_ERROR,
-                MM_CORE_ERROR_UNSUPPORTED,
-                "Cannot use any of the specified authentication methods (%s)",
-                str);
-            g_object_unref (task);
-            g_free (str);
-            goto out;
-        }
-
-        multiplex = mm_bearer_properties_get_multiplex (properties);
-        if (multiplex != MM_BEARER_MULTIPLEX_SUPPORT_UNKNOWN)
-            ctx->multiplex = multiplex;
+    /* Grab a data port */
+    ctx->data = mm_base_modem_get_best_data_port (modem, MM_PORT_TYPE_NET);
+    if (!ctx->data) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
+                                 "No valid data port found to launch connection");
+        g_object_unref (task);
+        return;
     }
 
-    if (ctx->multiplex == MM_BEARER_MULTIPLEX_SUPPORT_REQUESTED ||
-        ctx->multiplex == MM_BEARER_MULTIPLEX_SUPPORT_REQUIRED) {
-        /* the link prefix hint given must be modem-specific */
-        ctx->link_prefix_hint = g_strdup_printf ("qmapmux%u.", mm_base_modem_get_dbus_id (MM_BASE_MODEM (modem)));
+    /* Each data port has a single QMI port associated */
+    ctx->qmi = mm_broadband_modem_qmi_get_port_qmi_for_data (MM_BROADBAND_MODEM_QMI (modem), ctx->data, &ctx->sio_port, &error);
+    if (!ctx->qmi) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+    ctx->dap = mm_port_qmi_get_data_aggregation_protocol (ctx->qmi);
+
+    /* load all settings from bearer */
+    if (!load_settings_from_bearer (self, modem, ctx, properties, &error)) {
+        g_prefix_error (&error, "Invalid bearer properties: ");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
     }
 
     /* setup network cancellable */
@@ -2150,16 +2193,10 @@ _connect (MMBaseBearer *_self,
 
     /* Run! */
     mm_obj_dbg (self, "launching connection with QMI port (%s) and data port (%s) (multiplex %s)",
-                mm_port_get_device (MM_PORT (qmi)),
-                mm_port_get_device (data),
+                mm_port_get_device (MM_PORT (ctx->qmi)),
+                mm_port_get_device (ctx->data),
                 mm_bearer_multiplex_support_get_string (ctx->multiplex));
     connect_context_step (task);
-
- out:
-    g_clear_object (&operation_cancellable);
-    g_clear_object (&qmi);
-    g_clear_object (&data);
-    g_clear_object (&modem);
 }
 
 /*****************************************************************************/

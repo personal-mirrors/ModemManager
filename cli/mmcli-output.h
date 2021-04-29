@@ -42,6 +42,7 @@ typedef enum {
     MMC_S_MODEM_3GPP_EPS,
     MMC_S_MODEM_3GPP_SCAN,
     MMC_S_MODEM_3GPP_USSD,
+    MMC_S_MODEM_3GPP_PROFILE_MANAGER,
     MMC_S_MODEM_CDMA,
     MMC_S_MODEM_SIM,
     MMC_S_MODEM_BEARER,
@@ -140,6 +141,9 @@ typedef enum {
     MMC_F_3GPP_EPS_BEARER_SETTINGS_PASSWORD,
     /* 3GPP scan section */
     MMC_F_3GPP_SCAN_NETWORKS,
+    /* 3GPP profile management section */
+    MMC_F_3GPP_PROFILE_MANAGER_LIST,
+    MMC_F_3GPP_PROFILE_MANAGER_SET,
     /* USSD section */
     MMC_F_3GPP_USSD_STATUS,
     MMC_F_3GPP_USSD_NETWORK_REQUEST,
@@ -227,13 +231,16 @@ typedef enum {
     MMC_F_BEARER_STATUS_MULTIPLEXED,
     MMC_F_BEARER_STATUS_INTERFACE,
     MMC_F_BEARER_STATUS_IP_TIMEOUT,
+    MMC_F_BEARER_STATUS_PROFILE_ID,
     /* Bearer properties section */
     MMC_F_BEARER_PROPERTIES_APN,
+    MMC_F_BEARER_PROPERTIES_APN_TYPE,
     MMC_F_BEARER_PROPERTIES_ROAMING,
     MMC_F_BEARER_PROPERTIES_IP_TYPE,
     MMC_F_BEARER_PROPERTIES_ALLOWED_AUTH,
     MMC_F_BEARER_PROPERTIES_USER,
     MMC_F_BEARER_PROPERTIES_PASSWORD,
+    MMC_F_BEARER_PROPERTIES_PROFILE_ID,
     MMC_F_BEARER_PROPERTIES_NUMBER,
     MMC_F_BEARER_PROPERTIES_RM_PROTOCOL,
     MMC_F_BEARER_IPV4_CONFIG_METHOD,
@@ -354,6 +361,8 @@ void mmcli_output_firmware_list      (GList                     *firmware_list,
                                       MMFirmwareProperties      *selected);
 void mmcli_output_pco_list           (GList                     *pco_list);
 void mmcli_output_preferred_networks (GList                     *preferred_nets_list);
+void mmcli_output_profile_list       (GList                     *profile_list);
+void mmcli_output_profile_set        (MM3gppProfile             *profile);
 
 /******************************************************************************/
 /* Dump output */

@@ -1467,16 +1467,33 @@ mm_sms_state_from_qmi_message_tag (QmiWmsMessageTagType tag)
 /*****************************************************************************/
 
 QmiWdsAuthentication
-mm_bearer_allowed_auth_to_qmi_authentication (MMBearerAllowedAuth auth)
+mm_bearer_allowed_auth_to_qmi_authentication (MMBearerAllowedAuth   auth,
+                                              gpointer              log_object,
+                                              GError              **error)
 {
-    QmiWdsAuthentication out;
+    QmiWdsAuthentication  out;
+    g_autofree gchar     *str = NULL;
 
+    if (auth == MM_BEARER_ALLOWED_AUTH_UNKNOWN) {
+        mm_obj_dbg (log_object, "using default (CHAP) authentication method");
+        return QMI_WDS_AUTHENTICATION_CHAP;
+    }
+
+    if (auth == MM_BEARER_ALLOWED_AUTH_NONE)
+        return QMI_WDS_AUTHENTICATION_NONE;
+
+    /* otherwise find a bitmask that matches the input bitmask */
     out = QMI_WDS_AUTHENTICATION_NONE;
     if (auth & MM_BEARER_ALLOWED_AUTH_PAP)
         out |= QMI_WDS_AUTHENTICATION_PAP;
     if (auth & MM_BEARER_ALLOWED_AUTH_CHAP)
         out |= QMI_WDS_AUTHENTICATION_CHAP;
 
+    /* and if the bitmask cannot be built, error out */
+    str = mm_bearer_allowed_auth_build_string_from_mask (auth);
+    g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                 "Unsupported authentication methods (%s)",
+                 str);
     return out;
 }
 
@@ -1548,6 +1565,52 @@ mm_bearer_ip_family_to_qmi_pdp_type (MMBearerIpFamily  ip_family,
         /* there is no valid conversion, so just return FALSE to indicate it */
         return FALSE;
     }
+}
+
+QmiWdsApnTypeMask
+mm_bearer_apn_type_to_qmi_apn_type (MMBearerApnType apn_type,
+                                    gpointer        log_object)
+{
+    guint64 value = 0;
+
+    if (apn_type == MM_BEARER_APN_TYPE_NONE) {
+        mm_obj_dbg (log_object, "using default (internet) APN type");
+        return QMI_WDS_APN_TYPE_MASK_DEFAULT;
+    }
+
+    if (apn_type & MM_BEARER_APN_TYPE_DEFAULT)
+        value |= QMI_WDS_APN_TYPE_MASK_DEFAULT;
+    if (apn_type & MM_BEARER_APN_TYPE_IMS)
+        value |= QMI_WDS_APN_TYPE_MASK_IMS;
+    if (apn_type & MM_BEARER_APN_TYPE_MMS)
+        value |= QMI_WDS_APN_TYPE_MASK_MMS;
+    if (apn_type & MM_BEARER_APN_TYPE_MANAGEMENT)
+        value |= QMI_WDS_APN_TYPE_MASK_FOTA;
+    if (apn_type & MM_BEARER_APN_TYPE_INITIAL)
+        value |= QMI_WDS_APN_TYPE_MASK_IA;
+    if (apn_type & MM_BEARER_APN_TYPE_EMERGENCY)
+        value |= QMI_WDS_APN_TYPE_MASK_EMERGENCY;
+    return value;
+}
+
+MMBearerApnType
+mm_bearer_apn_type_from_qmi_apn_type (QmiWdsApnTypeMask apn_type)
+{
+    MMBearerApnType value = MM_BEARER_APN_TYPE_NONE;
+
+    if (apn_type & QMI_WDS_APN_TYPE_MASK_DEFAULT)
+        value |= MM_BEARER_APN_TYPE_DEFAULT;
+    if (apn_type & QMI_WDS_APN_TYPE_MASK_IMS)
+        value |= MM_BEARER_APN_TYPE_IMS;
+    if (apn_type & QMI_WDS_APN_TYPE_MASK_MMS)
+        value |= MM_BEARER_APN_TYPE_MMS;
+    if (apn_type & QMI_WDS_APN_TYPE_MASK_FOTA)
+        value |= MM_BEARER_APN_TYPE_MANAGEMENT;
+    if (apn_type & QMI_WDS_APN_TYPE_MASK_IA)
+        value |= MM_BEARER_APN_TYPE_INITIAL;
+    if (apn_type & QMI_WDS_APN_TYPE_MASK_EMERGENCY)
+        value |= MM_BEARER_APN_TYPE_EMERGENCY;
+    return value;
 }
 
 /*****************************************************************************/

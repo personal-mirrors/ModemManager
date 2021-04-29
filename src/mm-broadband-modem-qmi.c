@@ -32,6 +32,7 @@
 #include "mm-modem-helpers-qmi.h"
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-3gpp.h"
+#include "mm-iface-modem-3gpp-profile-manager.h"
 #include "mm-iface-modem-3gpp-ussd.h"
 #include "mm-iface-modem-cdma.h"
 #include "mm-iface-modem-messaging.h"
@@ -48,6 +49,7 @@
 
 static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_3gpp_init (MMIfaceModem3gpp *iface);
+static void iface_modem_3gpp_profile_manager_init (MMIfaceModem3gppProfileManager *iface);
 static void iface_modem_3gpp_ussd_init (MMIfaceModem3gppUssd *iface);
 static void iface_modem_cdma_init (MMIfaceModemCdma *iface);
 static void iface_modem_messaging_init (MMIfaceModemMessaging *iface);
@@ -63,6 +65,7 @@ static MMIfaceModemMessaging *iface_modem_messaging_parent;
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemQmi, mm_broadband_modem_qmi, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP_PROFILE_MANAGER, iface_modem_3gpp_profile_manager_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP_USSD, iface_modem_3gpp_ussd_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_CDMA, iface_modem_cdma_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
@@ -100,6 +103,9 @@ struct _MMBroadbandModemQmiPrivate {
 
     /* Index of the WDS profile used as initial EPS bearer */
     guint16 default_attach_pdn;
+
+    /* Support for the APN type mask in profiles */
+    gboolean apn_type_not_supported;
 
     /* 3GPP/CDMA registration helpers */
     gchar *current_operator_id;
@@ -5504,6 +5510,623 @@ modem_cdma_setup_unsolicited_events (MMIfaceModemCdma *self,
 }
 
 /*****************************************************************************/
+/* Check format (3gppProfileManager interface) */
+
+static gboolean
+modem_3gpp_profile_manager_check_format_finish (MMIfaceModem3gppProfileManager  *self,
+                                                GAsyncResult                    *res,
+                                                gboolean                        *new_id,
+                                                gint                            *min_profile_id,
+                                                gint                            *max_profile_id,
+                                                GEqualFunc                      *apn_cmp,
+                                                MM3gppProfileCmpFlags           *profile_cmp_flags,
+                                                GError                         **error)
+{
+    if (!g_task_propagate_boolean (G_TASK (res), error)) {
+        g_assert_not_reached ();
+        return FALSE;
+    }
+    /* Generic WDS Create Profile method does NOT allow specifying a specific
+     * profile id */
+    if (new_id)
+        *new_id = FALSE;
+    if (min_profile_id)
+        *min_profile_id = 1;
+    if (max_profile_id)
+        *max_profile_id = G_MAXINT - 1;
+    /* use default string comparison method */
+    if (apn_cmp)
+        *apn_cmp = NULL;
+    /* we support everything! */
+    if (profile_cmp_flags)
+        *profile_cmp_flags = 0;
+    return TRUE;
+}
+
+static void
+modem_3gpp_profile_manager_check_format (MMIfaceModem3gppProfileManager *self,
+                                         MMBearerIpFamily                ip_type,
+                                         GAsyncReadyCallback             callback,
+                                         gpointer                        user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+/*****************************************************************************/
+/* Get profile (3GPP profile management interface) */
+
+static MM3gppProfile *
+modem_3gpp_profile_manager_get_profile_finish (MMIfaceModem3gppProfileManager  *self,
+                                               GAsyncResult                    *res,
+                                               GError                         **error)
+{
+    return MM_3GPP_PROFILE (g_task_propagate_pointer (G_TASK (res), error));
+}
+
+static MM3gppProfile *
+wds_profile_settings_to_3gpp_profile (MMBroadbandModemQmi                    *self,
+                                      guint                                   profile_index,
+                                      QmiMessageWdsGetProfileSettingsOutput  *output,
+                                      GError                                **error)
+{
+    MM3gppProfile            *profile = NULL;
+    const gchar              *str;
+    QmiWdsPdpType             pdp_type;
+    QmiWdsAuthentication      auth;
+    QmiWdsApnTypeMask         apn_type;
+
+    profile = mm_3gpp_profile_new ();
+
+    /* On 3GPP modems, the modem seems to force profile-index = pdp-context-number,
+     * and so, we're just going to rely on the profile-index ourselves.*/
+    mm_3gpp_profile_set_profile_id (profile, (gint) profile_index);
+
+    if (qmi_message_wds_get_profile_settings_output_get_apn_name (output, &str, NULL))
+        mm_3gpp_profile_set_apn (profile, str);
+
+    if (qmi_message_wds_get_profile_settings_output_get_pdp_type (output, &pdp_type, NULL))
+        mm_3gpp_profile_set_ip_type (profile, mm_bearer_ip_family_from_qmi_pdp_type (pdp_type));
+
+    if (qmi_message_wds_get_profile_settings_output_get_authentication (output, &auth, NULL))
+        mm_3gpp_profile_set_allowed_auth (profile, mm_bearer_allowed_auth_from_qmi_authentication (auth));
+
+    /* ignore empty user/pass strings */
+    if (qmi_message_wds_get_profile_settings_output_get_username (output, &str, NULL) && str[0])
+        mm_3gpp_profile_set_user (profile, str);
+    if (qmi_message_wds_get_profile_settings_output_get_password (output, &str, NULL) && str[0])
+        mm_3gpp_profile_set_password (profile, str);
+
+    /* If loading APN type TLV fails, flag it as unsupported so that we don't try to use it any
+     * more. */
+    if (qmi_message_wds_get_profile_settings_output_get_apn_type_mask (output, &apn_type, NULL))
+        mm_3gpp_profile_set_apn_type (profile, mm_bearer_apn_type_from_qmi_apn_type (apn_type));
+    else if (!self->priv->apn_type_not_supported) {
+        mm_obj_dbg (self, "APN type flagged as not supported: not given in profile settings");
+        self->priv->apn_type_not_supported = TRUE;
+    }
+
+    return profile;
+}
+
+static void
+get_profile_settings_ready (QmiClientWds *client,
+                            GAsyncResult *res,
+                            GTask        *task)
+{
+    MMBroadbandModemQmi *self;
+    GError              *error = NULL;
+    gint                 profile_id;
+    gboolean             profile_disabled = FALSE;
+    MM3gppProfile       *profile;
+    g_autoptr(QmiMessageWdsGetProfileSettingsOutput) output = NULL;
+
+    self = g_task_get_source_object (task);
+    profile_id = GPOINTER_TO_INT (g_task_get_task_data (task));
+
+    output = qmi_client_wds_get_profile_settings_finish (client, res, &error);
+    if (!output || !qmi_message_wds_get_profile_settings_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't load settings from profile index %u: ", profile_id);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    /* just ignore the profile if it's disabled */
+    qmi_message_wds_get_profile_settings_output_get_apn_disabled_flag (output, &profile_disabled, NULL);
+    if (profile_disabled) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "Profile '%d' is internally disabled", profile_id);
+        g_object_unref (task);
+        return;
+    }
+
+    profile = wds_profile_settings_to_3gpp_profile (self, profile_id, output, &error);
+    if (!profile)
+        g_task_return_error (task, error);
+    else
+        g_task_return_pointer (task, profile, g_object_unref);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_profile_manager_get_profile (MMIfaceModem3gppProfileManager  *self,
+                                        gint                             profile_id,
+                                        GAsyncReadyCallback              callback,
+                                        gpointer                         user_data)
+{
+    GTask     *task;
+    QmiClient *client = NULL;
+    g_autoptr(QmiMessageWdsGetProfileSettingsInput) input = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_WDS, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, GINT_TO_POINTER (profile_id), NULL);
+
+    input = qmi_message_wds_get_profile_settings_input_new ();
+    qmi_message_wds_get_profile_settings_input_set_profile_id (
+        input,
+        QMI_WDS_PROFILE_TYPE_3GPP,
+        profile_id,
+        NULL);
+    qmi_client_wds_get_profile_settings (QMI_CLIENT_WDS (client),
+                                         input,
+                                         3,
+                                         NULL,
+                                         (GAsyncReadyCallback)get_profile_settings_ready,
+                                         task);
+}
+
+/*****************************************************************************/
+/* List profiles (3GPP profile management interface) */
+
+typedef struct {
+    GList  *profiles;
+    GArray *qmi_profiles;
+    guint   i;
+} ListProfilesContext;
+
+static void
+list_profiles_context_free (ListProfilesContext *ctx)
+{
+    g_clear_pointer (&ctx->qmi_profiles, (GDestroyNotify)g_array_unref);
+    mm_3gpp_profile_list_free (ctx->profiles);
+    g_slice_free (ListProfilesContext, ctx);
+}
+
+static gboolean
+modem_3gpp_profile_manager_list_profiles_finish (MMIfaceModem3gppProfileManager  *self,
+                                                 GAsyncResult                    *res,
+                                                 GList                          **out_profiles,
+                                                 GError                         **error)
+{
+    ListProfilesContext *ctx;
+
+    if (!g_task_propagate_boolean (G_TASK (res), error))
+        return FALSE;
+
+    ctx = g_task_get_task_data (G_TASK (res));
+    if (out_profiles)
+        *out_profiles = g_steal_pointer (&ctx->profiles);
+    return TRUE;
+}
+
+static void get_next_profile_settings (GTask *task);
+
+static void
+get_next_profile_settings_ready (MMIfaceModem3gppProfileManager *self,
+                                 GAsyncResult                   *res,
+                                 GTask                          *task)
+{
+    ListProfilesContext *ctx;
+    MM3gppProfile       *profile;
+    GError              *error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    profile = modem_3gpp_profile_manager_get_profile_finish (self, res, &error);
+    if (!profile) {
+        g_prefix_error (&error, "Couldn't load settings from profile index %u: ", ctx->i);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx->profiles = g_list_append (ctx->profiles, profile);
+
+    /* Keep on */
+    ctx->i++;
+    get_next_profile_settings (task);
+}
+
+static void
+get_next_profile_settings (GTask *task)
+{
+    MMBroadbandModemQmi                                 *self;
+    ListProfilesContext                                 *ctx;
+    QmiMessageWdsGetProfileListOutputProfileListProfile *current;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    if (ctx->i >= ctx->qmi_profiles->len) {
+        /* All done */
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    current = &g_array_index (ctx->qmi_profiles, QmiMessageWdsGetProfileListOutputProfileListProfile, ctx->i);
+    modem_3gpp_profile_manager_get_profile (MM_IFACE_MODEM_3GPP_PROFILE_MANAGER (self),
+                                            current->profile_index,
+                                            (GAsyncReadyCallback)get_next_profile_settings_ready,
+                                            task);
+}
+
+static void
+get_profile_list_ready (QmiClientWds *client,
+                        GAsyncResult *res,
+                        GTask        *task)
+{
+    ListProfilesContext                          *ctx;
+    GError                                       *error = NULL;
+    GArray                                       *qmi_profiles = NULL;
+    g_autoptr(QmiMessageWdsGetProfileListOutput)  output = NULL;
+
+    ctx = g_slice_new0 (ListProfilesContext);
+    g_task_set_task_data (task, ctx, (GDestroyNotify) list_profiles_context_free);
+
+    output = qmi_client_wds_get_profile_list_finish (client, res, &error);
+    if (!output || !qmi_message_wds_get_profile_list_output_get_result (output, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    qmi_message_wds_get_profile_list_output_get_profile_list (output, &qmi_profiles, NULL);
+
+    /* empty list? */
+    if (!qmi_profiles || !qmi_profiles->len) {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx->qmi_profiles = g_array_ref (qmi_profiles);
+    get_next_profile_settings (task);
+}
+
+static void
+modem_3gpp_profile_manager_list_profiles (MMIfaceModem3gppProfileManager  *self,
+                                          GAsyncReadyCallback              callback,
+                                          gpointer                         user_data)
+{
+    GTask      *task;
+    QmiClient  *client = NULL;
+    g_autoptr(QmiMessageWdsGetProfileListInput) input = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_WDS, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    input = qmi_message_wds_get_profile_list_input_new ();
+    qmi_message_wds_get_profile_list_input_set_profile_type (input, QMI_WDS_PROFILE_TYPE_3GPP, NULL);
+
+    qmi_client_wds_get_profile_list (QMI_CLIENT_WDS (client),
+                                     input,
+                                     10,
+                                     NULL,
+                                     (GAsyncReadyCallback)get_profile_list_ready,
+                                     task);
+}
+
+/*****************************************************************************/
+/* Store profile (3GPP profile management interface) */
+
+typedef struct {
+    QmiClientWds         *client;
+    gint                  profile_id;
+    gchar                *apn;
+    gchar                *user;
+    gchar                *password;
+    QmiWdsApnTypeMask     qmi_apn_type;
+    QmiWdsAuthentication  qmi_auth;
+    QmiWdsPdpType         qmi_pdp_type;
+} StoreProfileContext;
+
+static void
+store_profile_context_free (StoreProfileContext *ctx)
+{
+    g_free (ctx->apn);
+    g_free (ctx->user);
+    g_free (ctx->password);
+    g_clear_object (&ctx->client);
+    g_slice_free (StoreProfileContext, ctx);
+}
+
+static gint
+modem_3gpp_profile_manager_store_profile_finish (MMIfaceModem3gppProfileManager  *self,
+                                                 GAsyncResult                    *res,
+                                                 GError                         **error)
+{
+    StoreProfileContext *ctx;
+
+    if (!g_task_propagate_boolean (G_TASK (res), error))
+        return MM_3GPP_PROFILE_ID_UNKNOWN;
+
+    ctx = g_task_get_task_data (G_TASK (res));
+    return ctx->profile_id;
+}
+
+static void store_profile_run (GTask *task);
+
+static void
+modify_profile_ready (QmiClientWds *client,
+                      GAsyncResult *res,
+                      GTask        *task)
+{
+    MMBroadbandModemQmi *self;
+    GError              *error = NULL;
+    g_autoptr(QmiMessageWdsModifyProfileOutput) output = NULL;
+
+    self = g_task_get_source_object (task);
+
+    output = qmi_client_wds_modify_profile_finish (client, res, &error);
+    if (!output) {
+        g_task_return_error (task, error);
+    } else if (!qmi_message_wds_modify_profile_output_get_result (output, &error)) {
+        QmiWdsDsProfileError ds_profile_error;
+
+        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_INVALID_PROFILE_TYPE) &&
+            !self->priv->apn_type_not_supported) {
+            /* we'll retry the operation without APN type, which is a setting available only
+             * in newer devices. */
+            mm_obj_dbg (self, "APN type flagged as not supported: failed to modify profile");
+            self->priv->apn_type_not_supported = TRUE;
+            g_clear_error (&error);
+            store_profile_run (task);
+            return;
+        }
+        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL) &&
+            qmi_message_wds_modify_profile_output_get_extended_error_code (output, &ds_profile_error, NULL)) {
+            g_prefix_error (&error, "DS profile error: %s: ", qmi_wds_ds_profile_error_get_string (ds_profile_error));
+        }
+        g_prefix_error (&error, "Couldn't modify profile: ");
+        g_task_return_error (task, error);
+    } else {
+        g_task_return_boolean (task, TRUE);
+    }
+    g_object_unref (task);
+}
+
+static void
+create_profile_ready (QmiClientWds *client,
+                      GAsyncResult *res,
+                      GTask        *task)
+{
+    MMBroadbandModemQmi *self;
+    StoreProfileContext *ctx;
+    GError              *error = NULL;
+    guint8               profile_index;
+    g_autoptr(QmiMessageWdsCreateProfileOutput) output = NULL;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    output = qmi_client_wds_create_profile_finish (client, res, &error);
+    if (!output) {
+        g_task_return_error (task, error);
+    } else if (!qmi_message_wds_create_profile_output_get_result (output, &error)) {
+        QmiWdsDsProfileError ds_profile_error;
+
+        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_INVALID_PROFILE_TYPE) &&
+            !self->priv->apn_type_not_supported) {
+            /* we'll retry the operation without APN type, which is a setting available only
+             * in newer devices. */
+            mm_obj_dbg (self, "APN type flagged as not supported: failed to create profile");
+            self->priv->apn_type_not_supported = TRUE;
+            g_clear_error (&error);
+            store_profile_run (task);
+            return;
+        }
+        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL) &&
+            qmi_message_wds_create_profile_output_get_extended_error_code (output, &ds_profile_error, NULL)) {
+            g_prefix_error (&error, "DS profile error: %s: ", qmi_wds_ds_profile_error_get_string (ds_profile_error));
+        }
+        g_prefix_error (&error, "Couldn't create profile: ");
+        g_task_return_error (task, error);
+    } else if (!qmi_message_wds_create_profile_output_get_profile_identifier (output, NULL, &profile_index, &error)) {
+        g_task_return_error (task, error);
+    } else {
+        ctx->profile_id = profile_index;
+        g_task_return_boolean (task, TRUE);
+    }
+    g_object_unref (task);
+}
+
+static void
+store_profile_run (GTask *task)
+{
+    MMBroadbandModemQmi *self;
+    StoreProfileContext *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    if (ctx->profile_id == MM_3GPP_PROFILE_ID_UNKNOWN) {
+        g_autoptr(QmiMessageWdsCreateProfileInput) input = NULL;
+
+        /* when creating, we cannot select which profile id to use */
+        input = qmi_message_wds_create_profile_input_new ();
+        qmi_message_wds_create_profile_input_set_profile_type (input, QMI_WDS_PROFILE_TYPE_3GPP, NULL);
+        qmi_message_wds_create_profile_input_set_pdp_type (input, ctx->qmi_pdp_type, NULL);
+        qmi_message_wds_create_profile_input_set_apn_name (input, ctx->apn, NULL);
+        qmi_message_wds_create_profile_input_set_authentication (input, ctx->qmi_auth, NULL);
+        qmi_message_wds_create_profile_input_set_username (input, ctx->user, NULL);
+        qmi_message_wds_create_profile_input_set_password (input, ctx->password, NULL);
+        if (!self->priv->apn_type_not_supported)
+            qmi_message_wds_create_profile_input_set_apn_type_mask (input, ctx->qmi_apn_type, NULL);
+
+        qmi_client_wds_create_profile (ctx->client,
+                                       input,
+                                       10,
+                                       NULL,
+                                       (GAsyncReadyCallback)create_profile_ready,
+                                       task);
+    } else {
+        g_autoptr(QmiMessageWdsModifyProfileInput) input = NULL;
+
+        input = qmi_message_wds_modify_profile_input_new ();
+        qmi_message_wds_modify_profile_input_set_profile_identifier (input, QMI_WDS_PROFILE_TYPE_3GPP, ctx->profile_id, NULL);
+        qmi_message_wds_modify_profile_input_set_pdp_type (input, ctx->qmi_pdp_type, NULL);
+        qmi_message_wds_modify_profile_input_set_apn_name (input, ctx->apn, NULL);
+        qmi_message_wds_modify_profile_input_set_authentication (input, ctx->qmi_auth, NULL);
+        qmi_message_wds_modify_profile_input_set_username (input, ctx->user, NULL);
+        qmi_message_wds_modify_profile_input_set_password (input, ctx->password, NULL);
+        if (!self->priv->apn_type_not_supported)
+            qmi_message_wds_modify_profile_input_set_apn_type_mask (input, ctx->qmi_apn_type, NULL);
+
+        qmi_client_wds_modify_profile (ctx->client,
+                                       input,
+                                       10,
+                                       NULL,
+                                       (GAsyncReadyCallback)modify_profile_ready,
+                                       task);
+    }
+}
+
+static void
+modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager *self,
+                                          MM3gppProfile                  *profile,
+                                          GAsyncReadyCallback             callback,
+                                          gpointer                        user_data)
+{
+    GTask                *task;
+    StoreProfileContext  *ctx;
+    QmiClient            *client = NULL;
+    MMBearerIpFamily      ip_type;
+    MMBearerApnType       apn_type;
+    MMBearerAllowedAuth   allowed_auth;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_WDS, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    ctx = g_slice_new0 (StoreProfileContext);
+    ctx->client = g_object_ref (client);
+    g_task_set_task_data (task, ctx, (GDestroyNotify)store_profile_context_free);
+
+    /* Note: may be UNKNOWN */
+    ctx->profile_id = mm_3gpp_profile_get_profile_id (profile);
+
+    ctx->apn = g_strdup (mm_3gpp_profile_get_apn (profile));
+
+    apn_type = mm_3gpp_profile_get_apn_type (profile);
+    ctx->qmi_apn_type = mm_bearer_apn_type_to_qmi_apn_type (apn_type, self);
+
+    ctx->user = g_strdup (mm_3gpp_profile_get_user (profile));
+    ctx->password = g_strdup (mm_3gpp_profile_get_password (profile));
+    allowed_auth = mm_3gpp_profile_get_allowed_auth (profile);
+    if ((allowed_auth != MM_BEARER_ALLOWED_AUTH_UNKNOWN) || ctx->user || ctx->password) {
+        GError *error = NULL;
+
+        ctx->qmi_auth = mm_bearer_allowed_auth_to_qmi_authentication (allowed_auth, self, &error);
+        if (error) {
+            g_task_return_error (task, error);
+            g_object_unref (task);
+            return;
+        }
+    }
+
+    ip_type = mm_3gpp_profile_get_ip_type (profile);
+    if (!mm_bearer_ip_family_to_qmi_pdp_type (ip_type, &ctx->qmi_pdp_type)) {
+        g_autofree gchar *ip_type_str = NULL;
+
+        ip_type_str = mm_bearer_ip_family_build_string_from_mask (ip_type);
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "Invalid IP type specified: %s", ip_type_str);
+        g_object_unref (task);
+        return;
+    }
+
+    store_profile_run (task);
+}
+
+/*****************************************************************************/
+/* Delete profile (3GPP profile management interface) */
+
+static gboolean
+modem_3gpp_profile_manager_delete_profile_finish (MMIfaceModem3gppProfileManager  *self,
+                                                  GAsyncResult                    *res,
+                                                  GError                         **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+delete_profile_ready (QmiClientWds *client,
+                      GAsyncResult *res,
+                      GTask        *task)
+{
+    GError *error = NULL;
+    g_autoptr(QmiMessageWdsDeleteProfileOutput) output = NULL;
+
+    output = qmi_client_wds_delete_profile_finish (client, res, &error);
+    if (!output || !qmi_message_wds_delete_profile_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't delete profile: ");
+        g_task_return_error (task, error);
+    } else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_profile_manager_delete_profile (MMIfaceModem3gppProfileManager *self,
+                                           MM3gppProfile                  *profile,
+                                           GAsyncReadyCallback             callback,
+                                           gpointer                        user_data)
+{
+    GTask     *task;
+    QmiClient *client = NULL;
+    gint       profile_id;
+    g_autoptr(QmiMessageWdsDeleteProfileInput) input = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_WDS, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    profile_id = mm_3gpp_profile_get_profile_id (profile);
+    g_assert (profile_id != MM_3GPP_PROFILE_ID_UNKNOWN);
+
+    mm_obj_dbg (self, "deleting profile '%d'", profile_id);
+
+    input = qmi_message_wds_delete_profile_input_new ();
+    qmi_message_wds_delete_profile_input_set_profile_identifier (input, QMI_WDS_PROFILE_TYPE_3GPP, profile_id, NULL);
+
+    qmi_client_wds_delete_profile (QMI_CLIENT_WDS (client),
+                                   input,
+                                   10,
+                                   NULL,
+                                   (GAsyncReadyCallback)delete_profile_ready,
+                                   task);
+}
+
+/*****************************************************************************/
 /* Check support (Messaging interface) */
 
 static gboolean
@@ -8151,16 +8774,14 @@ typedef enum {
 
 typedef struct {
     SetInitialEpsBearerSettingsStep  step;
-    QmiClientWds                    *client;
-    MMBearerProperties              *settings;
+    MM3gppProfile                   *profile;
     MMModemPowerState                power_state;
 } SetInitialEpsBearerSettingsContext;
 
 static void
 set_initial_eps_bearer_settings_context_free (SetInitialEpsBearerSettingsContext *ctx)
 {
-    g_clear_object (&ctx->client);
-    g_clear_object (&ctx->settings);
+    g_clear_object (&ctx->profile);
     g_slice_free (SetInitialEpsBearerSettingsContext, ctx);
 }
 
@@ -8196,33 +8817,18 @@ set_initial_eps_bearer_power_up_ready (MMIfaceModem *self,
 }
 
 static void
-set_initial_eps_bearer_modify_profile_ready (QmiClientWds *client,
-                                             GAsyncResult *res,
-                                             GTask        *task)
+set_initial_eps_bearer_modify_profile_ready (MMIfaceModem3gppProfileManager *self,
+                                             GAsyncResult                   *res,
+                                             GTask                          *task)
 {
-    g_autoptr(QmiMessageWdsModifyProfileOutput)  output = NULL;
     GError                             *error = NULL;
     SetInitialEpsBearerSettingsContext *ctx;
+    g_autoptr(MM3gppProfile)            stored = NULL;
 
     ctx = g_task_get_task_data (task);
 
-    output = qmi_client_wds_modify_profile_finish (client, res, &error);
-    if (!output) {
-        g_prefix_error (&error, "QMI operation failed: ");
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
-    }
-
-    if (!qmi_message_wds_modify_profile_output_get_result (output, &error)) {
-        QmiWdsDsProfileError ds_profile_error;
-
-        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL) &&
-            qmi_message_wds_modify_profile_output_get_extended_error_code (output, &ds_profile_error, NULL)) {
-            g_prefix_error (&error, "DS profile error: %s: ",
-                            qmi_wds_ds_profile_error_get_string (ds_profile_error));
-        }
-        g_prefix_error (&error, "Couldn't modify default LTE attach PDN settings: ");
+    stored = mm_iface_modem_3gpp_profile_manager_set_profile_finish (self, res, &error);
+    if (!stored) {
         g_task_return_error (task, error);
         g_object_unref (task);
         return;
@@ -8235,51 +8841,17 @@ set_initial_eps_bearer_modify_profile_ready (QmiClientWds *client,
 static void
 set_initial_eps_bearer_modify_profile (GTask *task)
 {
-    g_autoptr(QmiMessageWdsModifyProfileInput)  input = NULL;
     MMBroadbandModemQmi                *self;
     SetInitialEpsBearerSettingsContext *ctx;
-    const gchar                        *str;
-    MMBearerIpFamily                    ip_family;
-    QmiWdsPdpType                       pdp_type;
-    MMBearerAllowedAuth                 allowed_auth;
-    QmiWdsAuthentication                auth;
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
 
-    input = qmi_message_wds_modify_profile_input_new ();
-    qmi_message_wds_modify_profile_input_set_profile_identifier (input,
-                                                                 QMI_WDS_PROFILE_TYPE_3GPP,
-                                                                 self->priv->default_attach_pdn,
-                                                                 NULL);
-
-    str = mm_bearer_properties_get_apn (ctx->settings);
-    qmi_message_wds_modify_profile_input_set_apn_name (input, str ? str : "", NULL);
-
-    ip_family = mm_bearer_properties_get_ip_type (ctx->settings);
-    if (ip_family == MM_BEARER_IP_FAMILY_NONE || ip_family == MM_BEARER_IP_FAMILY_ANY)
-        ip_family = MM_BEARER_IP_FAMILY_IPV4;
-    if (mm_bearer_ip_family_to_qmi_pdp_type (ip_family, &pdp_type))
-        qmi_message_wds_modify_profile_input_set_pdp_type (input, pdp_type, NULL);
-
-    allowed_auth = mm_bearer_properties_get_allowed_auth (ctx->settings);
-    if (allowed_auth == MM_BEARER_ALLOWED_AUTH_UNKNOWN)
-        allowed_auth = MM_BEARER_ALLOWED_AUTH_NONE;
-    auth = mm_bearer_allowed_auth_to_qmi_authentication (allowed_auth);
-    qmi_message_wds_modify_profile_input_set_authentication (input, auth, NULL);
-
-    str = mm_bearer_properties_get_user (ctx->settings);
-    qmi_message_wds_modify_profile_input_set_username (input, str ? str : "", NULL);
-
-    str = mm_bearer_properties_get_password (ctx->settings);
-    qmi_message_wds_modify_profile_input_set_password (input, str ? str : "", NULL);
-
-    qmi_client_wds_modify_profile (ctx->client,
-                                   input,
-                                   10,
-                                   NULL,
-                                   (GAsyncReadyCallback)set_initial_eps_bearer_modify_profile_ready,
-                                   task);
+    mm_iface_modem_3gpp_profile_manager_set_profile (MM_IFACE_MODEM_3GPP_PROFILE_MANAGER (self),
+                                                     ctx->profile,
+                                                     TRUE,
+                                                     (GAsyncReadyCallback)set_initial_eps_bearer_modify_profile_ready,
+                                                     task);
 }
 
 static void
@@ -8391,12 +8963,7 @@ modem_3gpp_set_initial_eps_bearer_settings (MMIfaceModem3gpp    *_self,
     MMBroadbandModemQmi                *self = MM_BROADBAND_MODEM_QMI (_self);
     SetInitialEpsBearerSettingsContext *ctx;
     GTask                              *task;
-    QmiClient                          *client;
-
-    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_WDS, &client,
-                                      callback, user_data))
-        return;
+    MM3gppProfile                      *profile;
 
     task = g_task_new (self, NULL, callback, user_data);
 
@@ -8407,9 +8974,11 @@ modem_3gpp_set_initial_eps_bearer_settings (MMIfaceModem3gpp    *_self,
         return;
     }
 
+    profile = mm_bearer_properties_peek_3gpp_profile (config);
+    mm_3gpp_profile_set_profile_id (profile, self->priv->default_attach_pdn);
+
     ctx = g_slice_new0 (SetInitialEpsBearerSettingsContext);
-    ctx->settings = g_object_ref (config);;
-    ctx->client = QMI_CLIENT_WDS (g_object_ref (client));
+    ctx->profile = g_object_ref (profile);
     ctx->step = SET_INITIAL_EPS_BEARER_SETTINGS_STEP_FIRST;
     g_task_set_task_data (task, ctx, (GDestroyNotify) set_initial_eps_bearer_settings_context_free);
 
@@ -8428,95 +8997,41 @@ modem_3gpp_load_initial_eps_bearer_settings_finish (MMIfaceModem3gpp  *self,
 }
 
 static void
-load_initial_eps_bearer_get_profile_settings_ready (QmiClientWds *client,
-                                                    GAsyncResult *res,
-                                                    GTask        *task)
+load_initial_eps_bearer_get_profile_ready (MMIfaceModem3gppProfileManager *_self,
+                                           GAsyncResult                   *res,
+                                           GTask                          *task)
 {
-    g_autoptr(QmiMessageWdsGetProfileSettingsOutput)  output = NULL;
-    GError               *error = NULL;
-    const gchar          *str;
-    QmiWdsPdpType         pdp_type;
-    QmiWdsAuthentication  auth;
-    gboolean              flag;
-    MMBearerProperties   *properties;
+    GError                   *error = NULL;
+    g_autoptr(MM3gppProfile)  profile = NULL;
+    MMBearerProperties       *properties;
 
-    output = qmi_client_wds_get_profile_settings_finish (client, res, &error);
-    if (!output) {
-        g_prefix_error (&error, "QMI operation failed: ");
+    profile = mm_iface_modem_3gpp_profile_manager_get_profile_finish (_self, res, &error);
+    if (!profile) {
         g_task_return_error (task, error);
         g_object_unref (task);
         return;
     }
 
-    if (!qmi_message_wds_get_profile_settings_output_get_result (output, &error)) {
-        QmiWdsDsProfileError ds_profile_error;
-
-        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL) &&
-            qmi_message_wds_get_profile_settings_output_get_extended_error_code (output, &ds_profile_error, NULL)) {
-            g_prefix_error (&error, "DS profile error: %s: ",
-                            qmi_wds_ds_profile_error_get_string (ds_profile_error));
-        }
-        g_prefix_error (&error, "Couldn't get default LTE attach PDN settings: ");
+    properties = mm_bearer_properties_new_from_profile (profile, &error);
+    if (!properties)
         g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
-    }
-
-    properties = mm_bearer_properties_new ();
-    if (qmi_message_wds_get_profile_settings_output_get_apn_name (output, &str, NULL))
-        mm_bearer_properties_set_apn (properties, str);
-
-    if (qmi_message_wds_get_profile_settings_output_get_pdp_type (output, &pdp_type, NULL)) {
-        MMBearerIpFamily ip_family;
-
-        ip_family = mm_bearer_ip_family_from_qmi_pdp_type (pdp_type);
-        if (ip_family != MM_BEARER_IP_FAMILY_NONE)
-            mm_bearer_properties_set_ip_type (properties, ip_family);
-    }
-
-    if (qmi_message_wds_get_profile_settings_output_get_username (output, &str, NULL))
-        mm_bearer_properties_set_user (properties, str);
-
-    if (qmi_message_wds_get_profile_settings_output_get_password (output, &str, NULL))
-        mm_bearer_properties_set_password (properties, str);
-
-    if (qmi_message_wds_get_profile_settings_output_get_authentication (output, &auth, NULL)) {
-        MMBearerAllowedAuth allowed_auth;
-
-        allowed_auth = mm_bearer_allowed_auth_from_qmi_authentication (auth);
-        if (allowed_auth != MM_BEARER_ALLOWED_AUTH_UNKNOWN)
-            mm_bearer_properties_set_allowed_auth (properties, allowed_auth);
-    }
-
-    if (qmi_message_wds_get_profile_settings_output_get_roaming_disallowed_flag (output, &flag, NULL))
-        mm_bearer_properties_set_allow_roaming (properties, !flag);
-
-    g_task_return_pointer (task, properties, g_object_unref);
+    else
+        g_task_return_pointer (task, properties, g_object_unref);
     g_object_unref (task);
 }
 
 static void
-load_initial_eps_bearer_get_profile_settings (GTask        *task,
-                                              QmiClientWds *client)
+load_initial_eps_bearer_get_profile_settings (GTask *task)
 {
-    g_autoptr(QmiMessageWdsGetProfileSettingsInput)  input = NULL;
-    MMBroadbandModemQmi                             *self;
+    MMBroadbandModemQmi *self;
 
     self = g_task_get_source_object (task);
-    g_assert (self->priv->default_attach_pdn);
 
-    input = qmi_message_wds_get_profile_settings_input_new ();
-    qmi_message_wds_get_profile_settings_input_set_profile_id (input,
-                                                               QMI_WDS_PROFILE_TYPE_3GPP,
-                                                               self->priv->default_attach_pdn,
-                                                               NULL);
-    mm_obj_dbg (self, "querying LTE attach PDN settings at index %u...", self->priv->default_attach_pdn);
-    qmi_client_wds_get_profile_settings (client,
-                                         input,
-                                         10,
-                                         NULL,
-                                         (GAsyncReadyCallback)load_initial_eps_bearer_get_profile_settings_ready,
-                                         task);
+    mm_iface_modem_3gpp_profile_manager_get_profile (
+        MM_IFACE_MODEM_3GPP_PROFILE_MANAGER (self),
+        self->priv->default_attach_pdn,
+        (GAsyncReadyCallback)load_initial_eps_bearer_get_profile_ready,
+        task);
 }
 
 static void
@@ -8564,7 +9079,7 @@ load_initial_eps_bearer_get_lte_attach_pdn_list_ready (QmiClientWds *client,
             mm_obj_dbg (self, "Additional LTE attach PDN profile: %u", g_array_index (current_list, guint16, i));
     }
 
-    load_initial_eps_bearer_get_profile_settings (task, client);
+    load_initial_eps_bearer_get_profile_settings (task);
 }
 
 static void
@@ -8573,19 +9088,26 @@ modem_3gpp_load_initial_eps_bearer_settings (MMIfaceModem3gpp    *_self,
                                              gpointer             user_data)
 {
     MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-    QmiClient           *client;
     GTask               *task;
-
-    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_WDS, &client,
-                                      callback, user_data))
-        return;
 
     task = g_task_new (self, NULL, callback, user_data);
 
     /* Default attach PDN is assumed to never change during runtime
      * (we don't change it) so just load it the first time */
     if (!self->priv->default_attach_pdn) {
+        QmiClient *client;
+        GError    *error = NULL;
+
+        client = mm_shared_qmi_peek_client (MM_SHARED_QMI (self),
+                                            QMI_SERVICE_WDS,
+                                            MM_PORT_QMI_FLAG_DEFAULT,
+                                            &error);
+        if (!client) {
+            g_task_return_error (task, error);
+            g_object_unref (task);
+            return;
+        }
+
         mm_obj_dbg (self, "querying LTE attach PDN list...");
         qmi_client_wds_get_lte_attach_pdn_list (QMI_CLIENT_WDS (client),
                                                 NULL,
@@ -8596,7 +9118,7 @@ modem_3gpp_load_initial_eps_bearer_settings (MMIfaceModem3gpp    *_self,
         return;
     }
 
-    load_initial_eps_bearer_get_profile_settings (task, QMI_CLIENT_WDS (client));
+    load_initial_eps_bearer_get_profile_settings (task);
 }
 
 /*****************************************************************************/
@@ -10651,6 +11173,31 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->load_initial_eps_bearer_settings_finish = modem_3gpp_load_initial_eps_bearer_settings_finish;
     iface->set_initial_eps_bearer_settings = modem_3gpp_set_initial_eps_bearer_settings;
     iface->set_initial_eps_bearer_settings_finish = modem_3gpp_set_initial_eps_bearer_settings_finish;
+}
+
+static void
+iface_modem_3gpp_profile_manager_init (MMIfaceModem3gppProfileManager *iface)
+{
+    /* No explicit check support for the profile management feature, just
+     * rely on the generic way to check for support */
+    iface->check_support = NULL;
+    iface->check_support_finish = NULL;
+
+    /* Additional actions */
+    iface->get_profile = modem_3gpp_profile_manager_get_profile;
+    iface->get_profile_finish = modem_3gpp_profile_manager_get_profile_finish;
+    iface->list_profiles = modem_3gpp_profile_manager_list_profiles;
+    iface->list_profiles_finish = modem_3gpp_profile_manager_list_profiles_finish;
+    iface->check_format = modem_3gpp_profile_manager_check_format;
+    iface->check_format_finish = modem_3gpp_profile_manager_check_format_finish;
+    iface->check_activated_profile = NULL;
+    iface->check_activated_profile_finish = NULL;
+    iface->deactivate_profile = NULL;
+    iface->deactivate_profile_finish = NULL;
+    iface->store_profile = modem_3gpp_profile_manager_store_profile;
+    iface->store_profile_finish = modem_3gpp_profile_manager_store_profile_finish;
+    iface->delete_profile = modem_3gpp_profile_manager_delete_profile;
+    iface->delete_profile_finish = modem_3gpp_profile_manager_delete_profile_finish;
 }
 
 static void
