@@ -2141,13 +2141,43 @@ get_sim_lock_status_via_get_card_status_ready (QmiClientUim *client,
 }
 
 static void
-get_sim_lock_status_via_get_card_status (GTask *task)
+get_pin_lock_status_via_get_configuration_ready (QmiClientUim *client,
+                                                 GAsyncResult *res,
+                                                 GTask *task)
 {
-    MMBroadbandModemQmi *self;
+    MMModem3gppFacility lock = MM_MODEM_3GPP_FACILITY_NONE;
+    QmiMessageUimGetConfigurationOutput *output;
     LoadEnabledFacilityLocksContext *ctx;
+    MMBroadbandModemQmi *self;
+    GError *error = NULL;
 
     self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
+
+    output = qmi_client_uim_get_configuration_finish (client, res, &error);
+    if (!output ||
+        !qmi_message_uim_get_configuration_output_get_result (output, &error)) {
+        g_prefix_error (&error, "QMI message Get Configuration failed: ");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        if (output)
+            qmi_message_uim_get_configuration_output_unref (output);
+        return;
+    }
+
+    if (!mm_qmi_uim_get_configuration_output_parse (self,
+                                                    output,
+                                                    &lock,
+                                                    &error)) {
+        g_prefix_error (&error, "QMI operation failed: ");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        qmi_message_uim_get_configuration_output_unref (output);
+        return;
+    }
+
+    ctx->locks = lock;
+    qmi_message_uim_get_configuration_output_unref (output);
 
     mm_obj_dbg (self, "Getting UIM card status to read pin lock state...");
     qmi_client_uim_get_card_status (QMI_CLIENT_UIM (ctx->client),
@@ -2156,6 +2186,32 @@ get_sim_lock_status_via_get_card_status (GTask *task)
                                     NULL,
                                     (GAsyncReadyCallback) get_sim_lock_status_via_get_card_status_ready,
                                     task);
+}
+
+static void
+get_facility_lock_status_via_uim (GTask *task)
+{
+    QmiMessageUimGetConfigurationInput *input;
+    LoadEnabledFacilityLocksContext *ctx;
+    MMBroadbandModemQmi *self;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    mm_obj_dbg (self, "Getting UIM Get Configuration to read facility lock state...");
+    input = qmi_message_uim_get_configuration_input_new ();
+    qmi_message_uim_get_configuration_input_set_configuration_mask (
+         input,
+         QMI_UIM_CONFIGURATION_PERSONALIZATION_STATUS,
+         NULL);
+
+    qmi_client_uim_get_configuration (QMI_CLIENT_UIM (ctx->client),
+                                      input,
+                                      5,
+                                      NULL,
+                                      (GAsyncReadyCallback)get_pin_lock_status_via_get_configuration_ready,
+                                      task);
+    qmi_message_uim_get_configuration_input_unref (input);
 }
 
 static void
@@ -2379,12 +2435,95 @@ modem_3gpp_load_enabled_facility_locks (MMIfaceModem3gpp *self,
     g_task_set_task_data (task, ctx, (GDestroyNotify)load_enabled_facility_locks_context_free);
 
     /* DMS uses get_ck_status and get_pin_status to probe facilities
-     * UIM Messages to get all facility locks are not open-source yet
-     * UIM uses get_card_status to probe only FACILITY_SIM and FACILITY_FIXED_DIALING */
+     * UIM uses get_card_status and get_configuration
+     */
     if (!MM_BROADBAND_MODEM_QMI (self)->priv->dms_uim_deprecated)
         get_next_facility_lock_status_via_dms (task);
     else
-        get_sim_lock_status_via_get_card_status (task);
+        get_facility_lock_status_via_uim (task);
+}
+
+/*****************************************************************************/
+/* Facility locks disabling (3GPP interface) */
+
+static gboolean
+modem_3gpp_disable_facility_lock_finish (MMIfaceModem3gpp *self,
+                                         GAsyncResult *res,
+                                         GError **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+disable_facility_lock_ready (QmiClientUim *client,
+                             GAsyncResult *res,
+                             GTask *task)
+{
+    QmiMessageUimDepersonalizationOutput *output;
+    GError *error = NULL;
+
+    output = qmi_client_uim_depersonalization_finish (client, res, &error);
+    if (!output ||
+        !qmi_message_uim_depersonalization_output_get_result (output, &error)) {
+        g_prefix_error (&error, "QMI message Depersonalization failed: ");
+        g_task_return_error (task, error);
+    } else {
+        g_task_return_boolean (task, TRUE);
+    }
+
+    if (output)
+        qmi_message_uim_depersonalization_output_unref (output);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_disable_facility_lock (MMIfaceModem3gpp *self,
+                                  MMModem3gppFacility facility,
+                                  guint8 slot,
+                                  const gchar *key,
+                                  GAsyncReadyCallback callback,
+                                  gpointer user_data)
+{
+    QmiUimCardApplicationPersonalizationFeature feature;
+    QmiMessageUimDepersonalizationInput *input;
+    QmiClient *client = NULL;
+    GTask *task;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_UIM, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* Choose facility to disable */
+    feature = qmi_personalization_feature_from_mm_modem_3gpp_facility (facility);
+    if (feature == QMI_UIM_CARD_APPLICATION_PERSONALIZATION_FEATURE_UNKNOWN) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                                 "Not supported type of facility lock.");
+        g_object_unref (task);
+        return;
+    }
+
+    mm_obj_dbg (self, "Trying to disable %s lock on slot %d using key: %s",
+                qmi_uim_card_application_personalization_feature_get_string (feature),
+                slot, key);
+
+    input = qmi_message_uim_depersonalization_input_new ();
+    qmi_message_uim_depersonalization_input_set_info (input,
+                                                      feature,
+                                                      QMI_UIM_DEPERSONALIZATION_OPERATION_DEACTIVATE,
+                                                      key,
+                                                      NULL);
+    qmi_message_uim_depersonalization_input_set_slot (input, slot, NULL);
+
+    qmi_client_uim_depersonalization (QMI_CLIENT_UIM (client),
+                                      input,
+                                      30,
+                                      NULL,
+                                      (GAsyncReadyCallback) disable_facility_lock_ready,
+                                      task);
+    qmi_message_uim_depersonalization_input_unref (input);
 }
 
 /*****************************************************************************/
@@ -11175,6 +11314,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->load_initial_eps_bearer_settings_finish = modem_3gpp_load_initial_eps_bearer_settings_finish;
     iface->set_initial_eps_bearer_settings = modem_3gpp_set_initial_eps_bearer_settings;
     iface->set_initial_eps_bearer_settings_finish = modem_3gpp_set_initial_eps_bearer_settings_finish;
+    iface->disable_facility_lock = modem_3gpp_disable_facility_lock;
+    iface->disable_facility_lock_finish = modem_3gpp_disable_facility_lock_finish;
 }
 
 static void

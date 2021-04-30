@@ -234,6 +234,17 @@ struct _MMIfaceModem3gpp {
     gboolean (* set_initial_eps_bearer_settings_finish) (MMIfaceModem3gpp     *self,
                                                          GAsyncResult         *res,
                                                          GError              **error);
+
+    /* Remove modem personalization */
+    void     (* disable_facility_lock) (MMIfaceModem3gpp         *self,
+                                        MMModem3gppFacility       facility,
+                                        guint8                    slot,
+                                        const gchar              *control_key,
+                                        GAsyncReadyCallback       callback,
+                                        gpointer                  user_data);
+    gboolean (* disable_facility_lock_finish) (MMIfaceModem3gpp  *self,
+                                               GAsyncResult      *res,
+                                               GError           **error);
 };
 
 GType mm_iface_modem_3gpp_get_type (void);
