@@ -1165,6 +1165,10 @@ _connect (MMBaseBearer        *self,
     const gchar              *data_port_driver;
     gboolean                  multiplex_supported = TRUE;
 
+    /* TODO(b/175305412): Reenable multiplex for mbim when shill supports it. */
+    multiplex_supported = FALSE;
+    mm_obj_dbg (self, "Force multiplex disabled on MBIM.");
+
     if (!peek_ports (self, &mbim, &data, callback, user_data))
         return;
 
