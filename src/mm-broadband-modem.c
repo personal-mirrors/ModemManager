@@ -11937,6 +11937,7 @@ enable (MMBaseModem *self,
 
 typedef enum {
     SYNCING_STEP_FIRST,
+    SYNCING_STEP_IFACE_TIME,
     SYNCING_STEP_LAST,
 } SyncingStep;
 
@@ -11944,12 +11945,33 @@ typedef struct {
     SyncingStep step;
 } SyncingContext;
 
+static void syncing_step (GTask *task);
+
 static gboolean
 synchronize_finish (MMBaseModem *self,
                     GAsyncResult *res,
                     GError **error)
 {
     return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void mm_iface_modem_time_sync_ready (MMIfaceModemTime *self,
+                                            GAsyncResult     *res,
+                                            GTask            *task)
+{
+    SyncingContext    *ctx;
+    g_autoptr (GError) error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    mm_iface_modem_time_sync_finish (self, res, &error);
+    if (error) {
+        mm_obj_warn (self, "Time interface synchronization failed");
+    }
+
+    /* Go on to next step */
+    ctx->step++;
+    syncing_step (task);
 }
 
 static void
@@ -11971,6 +11993,15 @@ syncing_step (GTask *task)
     case SYNCING_STEP_FIRST:
         ctx->step++;
         /* fall through */
+
+    case SYNCING_STEP_IFACE_TIME:
+        /*
+         * Synchronize asynchronously the Time interface.
+         */
+        mm_obj_info (self, "resume synchronization state (%d/%d): Time interface sync",
+                     ctx->step, SYNCING_STEP_LAST);
+        mm_iface_modem_time_sync (MM_IFACE_MODEM_TIME (self), (GAsyncReadyCallback)mm_iface_modem_time_sync_ready, task);
+        return;
 
     case SYNCING_STEP_LAST:
         mm_obj_info (self, "resume synchronization state (%d/%d): all done",
