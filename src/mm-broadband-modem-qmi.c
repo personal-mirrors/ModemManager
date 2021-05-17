@@ -105,6 +105,9 @@ struct _MMBroadbandModemQmiPrivate {
      * and can be modified */
     gboolean mm_owned_attach_pdn;
 
+    /* The current PDN list in the modem */
+    GArray *current_pdn_list;
+
     /* 3GPP/CDMA registration helpers */
     gchar *current_operator_id;
     gchar *current_operator_description;
@@ -8101,8 +8104,9 @@ typedef enum {
     SET_INITIAL_EPS_BEARER_SETTINGS_STEP_FIRST,
     SET_INITIAL_EPS_BEARER_SETTINGS_STEP_LOAD_POWER_STATE,
     SET_INITIAL_EPS_BEARER_SETTINGS_STEP_POWER_DOWN,
-    SET_INITIAL_EPS_BEARER_SETTINGS_STEP_CREATE_PROFILE,
+    SET_INITIAL_EPS_BEARER_SETTINGS_STEP_HANDLE_APP_PROFILE,
     SET_INITIAL_EPS_BEARER_SETTINGS_STEP_MODIFY_PROFILE,
+    SET_INITIAL_EPS_BEARER_SETTINGS_STEP_SET_LTE_ATTACH_PDN,
     SET_INITIAL_EPS_BEARER_SETTINGS_STEP_POWER_UP,
     SET_INITIAL_EPS_BEARER_SETTINGS_STEP_LAST_SETTING,
 } SetInitialEpsBearerSettingsStep;
@@ -8112,6 +8116,8 @@ typedef struct {
     QmiClientWds                    *client;
     MMBearerProperties              *settings;
     MMModemPowerState                power_state;
+    gboolean                         setting_mm_owned_pdn;
+    gboolean                         update_lte_attach_pdn;
 } SetInitialEpsBearerSettingsContext;
 
 static void
@@ -8181,7 +8187,7 @@ set_initial_eps_bearer_set_lte_attach_pdn_ready (QmiClientWds *client,
         return;
     }
 
-    self->priv->mm_owned_attach_pdn = TRUE;
+    self->priv->mm_owned_attach_pdn = ctx->setting_mm_owned_pdn;
 
     ctx->step++;
     set_initial_eps_bearer_settings_step (task);
@@ -8193,20 +8199,15 @@ set_initial_eps_bearer_set_lte_attach_pdn (GTask *task)
     g_autoptr(QmiMessageWdsSetLteAttachPdnListInput)  input = NULL;
     MMBroadbandModemQmi                *self;
     SetInitialEpsBearerSettingsContext *ctx;
-    GArray                             *pdn_list;
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
 
-    pdn_list = g_array_sized_new (FALSE, FALSE, sizeof (guint16), 1);
-    g_array_append_val (pdn_list, self->priv->default_attach_pdn);
-    //TODO re-add the list from wds_get_lte_attach_pdn_list ?
-
     input = qmi_message_wds_set_lte_attach_pdn_list_input_new ();
     qmi_message_wds_set_lte_attach_pdn_list_input_set_list (input,
-                                                            pdn_list,
+                                                            self->priv->current_pdn_list,
                                                             NULL);
-    g_array_unref (pdn_list);
+
     qmi_message_wds_set_lte_attach_pdn_list_input_set_action (input,
                                                               QMI_WDS_ATTACH_PDN_LIST_ACTION_DETACH_OR_PDN_DISCONNECT,
                                                               NULL);
@@ -8226,10 +8227,8 @@ set_initial_eps_bearer_modify_profile_ready (QmiClientWds *client,
 {
     g_autoptr(QmiMessageWdsModifyProfileOutput)  output = NULL;
     GError                             *error = NULL;
-    MMBroadbandModemQmi                *self;
     SetInitialEpsBearerSettingsContext *ctx;
 
-    self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
 
     output = qmi_client_wds_modify_profile_finish (client, res, &error);
@@ -8251,11 +8250,6 @@ set_initial_eps_bearer_modify_profile_ready (QmiClientWds *client,
         g_prefix_error (&error, "Couldn't modify default LTE attach PDN settings: ");
         g_task_return_error (task, error);
         g_object_unref (task);
-        return;
-    }
-
-    if (!self->priv->mm_owned_attach_pdn) {
-        set_initial_eps_bearer_set_lte_attach_pdn (task);
         return;
     }
 
@@ -8314,6 +8308,72 @@ set_initial_eps_bearer_modify_profile (GTask *task)
 }
 
 static void
+set_initial_eps_bearer_delete_mm_profile_ready (QmiClientWds *client,
+                                             GAsyncResult *res,
+                                             GTask        *task)
+{
+    g_autoptr (QmiMessageWdsDeleteProfileOutput) output = NULL;
+    GError                             *error = NULL;
+    MMBroadbandModemQmi                *self;
+    SetInitialEpsBearerSettingsContext *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    output = qmi_client_wds_delete_profile_finish (client, res, &error);
+    if (!output) {
+        g_prefix_error (&error, "QMI operation failed: ");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (!qmi_message_wds_delete_profile_output_get_result (output, &error)) {
+        QmiWdsDsProfileError ds_profile_error;
+
+        if (g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_EXTENDED_INTERNAL) &&
+            qmi_message_wds_delete_profile_output_get_extended_error_code (output, &ds_profile_error, NULL)) {
+            g_prefix_error (&error, "DS profile error: %s: ",
+                            qmi_wds_ds_profile_error_get_string (ds_profile_error));
+        }
+        g_prefix_error (&error, "Couldn't delete default LTE attach PDN settings: ");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+    ctx->step = SET_INITIAL_EPS_BEARER_SETTINGS_STEP_SET_LTE_ATTACH_PDN;
+    ctx->update_lte_attach_pdn = TRUE;
+    self->priv->current_pdn_list = g_array_remove_index (self->priv->current_pdn_list, 0);
+    if (self->priv->current_pdn_list->len > 0)
+        self->priv->default_attach_pdn = g_array_index (self->priv->current_pdn_list, guint16, 0);
+    set_initial_eps_bearer_settings_step (task);
+}
+
+static void
+set_initial_eps_bearer_delete_mm_profile (GTask *task)
+{
+    g_autoptr (QmiMessageWdsDeleteProfileInput) input = NULL;
+    MMBroadbandModemQmi                *self;
+    SetInitialEpsBearerSettingsContext *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    input = qmi_message_wds_delete_profile_input_new ();
+    qmi_message_wds_delete_profile_input_set_profile_identifier (input,
+                                                                 QMI_WDS_PROFILE_TYPE_3GPP,
+                                                                 self->priv->default_attach_pdn,
+                                                                 NULL);
+
+    qmi_client_wds_delete_profile (ctx->client,
+                                    input,
+                                    10,
+                                    NULL,
+                                    (GAsyncReadyCallback)set_initial_eps_bearer_delete_mm_profile_ready,
+                                    task);
+}
+
+static void
 set_initial_eps_bearer_create_profile_ready (QmiClientWds *client,
                                              GAsyncResult *res,
                                              GTask        *task)
@@ -8350,8 +8410,12 @@ set_initial_eps_bearer_create_profile_ready (QmiClientWds *client,
         return;
     }
 
-    if (qmi_message_wds_create_profile_output_get_profile_identifier (output, &profile_type, &index, NULL))
+    if (qmi_message_wds_create_profile_output_get_profile_identifier (output, &profile_type, &index, NULL)) {
+        ctx->update_lte_attach_pdn = TRUE;
+        /* Update |default_attach_pdn| now so it can be modified in the next step. */
         self->priv->default_attach_pdn = index;
+        g_array_prepend_val (self->priv->current_pdn_list, index);
+    }
 
     ctx->step++;
     set_initial_eps_bearer_settings_step (task);
@@ -8398,11 +8462,7 @@ set_initial_eps_bearer_power_down_ready (MMIfaceModem *self,
         return;
     }
 
-    if (MM_BROADBAND_MODEM_QMI(self)->priv->mm_owned_attach_pdn) {
-       ctx->step = SET_INITIAL_EPS_BEARER_SETTINGS_STEP_MODIFY_PROFILE;
-    } else {
-       ctx->step++;
-    }
+    ctx->step++;
     set_initial_eps_bearer_settings_step (task);
 }
 
@@ -8433,6 +8493,7 @@ set_initial_eps_bearer_settings_step (GTask *task)
 {
     SetInitialEpsBearerSettingsContext *ctx;
     MMBroadbandModemQmi                *self;
+    const gchar*                        apn_name;
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
@@ -8457,23 +8518,54 @@ set_initial_eps_bearer_settings_step (GTask *task)
                                   task);
                 return;
             }
-            if (self->priv->mm_owned_attach_pdn) {
-                ctx->step = SET_INITIAL_EPS_BEARER_SETTINGS_STEP_MODIFY_PROFILE;
-                set_initial_eps_bearer_settings_step (task);
-                return;
+            ctx->step++;
+            /* fall through */
+
+        case SET_INITIAL_EPS_BEARER_SETTINGS_STEP_HANDLE_APP_PROFILE:
+            apn_name = mm_bearer_properties_get_apn (ctx->settings);
+            ctx->update_lte_attach_pdn = FALSE;
+            mm_obj_info (self, "Set Initial eps settings: apn_name: %s", apn_name);
+            if (apn_name && g_strcmp0 (apn_name, "") != 0) {
+                ctx->setting_mm_owned_pdn = TRUE;
+                if (self->priv->mm_owned_attach_pdn) {
+                    mm_obj_info (self, "Overriding MM owned profile %d with APN: %s.",
+                        self->priv->default_attach_pdn, apn_name);
+                    ctx->step++;
+                    /* fall through */
+                } else {
+                    mm_obj_info (self, "creating a profile for initial EPS bearer settings...");
+                    set_initial_eps_bearer_create_profile (task);
+                    return;
+                } 
             } else {
-                ctx->step++;
-                /* fall through */
+                /* Note: Never store an empty APN on the mm_owned_profile_index, since the logic in iface-modem-3gpp
+                   will skip the reattach if the new settings are also empty, and we might get stuck with empty APN
+                   settings which have the wrong |ip_type|. */
+                mm_obj_info (self, "Empty APN name provided. Falling back to modem profile for Attach APN.");
+                ctx->setting_mm_owned_pdn = FALSE;
+                if (self->priv->mm_owned_attach_pdn) {
+                    mm_obj_info (self, "Deleting MM owned profile for initial EPS bearer settings...");
+                    set_initial_eps_bearer_delete_mm_profile (task);
+                } else {
+                    ctx->step = SET_INITIAL_EPS_BEARER_SETTINGS_STEP_POWER_UP;
+                    set_initial_eps_bearer_settings_step (task);
+                }
+                return;
             }
-        case SET_INITIAL_EPS_BEARER_SETTINGS_STEP_CREATE_PROFILE:
-            mm_obj_dbg (self, "creating a profile for initial EPS bearer settings...");
-            set_initial_eps_bearer_create_profile (task);
-            return;
 
         case SET_INITIAL_EPS_BEARER_SETTINGS_STEP_MODIFY_PROFILE:
             mm_obj_dbg (self, "modifying initial EPS bearer settings profile...");
             set_initial_eps_bearer_modify_profile (task);
             return;
+
+        case SET_INITIAL_EPS_BEARER_SETTINGS_STEP_SET_LTE_ATTACH_PDN:
+            if (ctx->update_lte_attach_pdn) {
+                mm_obj_info (self, "updating lte attach pdn after changing initial EPS bearer settings...");
+                set_initial_eps_bearer_set_lte_attach_pdn (task);
+                return;
+            }
+            ctx->step++;
+            /* fall through */
 
         case SET_INITIAL_EPS_BEARER_SETTINGS_STEP_POWER_UP:
             if (ctx->power_state == MM_MODEM_POWER_STATE_ON) {
@@ -8685,6 +8777,11 @@ load_initial_eps_bearer_get_lte_attach_pdn_list_ready (QmiClientWds *client,
         } else
             mm_obj_dbg (self, "Additional LTE attach PDN profile: %u", g_array_index (current_list, guint16, i));
     }
+
+    if (self->priv->current_pdn_list)
+        g_array_free (self->priv->current_pdn_list, TRUE);
+
+    self->priv->current_pdn_list = g_array_copy (current_list);
 
     load_initial_eps_bearer_get_profile_settings (task, client);
 }
@@ -10475,6 +10572,9 @@ dispose (GObject *object)
 
     g_list_free_full (self->priv->firmware_list, g_object_unref);
     self->priv->firmware_list = NULL;
+
+    if (self->priv->current_pdn_list)
+        g_array_free (self->priv->current_pdn_list, TRUE);
 
     g_clear_object (&self->priv->current_firmware);
 

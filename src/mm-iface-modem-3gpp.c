@@ -1039,7 +1039,11 @@ after_set_load_initial_eps_bearer_settings_ready (MMIfaceModem3gpp              
     mm_obj_dbg (self, "Updated initial EPS bearer settings:");
     log_initial_eps_bearer_settings (self, new_config);
 
-    if (!mm_bearer_properties_cmp (new_config, ctx->config, MM_BEARER_PROPERTIES_CMP_FLAGS_EPS)) {
+    /* When we request to set an empty/NULL APN, we instead select the default initial attach APN used by the modem,
+       which will probably not be an empty APN. If that's the case, we won't check for equality between the requested
+       APN and the APN which is now set. */
+    if (mm_bearer_properties_get_apn (ctx->config) && g_strcmp0 (mm_bearer_properties_get_apn (ctx->config), "") != 0 &&
+        !mm_bearer_properties_cmp (new_config, ctx->config, MM_BEARER_PROPERTIES_CMP_FLAGS_EPS)) {
         mm_obj_dbg (self, "Requested initial EPS bearer settings:");
         log_initial_eps_bearer_settings (self, ctx->config);
         g_dbus_method_invocation_return_error_literal (ctx->invocation, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
