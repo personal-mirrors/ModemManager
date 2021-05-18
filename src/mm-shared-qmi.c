@@ -71,9 +71,11 @@ typedef struct {
     /* Capabilities & modes helpers */
     MMModemCapability  current_capabilities;
     GArray            *supported_radio_interfaces;
-    Feature            feature_nas_technology_preference;
-    Feature            feature_nas_system_selection_preference;
-    Feature            feature_extended_lte_band_preference;
+    Feature            feature_nas_tp;
+    Feature            feature_nas_ssp;
+    Feature            feature_nas_ssp_extended_lte_band_preference;
+    Feature            feature_nas_ssp_acquisition_order_preference;
+    GArray            *feature_nas_ssp_acquisition_order_preference_array;
     gboolean           disable_4g_only_mode;
     GArray            *supported_bands;
 
@@ -125,6 +127,8 @@ private_free (Private *priv)
         g_object_unref (priv->uim_client);
     if (priv->uim_refresh_start_timeout_id)
         g_source_remove (priv->uim_refresh_start_timeout_id);
+    if (priv->feature_nas_ssp_acquisition_order_preference_array)
+        g_array_unref (priv->feature_nas_ssp_acquisition_order_preference_array);
     g_strfreev (priv->loc_assistance_data_servers);
     g_slice_free (Private, priv);
 }
@@ -141,8 +145,10 @@ get_private (MMSharedQmi *self)
     if (!priv) {
         priv = g_slice_new0 (Private);
 
-        priv->feature_nas_technology_preference = FEATURE_UNKNOWN;
-        priv->feature_nas_system_selection_preference = FEATURE_UNKNOWN;
+        priv->feature_nas_tp = FEATURE_UNKNOWN;
+        priv->feature_nas_ssp = FEATURE_UNKNOWN;
+        priv->feature_nas_ssp_extended_lte_band_preference = FEATURE_UNKNOWN;
+        priv->feature_nas_ssp_acquisition_order_preference = FEATURE_UNKNOWN;
         priv->config_active_i = -1;
 
         /* Setup parent class' MMIfaceModemLocation */
@@ -476,7 +482,7 @@ mm_shared_qmi_3gpp_register_in_network (MMIfaceModem3gpp    *self,
     }
 
     priv = get_private (MM_SHARED_QMI (self));
-    if (priv->feature_nas_system_selection_preference == FEATURE_SUPPORTED)
+    if (priv->feature_nas_ssp == FEATURE_SUPPORTED)
         register_in_network_sssp (task, client, cancellable, mcc, mnc);
     else
         register_in_network_inr (task, client, cancellable, mcc, mnc);
@@ -688,8 +694,8 @@ set_current_capabilities_step (GTask *task)
     switch (ctx->step) {
     case SET_CURRENT_CAPABILITIES_STEP_FIRST:
         /* Error out early if both unsupported */
-        if ((priv->feature_nas_system_selection_preference != FEATURE_SUPPORTED) &&
-            (priv->feature_nas_technology_preference       != FEATURE_SUPPORTED)) {
+        if ((priv->feature_nas_ssp != FEATURE_SUPPORTED) &&
+            (priv->feature_nas_tp != FEATURE_SUPPORTED)) {
             g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
                                      "Setting capabilities is not supported by this device");
             g_object_unref (task);
@@ -699,7 +705,7 @@ set_current_capabilities_step (GTask *task)
         /* fall-through */
 
     case SET_CURRENT_CAPABILITIES_STEP_NAS_SYSTEM_SELECTION_PREFERENCE:
-        if (priv->feature_nas_system_selection_preference == FEATURE_SUPPORTED) {
+        if (priv->feature_nas_ssp == FEATURE_SUPPORTED) {
             set_current_capabilities_system_selection_preference (task);
             return;
         }
@@ -707,7 +713,7 @@ set_current_capabilities_step (GTask *task)
         /* fall-through */
 
     case SET_CURRENT_CAPABILITIES_STEP_NAS_TECHNOLOGY_PREFERENCE:
-        if (priv->feature_nas_technology_preference == FEATURE_SUPPORTED) {
+        if (priv->feature_nas_tp == FEATURE_SUPPORTED) {
             set_current_capabilities_technology_preference (task);
             return;
         }
@@ -747,8 +753,8 @@ mm_shared_qmi_set_current_capabilities (MMIfaceModem        *self,
         return;
 
     priv = get_private (MM_SHARED_QMI (self));
-    g_assert (priv->feature_nas_technology_preference       != FEATURE_UNKNOWN);
-    g_assert (priv->feature_nas_system_selection_preference != FEATURE_UNKNOWN);
+    g_assert (priv->feature_nas_tp != FEATURE_UNKNOWN);
+    g_assert (priv->feature_nas_ssp != FEATURE_UNKNOWN);
 
     ctx = g_slice_new0 (SetCurrentCapabilitiesContext);
     ctx->client       = g_object_ref (client);
@@ -884,18 +890,18 @@ load_current_capabilities_get_technology_preference_ready (QmiClientNas *client,
     if (!output) {
         mm_obj_dbg (self, "QMI operation failed: %s", error->message);
         g_error_free (error);
-        priv->feature_nas_technology_preference = FEATURE_UNSUPPORTED;
+        priv->feature_nas_tp = FEATURE_UNSUPPORTED;
     } else if (!qmi_message_nas_get_technology_preference_output_get_result (output, &error)) {
         mm_obj_dbg (self, "couldn't get technology preference: %s", error->message);
         g_error_free (error);
-        priv->feature_nas_technology_preference = FEATURE_SUPPORTED;
+        priv->feature_nas_tp = FEATURE_UNSUPPORTED;
     } else {
         qmi_message_nas_get_technology_preference_output_get_active (
             output,
             &ctx->capabilities_context.nas_tp_mask,
             NULL, /* duration */
             NULL);
-        priv->feature_nas_technology_preference = FEATURE_SUPPORTED;
+        priv->feature_nas_tp = FEATURE_SUPPORTED;
     }
 
     if (output)
@@ -920,21 +926,35 @@ load_current_capabilities_get_system_selection_preference_ready (QmiClientNas *c
     ctx  = g_task_get_task_data (task);
     priv = get_private (MM_SHARED_QMI (self));
 
+    priv->feature_nas_ssp = FEATURE_UNSUPPORTED;
+    priv->feature_nas_ssp_extended_lte_band_preference = FEATURE_UNSUPPORTED;
+    priv->feature_nas_ssp_acquisition_order_preference = FEATURE_UNSUPPORTED;
+
     output = qmi_client_nas_get_system_selection_preference_finish (client, res, &error);
     if (!output) {
         mm_obj_dbg (self, "QMI operation failed: %s", error->message);
         g_error_free (error);
-        priv->feature_nas_system_selection_preference = FEATURE_UNSUPPORTED;
     } else if (!qmi_message_nas_get_system_selection_preference_output_get_result (output, &error)) {
         mm_obj_dbg (self, "couldn't get system selection preference: %s", error->message);
         g_error_free (error);
-        priv->feature_nas_system_selection_preference = FEATURE_SUPPORTED;
     } else {
+        GArray *acquisition_order_preference_array = NULL;
+
+        /* SSP is supported, perform feature checks */
+        priv->feature_nas_ssp = FEATURE_SUPPORTED;
+        if (qmi_message_nas_get_system_selection_preference_output_get_extended_lte_band_preference (output, NULL, NULL, NULL, NULL, NULL))
+            priv->feature_nas_ssp_extended_lte_band_preference = FEATURE_SUPPORTED;
+        if (qmi_message_nas_get_system_selection_preference_output_get_acquisition_order_preference (output, &acquisition_order_preference_array, NULL) &&
+            acquisition_order_preference_array &&
+            acquisition_order_preference_array->len) {
+            priv->feature_nas_ssp_acquisition_order_preference = FEATURE_SUPPORTED;
+            priv->feature_nas_ssp_acquisition_order_preference_array = g_array_ref (acquisition_order_preference_array);
+        }
+
         qmi_message_nas_get_system_selection_preference_output_get_mode_preference (
             output,
             &ctx->capabilities_context.nas_ssp_mode_preference_mask,
             NULL);
-        priv->feature_nas_system_selection_preference = FEATURE_SUPPORTED;
     }
 
     if (output)
@@ -982,8 +1002,8 @@ load_current_capabilities_step (GTask *task)
         return;
 
     case LOAD_CURRENT_CAPABILITIES_STEP_LAST:
-        g_assert (priv->feature_nas_technology_preference       != FEATURE_UNKNOWN);
-        g_assert (priv->feature_nas_system_selection_preference != FEATURE_UNKNOWN);
+        g_assert (priv->feature_nas_tp != FEATURE_UNKNOWN);
+        g_assert (priv->feature_nas_ssp != FEATURE_UNKNOWN);
         priv->current_capabilities = mm_modem_capability_from_qmi_capabilities_context (&ctx->capabilities_context, self);
         g_task_return_int (task, priv->current_capabilities);
         g_object_unref (task);
@@ -1033,8 +1053,8 @@ mm_shared_qmi_load_current_capabilities (MMIfaceModem        *self,
     /* Current capabilities is the first thing run, and will only be run once per modem,
      * so we should here check support for the optional features. */
     priv = get_private (MM_SHARED_QMI (self));
-    g_assert (priv->feature_nas_technology_preference       == FEATURE_UNKNOWN);
-    g_assert (priv->feature_nas_system_selection_preference == FEATURE_UNKNOWN);
+    g_assert (priv->feature_nas_tp == FEATURE_UNKNOWN);
+    g_assert (priv->feature_nas_ssp == FEATURE_UNKNOWN);
 
     ctx = g_slice_new0 (LoadCurrentCapabilitiesContext);
     ctx->nas_client = g_object_ref (nas_client);
@@ -1093,7 +1113,7 @@ mm_shared_qmi_load_supported_capabilities (MMIfaceModem        *self,
      * switching only when switching GSM/UMTS+CDMA/EVDO multimode devices, and only if
      * we have support for the commands doing it.
      */
-    if (priv->feature_nas_technology_preference == FEATURE_SUPPORTED || priv->feature_nas_system_selection_preference == FEATURE_SUPPORTED) {
+    if (priv->feature_nas_tp == FEATURE_SUPPORTED || priv->feature_nas_ssp == FEATURE_SUPPORTED) {
         if (mask == (MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_CDMA_EVDO)) {
             /* Multimode GSM/UMTS+CDMA/EVDO device switched to GSM/UMTS only */
             single = MM_MODEM_CAPABILITY_GSM_UMTS;
@@ -1251,11 +1271,13 @@ static void
 set_current_modes_system_selection_preference (GTask *task)
 {
     MMIfaceModem                                   *self;
+    Private                                        *priv;
     SetCurrentModesContext                         *ctx;
     QmiMessageNasSetSystemSelectionPreferenceInput *input;
     QmiNasRatModePreference                         pref;
 
     self = g_task_get_source_object (task);
+    priv = get_private (MM_SHARED_QMI (self));
     ctx  = g_task_get_task_data (task);
 
     input = qmi_message_nas_set_system_selection_preference_input_new ();
@@ -1264,16 +1286,17 @@ set_current_modes_system_selection_preference (GTask *task)
     /* Preferred modes */
 
     if (ctx->preferred != MM_MODEM_MODE_NONE) {
-        GArray *array;
+        if (priv->feature_nas_ssp_acquisition_order_preference == FEATURE_SUPPORTED) {
+            GArray *array;
 
-        /* Acquisition order array */
-        array = mm_modem_mode_to_qmi_acquisition_order_preference (ctx->allowed,
-                                                                   ctx->preferred,
-                                                                   mm_iface_modem_is_cdma (self),
-                                                                   mm_iface_modem_is_3gpp (self));
-        g_assert (array);
-        qmi_message_nas_set_system_selection_preference_input_set_acquisition_order_preference (input, array, NULL);
-        g_array_unref (array);
+            /* Acquisition order array */
+            array = mm_modem_mode_to_qmi_acquisition_order_preference (ctx->allowed,
+                                                                       ctx->preferred,
+                                                                       priv->feature_nas_ssp_acquisition_order_preference_array);
+            g_assert (array);
+            qmi_message_nas_set_system_selection_preference_input_set_acquisition_order_preference (input, array, NULL);
+            g_array_unref (array);
+        }
 
         /* Only set GSM/WCDMA acquisition order preference if both 2G and 3G given as allowed */
         if (mm_iface_modem_is_3gpp (self) && ((ctx->allowed & (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G)) == (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G))) {
@@ -1339,12 +1362,12 @@ mm_shared_qmi_set_current_modes (MMIfaceModem        *self,
 
     priv = get_private (MM_SHARED_QMI (self));
 
-    if (priv->feature_nas_system_selection_preference == FEATURE_SUPPORTED) {
+    if (priv->feature_nas_ssp == FEATURE_SUPPORTED) {
         set_current_modes_system_selection_preference (task);
         return;
     }
 
-    if (priv->feature_nas_technology_preference == FEATURE_SUPPORTED) {
+    if (priv->feature_nas_tp == FEATURE_SUPPORTED) {
         set_current_modes_technology_preference (task);
         return;
     }
@@ -1459,6 +1482,7 @@ load_current_modes_system_selection_preference_ready (QmiClientNas *client,
                                                       GTask        *task)
 {
     MMSharedQmi                                     *self;
+    Private                                         *priv;
     LoadCurrentModesResult                          *result = NULL;
     QmiMessageNasGetSystemSelectionPreferenceOutput *output = NULL;
     GError                                          *error = NULL;
@@ -1466,6 +1490,7 @@ load_current_modes_system_selection_preference_ready (QmiClientNas *client,
     MMModemMode                                      allowed;
 
     self = g_task_get_source_object (task);
+    priv = get_private (self);
 
     output = qmi_client_nas_get_system_selection_preference_finish (client, res, &error);
     if (!output || !qmi_message_nas_get_system_selection_preference_output_get_result (output, &error)) {
@@ -1498,24 +1523,11 @@ load_current_modes_system_selection_preference_ready (QmiClientNas *client,
     result->allowed = allowed;
     result->preferred = MM_MODEM_MODE_NONE;
 
-    /* For 2G+3G only rely on the GSM/WCDMA acquisition order preference TLV */
-    if (mode_preference_mask == (QMI_NAS_RAT_MODE_PREFERENCE_GSM | QMI_NAS_RAT_MODE_PREFERENCE_UMTS)) {
-        QmiNasGsmWcdmaAcquisitionOrderPreference gsm_or_wcdma;
-
-        if (qmi_message_nas_get_system_selection_preference_output_get_gsm_wcdma_acquisition_order_preference (
-                output,
-                &gsm_or_wcdma,
-                NULL))
-            result->preferred = mm_modem_mode_from_qmi_gsm_wcdma_acquisition_order_preference (gsm_or_wcdma, self);
-    }
-    /* Otherwise, rely on the acquisition order array TLV */
-    else {
+    /* If acquisition order preference is available, always use that first */
+    if (priv->feature_nas_ssp_acquisition_order_preference == FEATURE_SUPPORTED) {
         GArray *array;
 
-        if (qmi_message_nas_get_system_selection_preference_output_get_acquisition_order_preference (
-                output,
-                &array,
-                NULL) &&
+        if (qmi_message_nas_get_system_selection_preference_output_get_acquisition_order_preference (output, &array, NULL) &&
             array->len > 0) {
             guint i;
 
@@ -1535,6 +1547,16 @@ load_current_modes_system_selection_preference_ready (QmiClientNas *client,
                 }
             }
         }
+    }
+    /* For 2G+3G only rely on the GSM/WCDMA acquisition order preference TLV */
+    else if (mode_preference_mask == (QMI_NAS_RAT_MODE_PREFERENCE_GSM | QMI_NAS_RAT_MODE_PREFERENCE_UMTS)) {
+        QmiNasGsmWcdmaAcquisitionOrderPreference gsm_or_wcdma;
+
+        if (qmi_message_nas_get_system_selection_preference_output_get_gsm_wcdma_acquisition_order_preference (
+                output,
+                &gsm_or_wcdma,
+                NULL))
+            result->preferred = mm_modem_mode_from_qmi_gsm_wcdma_acquisition_order_preference (gsm_or_wcdma, self);
     }
 
     g_task_return_pointer (task, result, g_free);
@@ -1582,12 +1604,12 @@ mm_shared_qmi_load_current_modes (MMIfaceModem        *self,
 
     priv = get_private (MM_SHARED_QMI (self));
 
-    if (priv->feature_nas_system_selection_preference != FEATURE_UNSUPPORTED) {
+    if (priv->feature_nas_ssp != FEATURE_UNSUPPORTED) {
         load_current_modes_system_selection_preference (task);
         return;
     }
 
-    if (priv->feature_nas_technology_preference != FEATURE_UNSUPPORTED) {
+    if (priv->feature_nas_tp != FEATURE_UNSUPPORTED) {
         load_current_modes_technology_preference (task);
         return;
     }
@@ -1638,7 +1660,7 @@ mm_shared_qmi_load_supported_modes (MMIfaceModem        *self,
     g_array_append_val (all, mode);
 
     /* If SSP and TP are not supported, ignore supported mode management */
-    if (priv->feature_nas_system_selection_preference == FEATURE_UNSUPPORTED && priv->feature_nas_technology_preference == FEATURE_UNSUPPORTED) {
+    if (priv->feature_nas_ssp == FEATURE_UNSUPPORTED && priv->feature_nas_tp == FEATURE_UNSUPPORTED) {
         g_task_return_pointer (task, all, (GDestroyNotify) g_array_unref);
         g_object_unref (task);
         return;
@@ -1655,7 +1677,7 @@ mm_shared_qmi_load_supported_modes (MMIfaceModem        *self,
                 if (MODE4 != MM_MODEM_MODE_NONE)                        \
                     mode.allowed |= MODE4;                              \
             }                                                           \
-            if (priv->feature_nas_system_selection_preference != FEATURE_UNSUPPORTED) { \
+            if (priv->feature_nas_ssp != FEATURE_UNSUPPORTED) {         \
                 if (MODE3 != MM_MODEM_MODE_NONE) {                      \
                     if (MODE4 != MM_MODEM_MODE_NONE) {                  \
                         mode.preferred = MODE4;                         \
@@ -1697,7 +1719,7 @@ mm_shared_qmi_load_supported_modes (MMIfaceModem        *self,
 
     /* 5G related mode combinations are only supported when NAS SSP is supported,
      * as there is no 5G support in NAS TP. */
-    if (priv->feature_nas_system_selection_preference != FEATURE_UNSUPPORTED) {
+    if (priv->feature_nas_ssp != FEATURE_UNSUPPORTED) {
         ADD_MODE_PREFERENCE (MM_MODEM_MODE_5G, MM_MODEM_MODE_NONE, MM_MODEM_MODE_NONE, MM_MODEM_MODE_NONE);
         ADD_MODE_PREFERENCE (MM_MODEM_MODE_2G, MM_MODEM_MODE_5G,   MM_MODEM_MODE_NONE, MM_MODEM_MODE_NONE);
         ADD_MODE_PREFERENCE (MM_MODEM_MODE_3G, MM_MODEM_MODE_5G,   MM_MODEM_MODE_NONE, MM_MODEM_MODE_NONE);
@@ -1857,7 +1879,8 @@ load_bands_get_system_selection_preference_ready (QmiClientNas *client,
         &lte_band_preference_mask,
         NULL);
 
-    if (qmi_message_nas_get_system_selection_preference_output_get_extended_lte_band_preference (
+    if ((priv->feature_nas_ssp_extended_lte_band_preference == FEATURE_SUPPORTED) &&
+        qmi_message_nas_get_system_selection_preference_output_get_extended_lte_band_preference (
             output,
             &extended_lte_band_preference[0],
             &extended_lte_band_preference[1],
@@ -1865,9 +1888,6 @@ load_bands_get_system_selection_preference_ready (QmiClientNas *client,
             &extended_lte_band_preference[3],
             NULL))
         extended_lte_band_preference_size = G_N_ELEMENTS (extended_lte_band_preference);
-
-    if (G_UNLIKELY (priv->feature_extended_lte_band_preference == FEATURE_UNKNOWN))
-        priv->feature_extended_lte_band_preference = extended_lte_band_preference_size ? FEATURE_SUPPORTED : FEATURE_UNSUPPORTED;
 
     mm_bands = mm_modem_bands_from_qmi_band_preference (band_preference_mask,
                                                         lte_band_preference_mask,
@@ -1987,14 +2007,14 @@ mm_shared_qmi_set_current_bands (MMIfaceModem        *self,
     mm_modem_bands_to_qmi_band_preference (bands_array,
                                            &qmi_bands,
                                            &qmi_lte_bands,
-                                           priv->feature_extended_lte_band_preference == FEATURE_SUPPORTED ? extended_qmi_lte_bands : NULL,
+                                           priv->feature_nas_ssp_extended_lte_band_preference == FEATURE_SUPPORTED ? extended_qmi_lte_bands : NULL,
                                            G_N_ELEMENTS (extended_qmi_lte_bands),
                                            self);
 
     input = qmi_message_nas_set_system_selection_preference_input_new ();
     qmi_message_nas_set_system_selection_preference_input_set_band_preference (input, qmi_bands, NULL);
     if (mm_iface_modem_is_3gpp_lte (self)) {
-        if (priv->feature_extended_lte_band_preference == FEATURE_SUPPORTED)
+        if (priv->feature_nas_ssp_extended_lte_band_preference == FEATURE_SUPPORTED)
             qmi_message_nas_set_system_selection_preference_input_set_extended_lte_band_preference (
                 input,
                 extended_qmi_lte_bands[0],

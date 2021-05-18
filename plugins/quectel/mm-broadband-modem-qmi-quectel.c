@@ -52,6 +52,9 @@ mm_broadband_modem_qmi_quectel_new (const gchar  *device,
                          MM_BASE_MODEM_PLUGIN, plugin,
                          MM_BASE_MODEM_VENDOR_ID, vendor_id,
                          MM_BASE_MODEM_PRODUCT_ID, product_id,
+                         /* QMI bearer supports NET only */
+                         MM_BASE_MODEM_DATA_NET_SUPPORTED, TRUE,
+                         MM_BASE_MODEM_DATA_TTY_SUPPORTED, FALSE,
                          NULL);
 }
 
@@ -73,6 +76,12 @@ static MMIfaceModem *
 peek_parent_modem_interface (MMSharedQuectel *self)
 {
     return iface_modem_parent;
+}
+
+static MMBroadbandModemClass *
+peek_parent_broadband_modem_class (MMSharedQuectel *self)
+{
+    return MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_qmi_quectel_parent_class);
 }
 
 static void
@@ -113,9 +122,13 @@ shared_quectel_init (MMSharedQuectel *iface)
 {
     iface->peek_parent_modem_interface          = peek_parent_modem_interface;
     iface->peek_parent_modem_location_interface = peek_parent_modem_location_interface;
+    iface->peek_parent_broadband_modem_class    = peek_parent_broadband_modem_class;
 }
 
 static void
 mm_broadband_modem_qmi_quectel_class_init (MMBroadbandModemQmiQuectelClass *klass)
 {
+    MMBroadbandModemClass *broadband_modem_class = MM_BROADBAND_MODEM_CLASS (klass);
+
+    broadband_modem_class->setup_ports = mm_shared_quectel_setup_ports;
 }

@@ -33,6 +33,11 @@ AM_LDFLAGS = \
 	$(GUDEV_LIBS) \
 	$(NULL)
 
+if WITH_QRTR
+AM_CFLAGS  += $(QRTR_CFLAGS)
+AM_LDFLAGS += $(QRTR_LIBS)
+endif
+
 if WITH_QMI
 AM_CFLAGS  += $(QMI_CFLAGS)
 AM_LDFLAGS += $(QMI_LIBS)
@@ -149,11 +154,20 @@ libkerneldevice_la_CPPFLAGS = \
 libkerneldevice_la_SOURCES = \
 	kerneldevice/mm-kernel-device.h \
 	kerneldevice/mm-kernel-device.c \
+	kerneldevice/mm-kernel-device-helpers.h \
+	kerneldevice/mm-kernel-device-helpers.c \
 	kerneldevice/mm-kernel-device-generic.h \
 	kerneldevice/mm-kernel-device-generic.c \
 	kerneldevice/mm-kernel-device-generic-rules.h \
 	kerneldevice/mm-kernel-device-generic-rules.c \
 	$(NULL)
+
+if WITH_QRTR
+libkerneldevice_la_SOURCES += \
+	kerneldevice/mm-kernel-device-qrtr.h \
+	kerneldevice/mm-kernel-device-qrtr.c \
+	$(NULL)
+endif
 
 if WITH_UDEV
 libkerneldevice_la_SOURCES += \
@@ -178,6 +192,10 @@ PORT_ENUMS_INPUTS = \
 	$(srcdir)/mm-port-serial-at.h \
 	$(NULL)
 
+if WITH_QMI
+PORT_ENUMS_INPUTS += $(srcdir)/mm-port-qmi.h
+endif
+
 PORT_ENUMS_GENERATED = \
 	mm-port-enums-types.h \
 	mm-port-enums-types.c \
@@ -185,7 +203,7 @@ PORT_ENUMS_GENERATED = \
 
 mm-port-enums-types.h: Makefile.am $(PORT_ENUMS_INPUTS) $(top_srcdir)/build-aux/mm-enums-template.h
 	$(AM_V_GEN) $(GLIB_MKENUMS) \
-		--fhead "#include \"mm-port.h\"\n#include \"mm-port-serial-at.h\"\n#ifndef __MM_PORT_ENUMS_TYPES_H__\n#define __MM_PORT_ENUMS_TYPES_H__\n" \
+		--fhead "#include \"config.h\"\n#include \"mm-port.h\"\n#include \"mm-port-serial-at.h\"\n#if defined WITH_QMI\n#include \"mm-port-qmi.h\"\n#endif\n#ifndef __MM_PORT_ENUMS_TYPES_H__\n#define __MM_PORT_ENUMS_TYPES_H__\n" \
 		--template $(top_srcdir)/build-aux/mm-enums-template.h \
 		--ftail "#endif /* __MM_PORT_ENUMS_TYPES_H__ */\n" \
 		$(PORT_ENUMS_INPUTS) > $@
@@ -199,6 +217,8 @@ mm-port-enums-types.c: Makefile.am $(top_srcdir)/build-aux/mm-enums-template.c m
 libport_la_SOURCES = \
 	mm-port.c \
 	mm-port.h \
+	mm-port-net.c \
+	mm-port-net.h \
 	mm-port-serial.c \
 	mm-port-serial.h \
 	mm-port-serial-at.c \
@@ -209,6 +229,8 @@ libport_la_SOURCES = \
 	mm-port-serial-gps.h \
 	mm-serial-parsers.c \
 	mm-serial-parsers.h \
+	mm-netlink.h \
+	mm-netlink.c \
 	$(NULL)
 
 nodist_libport_la_SOURCES = $(PORT_ENUMS_GENERATED)
@@ -356,6 +378,13 @@ ModemManager_SOURCES = \
 	mm-plugin.h \
 	mm-shared.h \
 	$(NULL)
+
+if WITH_QRTR
+ModemManager_SOURCES += \
+	mm-qrtr-bus-watcher.h \
+	mm-qrtr-bus-watcher.c \
+	$(NULL)
+endif
 
 nodist_ModemManager_SOURCES = $(DAEMON_ENUMS_GENERATED)
 

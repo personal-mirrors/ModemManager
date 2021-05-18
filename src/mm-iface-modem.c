@@ -98,7 +98,14 @@ mm_iface_modem_check_for_sim_swap (MMIfaceModem *self,
                       MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
                       NULL);
 
-        g_assert (skeleton);
+        if (!skeleton) {
+            g_task_return_new_error (task,
+                                     MM_CORE_ERROR,
+                                     MM_CORE_ERROR_FAILED,
+                                     "Couldn't get interface skeleton");
+            g_object_unref (task);
+            return;
+        }
 
         primary_slot = mm_gdbus_modem_get_primary_sim_slot (MM_GDBUS_MODEM (skeleton));
         g_object_unref (skeleton);
@@ -313,14 +320,11 @@ mm_iface_modem_wait_for_final_state (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Helper to return an error when the modem is in failed state and so it
- * cannot process a given method invocation
- */
 
-static gboolean
-abort_invocation_if_state_not_reached (MMIfaceModem          *self,
-                                       GDBusMethodInvocation *invocation,
-                                       MMModemState           minimum_required)
+gboolean
+mm_iface_modem_abort_invocation_if_state_not_reached (MMIfaceModem          *self,
+                                                      GDBusMethodInvocation *invocation,
+                                                      MMModemState           minimum_required)
 {
     MMModemState state = MM_MODEM_STATE_UNKNOWN;
 
@@ -342,18 +346,30 @@ abort_invocation_if_state_not_reached (MMIfaceModem          *self,
 /*****************************************************************************/
 /* Helper method to load unlock required, considering retries */
 
+/* If a SIM is known to exist, for e.g. if it was created during load_sim_slots,
+ * persist a few more times before giving up on the SIM to be ready. There
+ * are modems on which the SIM takes more than 15s to be ready, luckily,
+ * they happen to be QMI modems where the SIM's iccid in load_sim_slots
+ * lets us know that there is a sim */
+#define MAX_UNLOCK_REQUIRED_RETRIES_NO_SIM     6
+#define MAX_UNLOCK_REQUIRED_RETRIES_SIM_EXISTS 30
+
+/* Time between retries */
+#define UNLOAD_REQUIRED_RETRY_TIMEOUT_SECS 2
+
 typedef struct {
     guint retries;
-    guint pin_check_timeout_id;
+    guint max_retries;
+    guint timeout_id;
 } InternalLoadUnlockRequiredContext;
 
 static MMModemLock
-internal_load_unlock_required_finish (MMIfaceModem *self,
-                                      GAsyncResult *res,
-                                      GError **error)
+internal_load_unlock_required_finish (MMIfaceModem  *self,
+                                      GAsyncResult  *res,
+                                      GError       **error)
 {
     GError *inner_error = NULL;
-    gssize value;
+    gssize  value;
 
     value = g_task_propagate_int (G_TASK (res), &inner_error);
     if (inner_error) {
@@ -371,42 +387,20 @@ load_unlock_required_again (GTask *task)
     InternalLoadUnlockRequiredContext *ctx;
 
     ctx = g_task_get_task_data (task);
-    ctx->pin_check_timeout_id = 0;
+    ctx->timeout_id = 0;
     /* Retry the step */
     internal_load_unlock_required_context_step (task);
     return G_SOURCE_REMOVE;
 }
 
-#define MAX_RETRIES_NO_SIM 6
-#define MAX_RETRIES_SIM_EXISTS 30
-static guint
-get_max_retries (MMIfaceModem *self)
-{
-    g_autoptr(MMBaseSim) sim = NULL;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_SIM,
-                  &sim,
-                  NULL);
-    /* If a SIM is known to exist, for e.g. if it was created during load_sim_slots,
-      persist a few more times before giving up on the SIM to be ready. There
-      are modems on which the SIM takes more than 15s to be ready, luckily,
-      they happen to be QMI modems where the SIM's iccid in load_sim_slots
-      lets us know that there is a sim. */
-    if (sim)
-        return MAX_RETRIES_SIM_EXISTS;
-
-    return MAX_RETRIES_NO_SIM;
-}
-
 static void
 load_unlock_required_ready (MMIfaceModem *self,
                             GAsyncResult *res,
-                            GTask *task)
+                            GTask        *task)
 {
     InternalLoadUnlockRequiredContext *ctx;
-    GError *error = NULL;
-    MMModemLock lock;
+    g_autoptr(GError)                  error = NULL;
+    MMModemLock                        lock;
 
     ctx = g_task_get_task_data (task);
 
@@ -428,31 +422,29 @@ load_unlock_required_ready (MMIfaceModem *self,
             g_error_matches (error,
                              MM_MOBILE_EQUIPMENT_ERROR,
                              MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG)) {
-            g_task_return_error (task, error);
+            g_task_return_error (task, g_steal_pointer (&error));
             g_object_unref (task);
             return;
         }
 
         /* For the remaining ones, retry if possible */
-        if (ctx->retries < get_max_retries (self)) {
+        if (ctx->retries < ctx->max_retries) {
             ctx->retries++;
             mm_obj_dbg (self, "retrying (%u) unlock required check", ctx->retries);
 
-            g_assert (ctx->pin_check_timeout_id == 0);
-            ctx->pin_check_timeout_id = g_timeout_add_seconds (2,
-                                                               (GSourceFunc)load_unlock_required_again,
-                                                               task);
-            g_error_free (error);
+            g_assert (ctx->timeout_id == 0);
+            ctx->timeout_id = g_timeout_add_seconds (UNLOAD_REQUIRED_RETRY_TIMEOUT_SECS,
+                                                     (GSourceFunc)load_unlock_required_again,
+                                                     task);
             return;
         }
 
         /* If reached max retries and still reporting error... default to SIM error */
-        g_error_free (error);
         g_task_return_new_error (task,
                                  MM_MOBILE_EQUIPMENT_ERROR,
                                  MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE,
                                  "Couldn't get SIM lock status after %u retries",
-                                 get_max_retries (self));
+                                 ctx->retries);
         g_object_unref (task);
         return;
     }
@@ -465,29 +457,42 @@ load_unlock_required_ready (MMIfaceModem *self,
 static void
 internal_load_unlock_required_context_step (GTask *task)
 {
-    MMIfaceModem *self;
+    MMIfaceModem                      *self;
     InternalLoadUnlockRequiredContext *ctx;
 
     self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
 
-    g_assert (ctx->pin_check_timeout_id == 0);
+    g_assert (ctx->timeout_id == 0);
     MM_IFACE_MODEM_GET_INTERFACE (self)->load_unlock_required (
         self,
-        (ctx->retries >= get_max_retries (self)), /* last_attempt? */
+        (ctx->retries >= ctx->max_retries), /* last_attempt? */
         (GAsyncReadyCallback) load_unlock_required_ready,
         task);
 }
 
+static guint
+load_unlock_required_max_retries (MMIfaceModem *self)
+{
+    g_autoptr(MMBaseSim) sim = NULL;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_SIM, &sim,
+                  NULL);
+
+    return (sim ? MAX_UNLOCK_REQUIRED_RETRIES_SIM_EXISTS : MAX_UNLOCK_REQUIRED_RETRIES_NO_SIM);
+}
+
 static void
-internal_load_unlock_required (MMIfaceModem *self,
-                               GAsyncReadyCallback callback,
-                               gpointer user_data)
+internal_load_unlock_required (MMIfaceModem        *self,
+                               GAsyncReadyCallback  callback,
+                               gpointer             user_data)
 {
     InternalLoadUnlockRequiredContext *ctx;
-    GTask *task;
+    GTask                             *task;
 
     ctx = g_new0 (InternalLoadUnlockRequiredContext, 1);
+    ctx->max_retries = load_unlock_required_max_retries (self);
 
     task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, g_free);
@@ -690,17 +695,6 @@ mm_iface_modem_create_bearer (MMIfaceModem *self,
         return;
     }
 
-    if (mm_bearer_list_get_count (ctx->list) == mm_bearer_list_get_max (ctx->list)) {
-        g_task_return_new_error (
-            task,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_TOO_MANY,
-            "Cannot add new bearer: already reached maximum (%u)",
-            mm_bearer_list_get_count (ctx->list));
-        g_object_unref (task);
-        return;
-    }
-
     MM_IFACE_MODEM_GET_INTERFACE (self)->create_bearer (
         self,
         properties,
@@ -760,7 +754,7 @@ handle_create_bearer_auth_ready (MMBaseModem *self,
         return;
     }
 
-    if (abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_LOCKED)) {
+    if (mm_iface_modem_abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_LOCKED)) {
         handle_create_bearer_context_free (ctx);
         return;
     }
@@ -968,7 +962,7 @@ handle_delete_bearer_auth_ready (MMBaseModem *self,
         return;
     }
 
-    if (abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_LOCKED)) {
+    if (mm_iface_modem_abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_LOCKED)) {
         handle_delete_bearer_context_free (ctx);
         return;
     }
@@ -1034,7 +1028,7 @@ handle_list_bearers (MmGdbusModem *skeleton,
     GStrv paths;
     MMBearerList *list = NULL;
 
-    if (abort_invocation_if_state_not_reached (self, invocation, MM_MODEM_STATE_LOCKED))
+    if (mm_iface_modem_abort_invocation_if_state_not_reached (self, invocation, MM_MODEM_STATE_LOCKED))
         return TRUE;
 
     g_object_get (self,
@@ -1999,7 +1993,7 @@ handle_enable_auth_ready (MMBaseModem *self,
         return;
     }
 
-    if (abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_LOCKED)) {
+    if (mm_iface_modem_abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_LOCKED)) {
         handle_enable_context_free (ctx);
         return;
     }
@@ -2869,7 +2863,7 @@ handle_set_current_bands_auth_ready (MMBaseModem *self,
         return;
     }
 
-    if (abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_DISABLED)) {
+    if (mm_iface_modem_abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_DISABLED)) {
         handle_set_current_bands_context_free (ctx);
         return;
     }
@@ -3255,7 +3249,7 @@ handle_set_current_modes_auth_ready (MMBaseModem *self,
         return;
     }
 
-    if (abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_DISABLED)) {
+    if (mm_iface_modem_abort_invocation_if_state_not_reached (ctx->self, ctx->invocation, MM_MODEM_STATE_DISABLED)) {
         handle_set_current_modes_context_free (ctx);
         return;
     }
@@ -3690,15 +3684,25 @@ mm_iface_modem_update_lock_info (MMIfaceModem *self,
     GTask *task;
 
     ctx = g_slice_new0 (UpdateLockInfoContext);
-    g_object_get (self,
-                  MM_IFACE_MODEM_DBUS_SKELETON, &ctx->skeleton,
-                  NULL);
 
     /* If the given lock is known, we will avoid re-asking for it */
     ctx->lock = known_lock;
 
     task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, (GDestroyNotify)update_lock_info_context_free);
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_DBUS_SKELETON, &ctx->skeleton,
+                  NULL);
+
+    if (!ctx->skeleton) {
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Couldn't get interface skeleton");
+        g_object_unref (task);
+        return;
+    }
 
     update_lock_info_context_step (task);
 }
@@ -5114,44 +5118,38 @@ interface_initialization_step (GTask *task)
         /* fall-through */
 
     case INITIALIZATION_STEP_BEARERS: {
-        MMBearerList *list = NULL;
+        g_autoptr(MMBearerList) list = NULL;
 
         /* Bearers setup is meant to be loaded only once during the whole
-         * lifetime of the modem. The list may have been created by the object
-         * implementing the interface; if so use it. */
+         * lifetime of the modem, so check if it exists; and if it doesn't,
+         * create it right away. */
         g_object_get (self,
                       MM_IFACE_MODEM_BEARER_LIST, &list,
                       NULL);
 
         if (!list) {
-            guint n;
-
-            /* The maximum number of available/connected modems is guessed from
-             * the size of the data ports list. */
-            n = g_list_length (mm_base_modem_peek_data_ports (MM_BASE_MODEM (self)));
-            mm_obj_dbg (self, "allowed up to %u bearers", n);
-
-            /* Create new default list */
-            list = mm_bearer_list_new (n, n);
+            list = MM_IFACE_MODEM_GET_INTERFACE (self)->create_bearer_list (self);
             g_signal_connect (list,
                               "notify::" MM_BEARER_LIST_NUM_BEARERS,
                               G_CALLBACK (bearer_list_updated),
                               self);
+
+            mm_gdbus_modem_set_max_active_bearers (
+                ctx->skeleton,
+                mm_bearer_list_get_max_active (list));
+            mm_gdbus_modem_set_max_active_multiplexed_bearers (
+                ctx->skeleton,
+                mm_bearer_list_get_max_active_multiplexed (list));
+
+            /* MaxBearers set equal to MaxActiveBearers */
+            mm_gdbus_modem_set_max_bearers (
+                ctx->skeleton,
+                mm_gdbus_modem_get_max_active_bearers (ctx->skeleton));
+
             g_object_set (self,
                           MM_IFACE_MODEM_BEARER_LIST, list,
                           NULL);
         }
-
-        if (mm_gdbus_modem_get_max_bearers (ctx->skeleton) == 0)
-            mm_gdbus_modem_set_max_bearers (
-                ctx->skeleton,
-                mm_bearer_list_get_max (list));
-        if (mm_gdbus_modem_get_max_active_bearers (ctx->skeleton) == 0)
-            mm_gdbus_modem_set_max_active_bearers (
-                ctx->skeleton,
-                mm_bearer_list_get_max_active (list));
-        g_object_unref (list);
-
         ctx->step++;
     } /* fall-through */
 

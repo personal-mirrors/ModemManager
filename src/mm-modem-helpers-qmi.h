@@ -21,6 +21,8 @@
 #include <ModemManager.h>
 #include <libqmi-glib.h>
 
+#include "mm-port.h"
+
 /*****************************************************************************/
 /* QMI/DMS to MM translations */
 
@@ -64,11 +66,10 @@ QmiNasRatModePreference mm_modem_mode_to_qmi_rat_mode_preference (MMModemMode mo
 MMModemCapability mm_modem_capability_from_qmi_rat_mode_preference (QmiNasRatModePreference qmi);
 QmiNasRatModePreference mm_modem_capability_to_qmi_rat_mode_preference (MMModemCapability caps);
 
-GArray *mm_modem_capability_to_qmi_acquisition_order_preference (MMModemCapability caps);
-GArray *mm_modem_mode_to_qmi_acquisition_order_preference       (MMModemMode       allowed,
-                                                                 MMModemMode       preferred,
-                                                                 gboolean          is_cdma,
-                                                                 gboolean          is_3gpp);
+GArray *mm_modem_capability_to_qmi_acquisition_order_preference (MMModemCapability  caps);
+GArray *mm_modem_mode_to_qmi_acquisition_order_preference       (MMModemMode        allowed,
+                                                                 MMModemMode        preferred,
+                                                                 GArray            *all);
 
 MMModemCapability mm_modem_capability_from_qmi_radio_technology_preference (QmiNasRadioTechnologyPreference qmi);
 QmiNasRadioTechnologyPreference mm_modem_capability_to_qmi_radio_technology_preference (MMModemCapability caps);
@@ -122,6 +123,11 @@ gboolean             mm_bearer_ip_family_to_qmi_pdp_type            (MMBearerIpF
 
 /* Input is a GList of QmiMessageWdsGetProfileSettingsOutput. */
 GList *mm_3gpp_profile_list_from_qmi_profile_settings (GList *profile_list);
+
+/*****************************************************************************/
+/* QMI/WDA to MM translations */
+
+QmiDataEndpointType mm_port_subsys_to_qmi_endpoint_type (MMPortSubsys subsys);
 
 /*****************************************************************************/
 /* QMI/OMA to MM translations */

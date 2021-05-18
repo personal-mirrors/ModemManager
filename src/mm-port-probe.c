@@ -42,6 +42,10 @@
 #include "mm-port-qmi.h"
 #endif
 
+#if defined WITH_QRTR
+#include "mm-kernel-device-qrtr.h"
+#endif
+
 #if defined WITH_MBIM
 #include "mm-port-mbim.h"
 #endif
@@ -491,22 +495,33 @@ wdm_probe_qmi (MMPortProbe *self)
     ctx = g_task_get_task_data (self->priv->task);
 
 #if defined WITH_QMI
+    /* Create a port and try to open it */
+    mm_obj_dbg (self, "probing QMI...");
+
+#if defined WITH_QRTR
+    if (MM_IS_KERNEL_DEVICE_QRTR (self->priv->port)) {
+        g_autoptr(QrtrNode) node = NULL;
+
+        node = mm_kernel_device_qrtr_get_node (MM_KERNEL_DEVICE_QRTR (self->priv->port));
+
+        /* Will set MM_PORT_SUBSYS_QRTR when creating the mm-port */
+        ctx->port_qmi = mm_port_qmi_new_from_node (mm_kernel_device_get_name (self->priv->port), node);
+    } else
+#endif /* WITH_QRTR */
     {
         MMPortSubsys subsys = MM_PORT_SUBSYS_USBMISC;
-
-        mm_obj_dbg (self, "probing QMI...");
 
         if (g_str_equal (mm_kernel_device_get_subsystem (self->priv->port), "rpmsg"))
             subsys = MM_PORT_SUBSYS_RPMSG;
 
-        /* Create a port and try to open it */
         ctx->port_qmi = mm_port_qmi_new (mm_kernel_device_get_name (self->priv->port), subsys);
-        mm_port_qmi_open (ctx->port_qmi,
-                          FALSE,
-                          NULL,
-                          (GAsyncReadyCallback) port_qmi_open_ready,
-                          self);
     }
+
+    mm_port_qmi_open (ctx->port_qmi,
+                      FALSE,
+                      NULL,
+                      (GAsyncReadyCallback) port_qmi_open_ready,
+                      self);
 #else
     /* If not compiled with QMI support, just assume we won't have any QMI port */
     mm_port_probe_set_result_qmi (self, FALSE);
@@ -730,6 +745,8 @@ serial_probe_qcdm (MMPortProbe *self)
     gint                 len;
     guint8               marker = 0x7E;
     PortProbeRunContext *ctx;
+    MMPortSubsys subsys = MM_PORT_SUBSYS_TTY;
+
 
     g_assert (self->priv->task);
     ctx = g_task_get_task_data (self->priv->task);
@@ -752,8 +769,11 @@ serial_probe_qcdm (MMPortProbe *self)
         g_object_unref (ctx->serial);
     }
 
+    if (g_str_equal (mm_kernel_device_get_subsystem (self->priv->port), "wwan"))
+        subsys = MM_PORT_SUBSYS_WWAN;
+
     /* Open the QCDM port */
-    ctx->serial = MM_PORT_SERIAL (mm_port_serial_qcdm_new (mm_kernel_device_get_name (self->priv->port), MM_PORT_SUBSYS_TTY));
+    ctx->serial = MM_PORT_SERIAL (mm_port_serial_qcdm_new (mm_kernel_device_get_name (self->priv->port), subsys));
     if (!ctx->serial) {
         port_probe_task_return_error (self,
                                       g_error_new (MM_CORE_ERROR,
@@ -1281,6 +1301,8 @@ serial_open_at (MMPortProbe *self)
             subsys = MM_PORT_SUBSYS_USBMISC;
         else if (g_str_equal (mm_kernel_device_get_subsystem (self->priv->port), "rpmsg"))
             subsys = MM_PORT_SUBSYS_RPMSG;
+        else if (g_str_equal (mm_kernel_device_get_subsystem (self->priv->port), "wwan"))
+            subsys = MM_PORT_SUBSYS_WWAN;
 
         ctx->serial = MM_PORT_SERIAL (mm_port_serial_at_new (mm_kernel_device_get_name (self->priv->port), subsys));
         if (!ctx->serial) {

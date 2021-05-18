@@ -26,6 +26,7 @@
 #include "mm-port-serial-at.h"
 #include "mm-base-bearer.h"
 #include "mm-base-sim.h"
+#include "mm-bearer-list.h"
 
 #define MM_TYPE_IFACE_MODEM            (mm_iface_modem_get_type ())
 #define MM_IFACE_MODEM(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_IFACE_MODEM, MMIfaceModem))
@@ -372,6 +373,10 @@ struct _MMIfaceModem {
     MMBaseBearer * (*create_bearer_finish) (MMIfaceModem *self,
                                             GAsyncResult *res,
                                             GError **error);
+
+    /* Create new bearer list object */
+    MMBearerList * (* create_bearer_list) (MMIfaceModem *self);
+
     /* Setup SIM hot swap */
     void (*setup_sim_hot_swap) (MMIfaceModem *self,
                                 GAsyncReadyCallback callback,
@@ -460,6 +465,16 @@ gboolean mm_iface_modem_disable_finish (MMIfaceModem *self,
                                         GAsyncResult *res,
                                         GError **error);
 
+/* Shutdown Modem interface */
+void mm_iface_modem_shutdown (MMIfaceModem *self);
+
+/* Helper to return an error when the modem is in failed state and so it
+ * cannot process a given method invocation
+ */
+gboolean mm_iface_modem_abort_invocation_if_state_not_reached (MMIfaceModem          *self,
+                                                               GDBusMethodInvocation *invocation,
+                                                               MMModemState           minimum_required);
+
 /* Allow setting power state */
 void     mm_iface_modem_set_power_state        (MMIfaceModem *self,
                                                 MMModemPowerState power_state,
@@ -468,9 +483,6 @@ void     mm_iface_modem_set_power_state        (MMIfaceModem *self,
 gboolean mm_iface_modem_set_power_state_finish (MMIfaceModem *self,
                                                 GAsyncResult *res,
                                                 GError **error);
-
-/* Shutdown Modem interface */
-void mm_iface_modem_shutdown (MMIfaceModem *self);
 
 /* Request lock info update.
  * It will not only return the lock status, but also set the property values

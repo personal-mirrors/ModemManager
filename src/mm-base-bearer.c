@@ -70,7 +70,6 @@ enum {
     PROP_MODEM,
     PROP_STATUS,
     PROP_CONFIG,
-    PROP_DEFAULT_IP_FAMILY,
     PROP_LAST
 };
 
@@ -92,8 +91,6 @@ struct _MMBaseBearerPrivate {
     gboolean ignore_disconnection_reports;
     /* Configuration of the bearer */
     MMBearerProperties *config;
-    /* Default IP family of this bearer */
-    MMBearerIpFamily default_ip_family;
 
     /* Cancellable for connect() */
     GCancellable *connect_cancellable;
@@ -410,6 +407,7 @@ bearer_stats_start (MMBaseBearer *self)
 static void
 bearer_reset_interface_status (MMBaseBearer *self)
 {
+    mm_gdbus_bearer_set_multiplexed (MM_GDBUS_BEARER (self), FALSE);
     mm_gdbus_bearer_set_connected (MM_GDBUS_BEARER (self), FALSE);
     mm_gdbus_bearer_set_suspended (MM_GDBUS_BEARER (self), FALSE);
     mm_gdbus_bearer_set_interface (MM_GDBUS_BEARER (self), NULL);
@@ -465,11 +463,13 @@ bearer_update_status (MMBaseBearer *self,
 }
 
 static void
-bearer_update_status_connected (MMBaseBearer *self,
-                                const gchar *interface,
+bearer_update_status_connected (MMBaseBearer     *self,
+                                const gchar      *interface,
+                                gboolean          multiplexed,
                                 MMBearerIpConfig *ipv4_config,
                                 MMBearerIpConfig *ipv6_config)
 {
+    mm_gdbus_bearer_set_multiplexed (MM_GDBUS_BEARER (self), multiplexed);
     mm_gdbus_bearer_set_connected (MM_GDBUS_BEARER (self), TRUE);
     mm_gdbus_bearer_set_suspended (MM_GDBUS_BEARER (self), FALSE);
     mm_gdbus_bearer_set_interface (MM_GDBUS_BEARER (self), interface);
@@ -830,6 +830,7 @@ connect_ready (MMBaseBearer *self,
         bearer_update_status_connected (
             self,
             mm_port_get_device (mm_bearer_connect_result_peek_data (result)),
+            mm_bearer_connect_result_get_multiplexed (result),
             mm_bearer_connect_result_peek_ipv4_config (result),
             mm_bearer_connect_result_peek_ipv6_config (result));
         mm_bearer_connect_result_unref (result);
@@ -1285,12 +1286,6 @@ mm_base_bearer_get_config (MMBaseBearer *self)
             NULL);
 }
 
-MMBearerIpFamily
-mm_base_bearer_get_default_ip_family (MMBaseBearer *self)
-{
-    return self->priv->default_ip_family;
-}
-
 /*****************************************************************************/
 
 static void
@@ -1320,6 +1315,11 @@ mm_base_bearer_disconnect_force (MMBaseBearer *self)
     if (self->priv->status == MM_BEARER_STATUS_DISCONNECTING ||
         self->priv->status == MM_BEARER_STATUS_DISCONNECTED)
         return;
+
+    if (self->priv->ignore_disconnection_reports) {
+        mm_obj_dbg (self, "disconnection should be forced but it's explicitly ignored");
+        return;
+    }
 
     mm_obj_dbg (self, "forcing disconnection");
 
@@ -1472,9 +1472,6 @@ set_property (GObject *object,
             g_variant_unref (dictionary);
         break;
     }
-    case PROP_DEFAULT_IP_FAMILY:
-        self->priv->default_ip_family = g_value_get_flags (value);
-        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -1505,9 +1502,6 @@ get_property (GObject *object,
     case PROP_CONFIG:
         g_value_set_object (value, self->priv->config);
         break;
-    case PROP_DEFAULT_IP_FAMILY:
-        g_value_set_flags (value, self->priv->default_ip_family);
-        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -1530,11 +1524,11 @@ mm_base_bearer_init (MMBaseBearer *self)
     self->priv->status = MM_BEARER_STATUS_DISCONNECTED;
     self->priv->reason_3gpp = CONNECTION_FORBIDDEN_REASON_NONE;
     self->priv->reason_cdma = CONNECTION_FORBIDDEN_REASON_NONE;
-    self->priv->default_ip_family = MM_BEARER_IP_FAMILY_IPV4;
     self->priv->stats = mm_bearer_stats_new ();
 
     /* Set defaults */
     mm_gdbus_bearer_set_interface   (MM_GDBUS_BEARER (self), NULL);
+    mm_gdbus_bearer_set_multiplexed (MM_GDBUS_BEARER (self), FALSE);
     mm_gdbus_bearer_set_connected   (MM_GDBUS_BEARER (self), FALSE);
     mm_gdbus_bearer_set_suspended   (MM_GDBUS_BEARER (self), FALSE);
     mm_gdbus_bearer_set_properties  (MM_GDBUS_BEARER (self), NULL);
@@ -1641,25 +1635,17 @@ mm_base_bearer_class_init (MMBaseBearerClass *klass)
                              MM_TYPE_BEARER_PROPERTIES,
                              G_PARAM_READWRITE);
     g_object_class_install_property (object_class, PROP_CONFIG, properties[PROP_CONFIG]);
-
-    properties[PROP_DEFAULT_IP_FAMILY] =
-        g_param_spec_flags (MM_BASE_BEARER_DEFAULT_IP_FAMILY,
-                            "Bearer default IP family",
-                            "IP family to use for this bearer when no IP family is specified",
-                            MM_TYPE_BEARER_IP_FAMILY,
-                            MM_BEARER_IP_FAMILY_IPV4,
-                            G_PARAM_READWRITE);
-    g_object_class_install_property (object_class, PROP_DEFAULT_IP_FAMILY, properties[PROP_DEFAULT_IP_FAMILY]);
 }
 
 /*****************************************************************************/
 /* Helpers to implement connect() */
 
 struct _MMBearerConnectResult {
-    volatile gint ref_count;
-    MMPort *data;
+    volatile gint     ref_count;
+    MMPort           *data;
     MMBearerIpConfig *ipv4_config;
     MMBearerIpConfig *ipv6_config;
+    gboolean          multiplexed;
 };
 
 MMBearerConnectResult *
@@ -1701,8 +1687,21 @@ mm_bearer_connect_result_peek_ipv6_config (MMBearerConnectResult *result)
     return result->ipv6_config;
 }
 
+void
+mm_bearer_connect_result_set_multiplexed (MMBearerConnectResult *result,
+                                          gboolean               multiplexed)
+{
+    result->multiplexed = multiplexed;
+}
+
+gboolean
+mm_bearer_connect_result_get_multiplexed (MMBearerConnectResult *result)
+{
+    return result->multiplexed;
+}
+
 MMBearerConnectResult *
-mm_bearer_connect_result_new (MMPort *data,
+mm_bearer_connect_result_new (MMPort           *data,
                               MMBearerIpConfig *ipv4_config,
                               MMBearerIpConfig *ipv6_config)
 {
@@ -1718,5 +1717,6 @@ mm_bearer_connect_result_new (MMPort *data,
         result->ipv4_config = g_object_ref (ipv4_config);
     if (ipv6_config)
         result->ipv6_config = g_object_ref (ipv6_config);
+    result->multiplexed = FALSE; /* default */
     return result;
 }

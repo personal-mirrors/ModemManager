@@ -428,6 +428,23 @@ modem_create_bearer (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
+/* Create Bearer List (Modem interface) */
+
+static MMBearerList *
+modem_create_bearer_list (MMIfaceModem *self)
+{
+    guint n;
+
+    /* The maximum number of available/connected modems is guessed from
+     * the size of the data ports list. */
+    n = g_list_length (mm_base_modem_peek_data_ports (MM_BASE_MODEM (self)));
+    mm_obj_dbg (self, "allowed up to %u active bearers", n);
+
+    /* by default, no multiplexing support */
+    return mm_bearer_list_new (n, 0);
+}
+
+/*****************************************************************************/
 /* Create SIM (Modem interface) */
 
 static MMBaseSim *
@@ -10580,7 +10597,7 @@ common_disable_finish (MMBroadbandModem  *self,
 
 INTERFACE_DISABLE_READY_FN (iface_modem,           MM_IFACE_MODEM,           TRUE)
 INTERFACE_DISABLE_READY_FN (iface_modem_3gpp,      MM_IFACE_MODEM_3GPP,      TRUE)
-INTERFACE_DISABLE_READY_FN (iface_modem_3gpp_ussd, MM_IFACE_MODEM_3GPP_USSD, TRUE)
+INTERFACE_DISABLE_READY_FN (iface_modem_3gpp_ussd, MM_IFACE_MODEM_3GPP_USSD, FALSE)
 INTERFACE_DISABLE_READY_FN (iface_modem_cdma,      MM_IFACE_MODEM_CDMA,      TRUE)
 INTERFACE_DISABLE_READY_FN (iface_modem_location,  MM_IFACE_MODEM_LOCATION,  FALSE)
 INTERFACE_DISABLE_READY_FN (iface_modem_messaging, MM_IFACE_MODEM_MESSAGING, FALSE)
@@ -11023,7 +11040,7 @@ enable_failed_ready (MMBroadbandModem *self,
 
 INTERFACE_ENABLE_READY_FN (iface_modem,           MM_IFACE_MODEM,           TRUE)
 INTERFACE_ENABLE_READY_FN (iface_modem_3gpp,      MM_IFACE_MODEM_3GPP,      TRUE)
-INTERFACE_ENABLE_READY_FN (iface_modem_3gpp_ussd, MM_IFACE_MODEM_3GPP_USSD, TRUE)
+INTERFACE_ENABLE_READY_FN (iface_modem_3gpp_ussd, MM_IFACE_MODEM_3GPP_USSD, FALSE)
 INTERFACE_ENABLE_READY_FN (iface_modem_cdma,      MM_IFACE_MODEM_CDMA,      TRUE)
 INTERFACE_ENABLE_READY_FN (iface_modem_location,  MM_IFACE_MODEM_LOCATION,  FALSE)
 INTERFACE_ENABLE_READY_FN (iface_modem_messaging, MM_IFACE_MODEM_MESSAGING, FALSE)
@@ -11982,6 +11999,9 @@ mm_broadband_modem_new (const gchar *device,
                          MM_BASE_MODEM_PLUGIN, plugin,
                          MM_BASE_MODEM_VENDOR_ID, vendor_id,
                          MM_BASE_MODEM_PRODUCT_ID, product_id,
+                         /* Generic bearer supports TTY only */
+                         MM_BASE_MODEM_DATA_NET_SUPPORTED, FALSE,
+                         MM_BASE_MODEM_DATA_TTY_SUPPORTED, TRUE,
                          NULL);
 }
 
@@ -12454,6 +12474,7 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_power_state_finish = modem_load_power_state_finish;
     iface->load_supported_ip_families = modem_load_supported_ip_families;
     iface->load_supported_ip_families_finish = modem_load_supported_ip_families_finish;
+    iface->create_bearer_list = modem_create_bearer_list;
 
     /* Enabling steps */
     iface->modem_power_up = modem_power_up;

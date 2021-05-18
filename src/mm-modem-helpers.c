@@ -1477,20 +1477,27 @@ mm_3gpp_cmp_apn_name (const gchar *requested,
 
 /*************************************************************************/
 
-static guint
-find_max_allowed_cid (GList            *context_format_list,
-                      MMBearerIpFamily  ip_family)
+gboolean
+mm_3gpp_pdp_context_format_list_find_range (GList            *pdp_format_list,
+                                            MMBearerIpFamily  ip_family,
+                                            guint            *out_min_cid,
+                                            guint            *out_max_cid)
 {
     GList *l;
 
-    for (l = context_format_list; l; l = g_list_next (l)) {
+    for (l = pdp_format_list; l; l = g_list_next (l)) {
         MM3gppPdpContextFormat *format = l->data;
 
         /* Found exact PDP type? */
-        if (format->pdp_type == ip_family)
-            return format->max_cid;
+        if (format->pdp_type == ip_family) {
+            if (out_min_cid)
+                *out_min_cid = format->min_cid;
+            if (out_max_cid)
+                *out_max_cid = format->max_cid;
+            return TRUE;
+        }
     }
-    return 0;
+    return FALSE;
 }
 
 guint
@@ -1573,7 +1580,7 @@ mm_3gpp_select_best_cid (const gchar      *apn,
 
     /* If the max existing CID found during CGDCONT? is below the max allowed
      * CID, then we can use the next available CID because it's an unused one. */
-    max_allowed_cid = find_max_allowed_cid (context_format_list, ip_family);
+    mm_3gpp_pdp_context_format_list_find_range (context_format_list, ip_family, NULL, &max_allowed_cid);
     if (max_cid && (max_cid < max_allowed_cid)) {
         mm_obj_dbg (log_object, "found unused context at CID %u (<%u)", max_cid + 1, max_allowed_cid);
         *out_cid_reused = FALSE;
@@ -4134,6 +4141,19 @@ mm_3gpp_get_ip_family_from_pdp_type (const gchar *pdp_type)
     return MM_BEARER_IP_FAMILY_NONE;
 }
 
+gboolean
+mm_3gpp_normalize_ip_family (MMBearerIpFamily *family)
+{
+    /* if nothing specific requested, default to IPv4 */
+    if (*family == MM_BEARER_IP_FAMILY_NONE || *family == MM_BEARER_IP_FAMILY_ANY) {
+        *family = MM_BEARER_IP_FAMILY_IPV4;
+        return TRUE;
+    }
+
+    /* no need to normalize */
+    return FALSE;
+}
+
 /*************************************************************************/
 /* ICCID validation */
 /*
@@ -5166,12 +5186,14 @@ out:
 
 gboolean
 mm_sim_parse_cpol_query_response (const gchar  *response,
+                                  guint        *out_index,
                                   gchar       **out_operator_code,
                                   gboolean     *out_gsm_act,
                                   gboolean     *out_gsm_compact_act,
                                   gboolean     *out_utran_act,
                                   gboolean     *out_eutran_act,
                                   gboolean     *out_ngran_act,
+                                  guint        *out_act_count,
                                   GError      **error)
 {
     g_autoptr(GMatchInfo)  match_info = NULL;
@@ -5181,7 +5203,7 @@ mm_sim_parse_cpol_query_response (const gchar  *response,
     guint                  act = 0;
     guint                  match_count;
 
-    r = g_regex_new ("\\+CPOL:\\s*\\d+,\\s*(\\d+),\\s*\"(\\d+)\""
+    r = g_regex_new ("\\+CPOL:\\s*(\\d+),\\s*(\\d+),\\s*\"(\\d+)\""
                      "(?:,\\s*(\\d+))?"     /* GSM_AcTn */
                      "(?:,\\s*(\\d+))?"     /* GSM_Compact_AcTn */
                      "(?:,\\s*(\\d+))?"     /* UTRAN_AcTn */
@@ -5200,10 +5222,10 @@ mm_sim_parse_cpol_query_response (const gchar  *response,
 
     match_count = g_match_info_get_match_count (match_info);
     /* Remember that g_match_info_get_match_count() includes match #0 */
-    g_assert (match_count >= 3);
+    g_assert (match_count >= 4);
 
-    if (!mm_get_uint_from_match_info (match_info, 1, &format) ||
-        !(operator_code = mm_get_string_unquoted_from_match_info (match_info, 2))) {
+    if (!mm_get_uint_from_match_info (match_info, 2, &format) ||
+        !(operator_code = mm_get_string_unquoted_from_match_info (match_info, 3))) {
         g_set_error (error,
                      MM_CORE_ERROR,
                      MM_CORE_ERROR_FAILED,
@@ -5219,29 +5241,84 @@ mm_sim_parse_cpol_query_response (const gchar  *response,
         return FALSE;
     }
 
-    if (out_operator_code) {
+    if (out_index)
+        if (!mm_get_uint_from_match_info (match_info, 1, out_index)) {
+            g_set_error (error,
+                         MM_CORE_ERROR,
+                         MM_CORE_ERROR_FAILED,
+                         "Couldn't parse +CPOL index: %s", response);
+            return FALSE;
+        }
+    if (out_operator_code)
         *out_operator_code = g_steal_pointer (&operator_code);
-    }
     if (out_gsm_act)
-        *out_gsm_act = match_count >= 4 &&
-                       mm_get_uint_from_match_info (match_info, 3, &act) &&
+        *out_gsm_act = match_count >= 5 &&
+                       mm_get_uint_from_match_info (match_info, 4, &act) &&
                        act != 0;
     if (out_gsm_compact_act)
-        *out_gsm_compact_act = match_count >= 5 &&
-                               mm_get_uint_from_match_info (match_info, 4, &act) &&
+        *out_gsm_compact_act = match_count >= 6 &&
+                               mm_get_uint_from_match_info (match_info, 5, &act) &&
                                act != 0;
     if (out_utran_act)
-        *out_utran_act = match_count >= 6 &&
-                         mm_get_uint_from_match_info (match_info, 5, &act) &&
+        *out_utran_act = match_count >= 7 &&
+                         mm_get_uint_from_match_info (match_info, 6, &act) &&
                          act != 0;
     if (out_eutran_act)
-        *out_eutran_act = match_count >= 7 &&
-                          mm_get_uint_from_match_info (match_info, 6, &act) &&
+        *out_eutran_act = match_count >= 8 &&
+                          mm_get_uint_from_match_info (match_info, 7, &act) &&
                           act != 0;
     if (out_ngran_act)
-        *out_ngran_act = match_count >= 8 &&
-                         mm_get_uint_from_match_info (match_info, 7, &act) &&
+        *out_ngran_act = match_count >= 9 &&
+                         mm_get_uint_from_match_info (match_info, 8, &act) &&
                          act != 0;
+    /* number of access technologies (0...5) in modem response */
+    if (out_act_count)
+        *out_act_count = match_count - 4;
+
+    return TRUE;
+}
+
+gboolean
+mm_sim_parse_cpol_test_response (const gchar  *response,
+                                 guint        *out_min_index,
+                                 guint        *out_max_index,
+                                 GError      **error)
+{
+    g_autoptr(GMatchInfo)  match_info = NULL;
+    g_autoptr(GRegex)      r = NULL;
+    guint                  match_count;
+    guint                  min_index;
+    guint                  max_index;
+
+    r = g_regex_new ("\\+CPOL:\\s*\\((\\d+)\\s*-\\s*(\\d+)\\)",
+                     G_REGEX_RAW, 0, NULL);
+    g_regex_match (r, response, 0, &match_info);
+
+    if (!g_match_info_matches (match_info)) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Couldn't parse +CPOL=? reply: %s", response);
+        return FALSE;
+    }
+
+    match_count = g_match_info_get_match_count (match_info);
+    /* Remember that g_match_info_get_match_count() includes match #0 */
+    g_assert (match_count >= 3);
+
+    if (!mm_get_uint_from_match_info (match_info, 1, &min_index) ||
+        !mm_get_uint_from_match_info (match_info, 2, &max_index)) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Couldn't parse indices in +CPOL=? reply: %s", response);
+        return FALSE;
+    }
+
+    if (out_min_index)
+        *out_min_index = min_index;
+    if (out_max_index)
+        *out_max_index = max_index;
 
     return TRUE;
 }

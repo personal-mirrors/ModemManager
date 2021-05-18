@@ -185,6 +185,11 @@ GList *mm_3gpp_parse_cgdcont_test_response (const gchar  *reply,
                                             gpointer      log_object,
                                             GError      **error);
 
+gboolean mm_3gpp_pdp_context_format_list_find_range (GList            *pdp_format_list,
+                                                     MMBearerIpFamily  ip_family,
+                                                     guint            *out_min_cid,
+                                                     guint            *out_max_cid);
+
 /* AT+CGDCONT? (PDP context query) response parser */
 typedef struct {
     guint cid;
@@ -447,8 +452,9 @@ gboolean mm_3gpp_parse_operator_id (const gchar *operator_id,
                                     guint16 *mnc,
                                     GError **error);
 
-const gchar      *mm_3gpp_get_pdp_type_from_ip_family (MMBearerIpFamily family);
-MMBearerIpFamily  mm_3gpp_get_ip_family_from_pdp_type (const gchar *pdp_type);
+const gchar      *mm_3gpp_get_pdp_type_from_ip_family (MMBearerIpFamily  family);
+MMBearerIpFamily  mm_3gpp_get_ip_family_from_pdp_type (const gchar      *pdp_type);
+gboolean          mm_3gpp_normalize_ip_family         (MMBearerIpFamily *family);
 
 char *mm_3gpp_parse_iccid (const char *raw_iccid, GError **error);
 
@@ -536,13 +542,21 @@ gboolean mm_parse_supl_address (const gchar  *supl,
 
 /* +CPOL? response parser (for a single entry) - accepts only numeric operator format*/
 gboolean mm_sim_parse_cpol_query_response (const gchar  *response,
+                                           guint        *out_index,
                                            gchar       **out_operator_code,
                                            gboolean     *out_gsm_act,
                                            gboolean     *out_gsm_compact_act,
                                            gboolean     *out_utran_act,
                                            gboolean     *out_eutran_act,
                                            gboolean     *out_ngran_act,
+                                           guint        *out_act_count,
                                            GError      **error);
+
+/* +CPOL=? response parser for getting supported min and max index */
+gboolean mm_sim_parse_cpol_test_response (const gchar  *response,
+                                          guint        *out_min_index,
+                                          guint        *out_max_index,
+                                          GError      **error);
 
 /*****************************************************************************/
 
