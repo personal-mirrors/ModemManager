@@ -37,6 +37,7 @@
 #include "mm-base-modem.h"
 #include "mm-log-object.h"
 #include "mm-modem-helpers.h"
+#include "mm-error-helpers.h"
 #include "mm-bearer-stats.h"
 
 /* We require up to 20s to get a proper IP when using PPP */
@@ -238,6 +239,63 @@ connection_monitor_start (MMBaseBearer *self)
     self->priv->connection_monitor_id = g_timeout_add_seconds (BEARER_CONNECTION_MONITOR_INITIAL_TIMEOUT,
                                                                (GSourceFunc) initial_connection_monitor_cb,
                                                                self);
+}
+
+/*****************************************************************************/
+
+static void
+bearer_update_connection_error (MMBaseBearer *self,
+                                const GError *connection_error)
+{
+    g_autoptr(GVariant) tuple = NULL;
+
+    if (connection_error) {
+        /* Never overwrite a connection error if it's already set */
+        tuple = mm_gdbus_bearer_dup_connection_error (MM_GDBUS_BEARER (self));
+        if (tuple)
+            return;
+
+        /*
+         * Limit the type of errors we can expose in the interface;
+         * e.g. we don't want QMI or MBIM specific errors reported.
+         *
+         * G_IO_ERROR_CANCELLED is an exception, because we map it to
+         * MM_CORE_ERROR_CANCELLED implicitly when building the DBus error name.
+         */
+        if ((connection_error->domain != MM_CORE_ERROR) &&
+            (connection_error->domain != MM_MOBILE_EQUIPMENT_ERROR) &&
+            (connection_error->domain != MM_CONNECTION_ERROR) &&
+            (connection_error->domain != MM_SERIAL_ERROR) &&
+            (connection_error->domain != MM_CDMA_ACTIVATION_ERROR) &&
+            (!g_error_matches (connection_error, G_IO_ERROR, G_IO_ERROR_CANCELLED))) {
+            g_autoptr(GError) default_connection_error = NULL;
+
+#if defined WITH_QMI
+            if (connection_error->domain == QMI_CORE_ERROR)
+                mm_obj_dbg (self, "cannot set QMI core error as connection error: %s", connection_error->message);
+            else if (connection_error->domain == QMI_PROTOCOL_ERROR)
+                mm_obj_dbg (self, "cannot set QMI protocol error as connection error: %s", connection_error->message);
+            else
+#endif
+#if defined WITH_MBIM
+            if (connection_error->domain == MBIM_CORE_ERROR)
+                mm_obj_dbg (self, "cannot set MBIM core error as connection error: %s", connection_error->message);
+            else if (connection_error->domain == MBIM_PROTOCOL_ERROR)
+                mm_obj_dbg (self, "cannot set MBIM protocol error as connection error: %s", connection_error->message);
+            else if (connection_error->domain == MBIM_STATUS_ERROR)
+                mm_obj_dbg (self, "cannot set MBIM status error as connection error: %s", connection_error->message);
+            else
+#endif
+                mm_obj_dbg (self, "cannot set unhandled domain error as connection error: %s", connection_error->message);
+
+            default_connection_error = g_error_new (MM_MOBILE_EQUIPMENT_ERROR,
+                                                    MM_MOBILE_EQUIPMENT_ERROR_UNKNOWN,
+                                                    "%s", connection_error->message);
+            tuple = mm_common_error_to_tuple (default_connection_error);
+        } else
+            tuple = mm_common_error_to_tuple (connection_error);
+    }
+    mm_gdbus_bearer_set_connection_error (MM_GDBUS_BEARER (self), tuple);
 }
 
 /*****************************************************************************/
@@ -815,8 +873,11 @@ connect_ready (MMBaseBearer *self,
         if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
             /* Will launch disconnection */
             launch_disconnect = TRUE;
-        } else
+        } else {
+            /* Update reported connection error before the status update */
+            bearer_update_connection_error (self, error);
             bearer_update_status (self, MM_BEARER_STATUS_DISCONNECTED);
+        }
     }
     /* Handle cancellations detected after successful connection */
     else if (g_cancellable_is_cancelled (self->priv->connect_cancellable)) {
@@ -841,6 +902,8 @@ connect_ready (MMBaseBearer *self,
     }
 
     if (launch_disconnect) {
+        /* Update reported connection error before the status update */
+        bearer_update_connection_error (self, error);
         bearer_update_status (self, MM_BEARER_STATUS_DISCONNECTING);
         MM_BASE_BEARER_GET_CLASS (self)->disconnect (
             self,
@@ -948,6 +1011,9 @@ mm_base_bearer_connect (MMBaseBearer *self,
     mm_bearer_stats_set_attempts (self->priv->stats,
                                   mm_bearer_stats_get_attempts (self->priv->stats) + 1);
     bearer_reset_ongoing_interface_stats (self);
+
+    /* Clear previous connection error, if any */
+    bearer_update_connection_error (self, NULL);
 
     /* Connecting! */
     mm_obj_dbg (self, "connecting...");
@@ -1350,8 +1416,9 @@ mm_base_bearer_disconnect_force (MMBaseBearer *self)
 /*****************************************************************************/
 
 static void
-report_connection_status (MMBaseBearer *self,
-                          MMBearerConnectionStatus status)
+report_connection_status (MMBaseBearer             *self,
+                          MMBearerConnectionStatus status,
+                          const GError             *connection_error)
 {
     /* The only status expected at this point is DISCONNECTED or CONNECTED,
      * although here we just process the DISCONNECTED one.
@@ -1360,8 +1427,10 @@ report_connection_status (MMBaseBearer *self,
 
     /* In the generic bearer implementation we just need to reset the
      * interface status */
-    if (status == MM_BEARER_CONNECTION_STATUS_DISCONNECTED)
+    if (status == MM_BEARER_CONNECTION_STATUS_DISCONNECTED) {
+        bearer_update_connection_error (self, connection_error);
         bearer_update_status (self, MM_BEARER_STATUS_DISCONNECTED);
+    }
 }
 
 /*
@@ -1391,15 +1460,28 @@ report_connection_status (MMBaseBearer *self,
  * pppd should detect it) and disconnect the bearer through DBus.
  */
 void
-mm_base_bearer_report_connection_status (MMBaseBearer             *self,
-                                         MMBearerConnectionStatus  status)
+mm_base_bearer_report_connection_status_detailed (MMBaseBearer             *self,
+                                                  MMBearerConnectionStatus  status,
+                                                  const GError             *connection_error)
 {
-    if ((status == MM_BEARER_CONNECTION_STATUS_DISCONNECTED) && self->priv->ignore_disconnection_reports) {
-        mm_obj_dbg (self, "ignoring disconnection report");
-        return;
+    /* Reporting disconnection? */
+    if (status == MM_BEARER_CONNECTION_STATUS_DISCONNECTED || status == MM_BEARER_CONNECTION_STATUS_CONNECTION_FAILED) {
+        if (self->priv->ignore_disconnection_reports) {
+            mm_obj_dbg (self, "ignoring disconnection report");
+            return;
+        }
+
+        /* Setup a generic default error if none explicitly given when reporting
+         * bearer disconnections. */
+        if (!connection_error) {
+            g_autoptr(GError) default_connection_error = NULL;
+
+            default_connection_error = mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_UNKNOWN, self);
+            return MM_BASE_BEARER_GET_CLASS (self)->report_connection_status (self, status, default_connection_error);
+        }
     }
 
-    return MM_BASE_BEARER_GET_CLASS (self)->report_connection_status (self, status);
+    return MM_BASE_BEARER_GET_CLASS (self)->report_connection_status (self, status, connection_error);
 }
 
 /*****************************************************************************/

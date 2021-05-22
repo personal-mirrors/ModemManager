@@ -628,20 +628,14 @@ connect_set_ready (MbimDevice   *device,
                         mbim_activation_state_get_string (activation_state),
                         mbim_context_ip_type_get_string (ctx->requested_ip_type),
                         mbim_context_ip_type_get_string (ctx->activated_ip_type),
-                        nw_error ? mbim_nw_error_get_string (nw_error) : "none");
+                        mbim_nw_error_get_string (nw_error));
             /* If the response reports an ACTIVATED state, we're good even if
              * there is a nw_error set (e.g. asking for IPv4v6 may return a
              * 'pdp-type-ipv4-only-allowed' nw_error). */
             if (activation_state != MBIM_ACTIVATION_STATE_ACTIVATED &&
                 activation_state != MBIM_ACTIVATION_STATE_ACTIVATING) {
-                if (nw_error) {
-                    g_clear_error (&error);
-                    error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error);
-                } else if (!error) {
-                    error = g_error_new (MM_MOBILE_EQUIPMENT_ERROR,
-                                         MM_MOBILE_EQUIPMENT_ERROR_GPRS_UNKNOWN,
-                                         "Unknown error: context activation failed");
-                }
+                g_clear_error (&error);
+                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
             }
         } else {
             /* Prefer the error from the result to the parsing error */
@@ -843,7 +837,7 @@ packet_service_set_ready (MbimDevice *device,
                 &inner_error)) {
             if (nw_error) {
                 g_clear_error (&error);
-                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error);
+                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
             } else {
                 g_autofree gchar *str = NULL;
 
@@ -1402,7 +1396,7 @@ disconnect_set_ready (MbimDevice   *device,
     if (g_error_matches (error, MBIM_STATUS_ERROR, MBIM_STATUS_ERROR_FAILURE) && parsed_result && nw_error != 0) {
         g_assert (!inner_error);
         g_error_free (error);
-        error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error);
+        error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
         /* error out with nw_error error */
         goto out;
     }
@@ -1520,15 +1514,16 @@ mm_bearer_mbim_get_session_id (MMBearerMbim *self)
 /*****************************************************************************/
 
 static void
-report_connection_status (MMBaseBearer *self,
-                          MMBearerConnectionStatus status)
+report_connection_status (MMBaseBearer             *self,
+                          MMBearerConnectionStatus  status,
+                          const GError             *connection_error)
 {
     if (status == MM_BEARER_CONNECTION_STATUS_DISCONNECTED)
         /* Cleanup all connection related data */
         reset_bearer_connection (MM_BEARER_MBIM (self));
 
     /* Chain up parent's report_connection_status() */
-    MM_BASE_BEARER_CLASS (mm_bearer_mbim_parent_class)->report_connection_status (self, status);
+    MM_BASE_BEARER_CLASS (mm_bearer_mbim_parent_class)->report_connection_status (self, status, connection_error);
 }
 
 /*****************************************************************************/
