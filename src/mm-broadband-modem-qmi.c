@@ -8769,19 +8769,18 @@ load_initial_eps_bearer_get_lte_attach_pdn_list_ready (QmiClientWds *client,
         return;
     }
 
+    /* Resize array to match |current_list| */
+    g_array_set_size (self->priv->current_pdn_list, current_list->len);
+
     mm_obj_dbg (self, "Found %u LTE attach PDNs defined", current_list->len);
     for (i = 0; i < current_list->len; i++) {
+        g_array_index (self->priv->current_pdn_list, guint16, i) = g_array_index (current_list, guint16, i);
         if (i == 0) {
             self->priv->default_attach_pdn = g_array_index (current_list, guint16, i);
             mm_obj_dbg (self, "Default LTE attach PDN profile: %u", self->priv->default_attach_pdn);
         } else
             mm_obj_dbg (self, "Additional LTE attach PDN profile: %u", g_array_index (current_list, guint16, i));
     }
-
-    if (self->priv->current_pdn_list)
-        g_array_free (self->priv->current_pdn_list, TRUE);
-
-    self->priv->current_pdn_list = g_array_copy (current_list);
 
     load_initial_eps_bearer_get_profile_settings (task, client);
 }
@@ -10534,6 +10533,7 @@ mm_broadband_modem_qmi_init (MMBroadbandModemQmi *self)
     self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self,
                                               MM_TYPE_BROADBAND_MODEM_QMI,
                                               MMBroadbandModemQmiPrivate);
+    self->priv->current_pdn_list = g_array_new (FALSE, FALSE, sizeof (guint16));
 }
 
 static void
@@ -10548,6 +10548,9 @@ finalize (GObject *object)
     g_free (self->priv->current_operator_description);
     if (self->priv->supported_bands)
         g_array_unref (self->priv->supported_bands);
+
+    if (self->priv->current_pdn_list)
+        g_array_free (self->priv->current_pdn_list, TRUE);
 
     G_OBJECT_CLASS (mm_broadband_modem_qmi_parent_class)->finalize (object);
 }
@@ -10572,9 +10575,6 @@ dispose (GObject *object)
 
     g_list_free_full (self->priv->firmware_list, g_object_unref);
     self->priv->firmware_list = NULL;
-
-    if (self->priv->current_pdn_list)
-        g_array_free (self->priv->current_pdn_list, TRUE);
 
     g_clear_object (&self->priv->current_firmware);
 
