@@ -11937,6 +11937,211 @@ enable (MMBaseModem *self,
 
     g_object_unref (task);
 }
+/*****************************************************************************/
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+typedef enum {
+    SYNCING_STEP_FIRST,
+    SYNCING_STEP_IFACE_MODEM,
+    SYNCING_STEP_IFACE_3GPP,
+    SYNCING_STEP_IFACE_TIME,
+    SYNCING_STEP_LAST,
+} SyncingStep;
+
+typedef struct {
+    SyncingStep step;
+} SyncingContext;
+
+static void syncing_step (GTask *task);
+
+static gboolean
+synchronize_finish (MMBaseModem   *self,
+                    GAsyncResult  *res,
+                    GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+iface_modem_time_sync_ready (MMIfaceModemTime *self,
+                             GAsyncResult     *res,
+                             GTask            *task)
+{
+    SyncingContext    *ctx;
+    g_autoptr(GError)  error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    if (!mm_iface_modem_time_sync_finish (self, res, &error))
+        mm_obj_warn (self, "time interface synchronization failed: %s", error->message);
+
+    /* Go on to next step */
+    ctx->step++;
+    syncing_step (task);
+}
+
+static void
+iface_modem_3gpp_sync_ready (MMIfaceModem3gpp *self,
+                             GAsyncResult     *res,
+                             GTask            *task)
+{
+    SyncingContext    *ctx;
+    g_autoptr(GError) error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    if (!mm_iface_modem_3gpp_sync_finish (self, res, &error))
+        mm_obj_warn (self, "3GPP interface synchronization failed: %s", error->message);
+
+    /* Go on to next step */
+    ctx->step++;
+    syncing_step (task);
+}
+
+static void
+iface_modem_sync_ready (MMIfaceModem *self,
+                        GAsyncResult *res,
+                        GTask        *task)
+{
+    SyncingContext    *ctx;
+    MMModemLock        lock;
+    g_autoptr(GError)  error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    if (!mm_iface_modem_sync_finish (self, res, &error))
+        mm_obj_warn (self, "modem interface synchronization failed: %s", error->message);
+
+    /* The synchronization logic only runs on modems that were enabled before
+     * the suspend/resume cycle, and therefore we should not get SIM-PIN locked
+     * at this point, unless the SIM was swapped. */
+    lock = mm_iface_modem_get_unlock_required (self);
+    if (lock == MM_MODEM_LOCK_UNKNOWN || lock == MM_MODEM_LOCK_SIM_PIN || lock == MM_MODEM_LOCK_SIM_PUK) {
+        /* Abort the sync() operation right away, and report a new SIM event that will
+         * disable the modem and trigger a full reprobe */
+        mm_obj_warn (self, "SIM is locked... synchronization aborted");
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
+                                 "Locked SIM found during modem interface synchronization");
+        g_object_unref (task);
+        return;
+    }
+
+    /* Not locked, go on to next step */
+    mm_obj_dbg (self, "modem unlocked, continue synchronization");
+    ctx->step++;
+    syncing_step (task);
+    return;
+}
+
+static void
+syncing_step (GTask *task)
+{
+    MMBroadbandModem *self;
+    SyncingContext   *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    switch (ctx->step) {
+    case SYNCING_STEP_FIRST:
+        ctx->step++;
+        /* fall through */
+
+    case SYNCING_STEP_IFACE_MODEM:
+        /*
+         * Start interface Modem synchronization.
+         * We want to make sure that the SIM is unlocked and not swapped before
+         * synchronizing other interfaces.
+         */
+        if (!self->priv->modem_dbus_skeleton) {
+            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_ABORTED,
+                                     "Synchronization aborted: no modem exposed in DBus");
+            g_object_unref (task);
+            return;
+        }
+        mm_obj_info (self, "resume synchronization state (%d/%d): modem interface sync",
+                     ctx->step, SYNCING_STEP_LAST);
+        mm_iface_modem_sync (MM_IFACE_MODEM (self),
+                             (GAsyncReadyCallback)iface_modem_sync_ready,
+                             task);
+        return;
+
+    case SYNCING_STEP_IFACE_3GPP:
+        /*
+         * Start interface 3GPP synchronization.
+         * We hardly depend on the registration and bearer status,
+         * therefore we cannot continue with the other steps until
+         * this one is finished.
+         */
+        if (self->priv->modem_3gpp_dbus_skeleton) {
+            mm_obj_info (self, "resume synchronization state (%d/%d): 3GPP interface sync",
+                         ctx->step, SYNCING_STEP_LAST);
+            mm_iface_modem_3gpp_sync (MM_IFACE_MODEM_3GPP (self), (GAsyncReadyCallback)iface_modem_3gpp_sync_ready, task);
+            return;
+        }
+        ctx->step++;
+        /* fall through */
+
+    case SYNCING_STEP_IFACE_TIME:
+        /*
+         * Synchronize asynchronously the Time interface.
+         */
+        if (self->priv->modem_time_dbus_skeleton) {
+            mm_obj_info (self, "resume synchronization state (%d/%d): time interface sync",
+                         ctx->step, SYNCING_STEP_LAST);
+            mm_iface_modem_time_sync (MM_IFACE_MODEM_TIME (self), (GAsyncReadyCallback)iface_modem_time_sync_ready, task);
+            return;
+        }
+        ctx->step++;
+        /* fall through */
+
+    case SYNCING_STEP_LAST:
+        mm_obj_info (self, "resume synchronization state (%d/%d): all done",
+                     ctx->step, SYNCING_STEP_LAST);
+        /* We are done without errors! */
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+
+    default:
+        break;
+    }
+
+    g_assert_not_reached ();
+}
+
+/* 'sync' as function name conflicts with a declared function in unistd.h */
+static void
+synchronize (MMBaseModem         *self,
+             GAsyncReadyCallback  callback,
+             gpointer             user_data)
+{
+    SyncingContext *ctx;
+    GTask          *task;
+
+    task = g_task_new (MM_BROADBAND_MODEM (self), NULL, callback, user_data);
+
+    /* Synchronization after resume is not needed on modems that have never
+     * been enabled.
+     */
+    if (MM_BROADBAND_MODEM (self)->priv->modem_state < MM_MODEM_STATE_ENABLED) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_WRONG_STATE,
+                                 "Synchronization after resume not needed in modem state '%s'",
+                                 mm_modem_state_get_string (MM_BROADBAND_MODEM (self)->priv->modem_state));
+        g_object_unref (task);
+        return;
+    }
+
+    /* Create SyncingContext */
+    ctx = g_new0 (SyncingContext, 1);
+    ctx->step = SYNCING_STEP_FIRST;
+    g_task_set_task_data (task, ctx, (GDestroyNotify)g_free);
+
+    syncing_step (task);
+}
+
+#endif
 
 /*****************************************************************************/
 
@@ -13342,6 +13547,11 @@ mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
     base_modem_class->enable_finish = enable_finish;
     base_modem_class->disable = disable;
     base_modem_class->disable_finish = disable_finish;
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+    base_modem_class->sync = synchronize;
+    base_modem_class->sync_finish = synchronize_finish;
+#endif
 
     klass->setup_ports = setup_ports;
     klass->initialization_started = initialization_started;

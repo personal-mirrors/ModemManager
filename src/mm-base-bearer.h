@@ -125,15 +125,43 @@ struct _MMBaseBearerClass {
                                     GError **error);
 
     /* Monitor connection status:
-     * NOTE: only CONNECTED or DISCONNECTED should be reported here; this method
+     *
+     * Only CONNECTED or DISCONNECTED should be reported here; this method
      * is used to poll for connection status once the connection has been
-     * established */
+     * established.
+     *
+     * This method will return MM_CORE_ERROR_UNSUPPORTED if the polling
+     * is not required (i.e. if we can safely rely on async indications
+     * sent by the modem).
+     */
     void (* load_connection_status) (MMBaseBearer *bearer,
                                      GAsyncReadyCallback callback,
                                      gpointer user_data);
     MMBearerConnectionStatus (* load_connection_status_finish) (MMBaseBearer *bearer,
                                                                 GAsyncResult *res,
                                                                 GError **error);
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+    /* Reload connection status:
+     *
+     * This method should return the exact connection status of the bearer, and
+     * the check must always be performed (if supported). This method should not
+     * return MM_CORE_ERROR_UNSUPPORTED as a way to skip the operation, as in
+     * this case the connection monitoring is required during the quick
+     * suspend/resume synchronization.
+     *
+     * It is up to each protocol/plugin whether providing the same method here
+     * and in load_connection_status() makes sense.
+     */
+    void (* reload_connection_status) (MMBaseBearer *bearer,
+                                       GAsyncReadyCallback callback,
+                                       gpointer user_data);
+    MMBearerConnectionStatus (* reload_connection_status_finish) (MMBaseBearer *bearer,
+                                                                  GAsyncResult *res,
+                                                                  GError **error);
+
+#endif
 
     /* Reload statistics */
     void (* reload_stats) (MMBaseBearer *bearer,
@@ -184,5 +212,17 @@ void mm_base_bearer_report_connection_status_detailed (MMBaseBearer             
 
 /* When unknown, just pass NULL */
 #define mm_base_bearer_report_connection_status(self, status) mm_base_bearer_report_connection_status_detailed (self, status, NULL)
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+/* Sync Broadband Bearer (async) */
+void     mm_base_bearer_sync        (MMBaseBearer *self,
+                                     GAsyncReadyCallback callback,
+                                     gpointer user_data);
+gboolean mm_base_bearer_sync_finish (MMBaseBearer *self,
+                                     GAsyncResult *res,
+                                     GError **error);
+
+#endif
 
 #endif /* MM_BASE_BEARER_H */

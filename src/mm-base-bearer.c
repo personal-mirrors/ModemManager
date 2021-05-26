@@ -1486,6 +1486,133 @@ mm_base_bearer_report_connection_status_detailed (MMBaseBearer             *self
 
 /*****************************************************************************/
 
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+typedef struct _SyncingContext SyncingContext;
+static void interface_syncing_step (GTask *task);
+
+typedef enum {
+    SYNCING_STEP_FIRST,
+    SYNCING_STEP_REFRESH_CONNECTION,
+    SYNCING_STEP_LAST
+} SyncingStep;
+
+struct _SyncingContext {
+    SyncingStep    step;
+    MMBearerStatus status;
+};
+
+gboolean
+mm_base_bearer_sync_finish (MMBaseBearer  *self,
+                            GAsyncResult  *res,
+                            GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+reload_connection_status_ready (MMBaseBearer *self,
+                                GAsyncResult *res,
+                                GTask        *task)
+{
+    SyncingContext           *ctx;
+    MMBearerConnectionStatus  reloaded_status;
+    g_autoptr(GError)         error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    /* The only update we're really interested in is the connected->disconnected
+     * one, because any other would be extremely strange and it's probably not
+     * worth trying to support those; e.g. a disconnected->connected change here
+     * would be impossible to be handled correctly. We'll also ignore intermediate
+     * states (connecting/disconnecting), as we can rely on the reports of the final
+     * state at some point soon.
+     *
+     * So, just handle DISCONNECTED at this point.
+     */
+    reloaded_status = MM_BASE_BEARER_GET_CLASS (self)->reload_connection_status_finish (self, res, &error);
+    if (reloaded_status == MM_BEARER_CONNECTION_STATUS_UNKNOWN)
+        mm_obj_warn (self, "reloading connection status failed: %s", error->message);
+    else if ((ctx->status == MM_BEARER_STATUS_CONNECTED) &&
+             (reloaded_status == MM_BEARER_CONNECTION_STATUS_DISCONNECTED)) {
+        mm_obj_dbg (self, "disconnection detected during status synchronization");
+        mm_base_bearer_report_connection_status (self, reloaded_status);
+    }
+
+    /* Go on to the next step */
+    ctx->step++;
+    interface_syncing_step (task);
+}
+
+static void
+interface_syncing_step (GTask *task)
+{
+    MMBaseBearer   *self;
+    SyncingContext *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    switch (ctx->step) {
+    case SYNCING_STEP_FIRST:
+        ctx->step++;
+        /* fall through */
+
+    case SYNCING_STEP_REFRESH_CONNECTION:
+        /*
+         * AT+PPP based connections should not be synced.
+         * When a AT+PPP connection bearer is connected, the 'ignore_disconnection_reports' flag is set.
+         */
+        if (!self->priv->ignore_disconnection_reports) {
+            if (!MM_BASE_BEARER_GET_CLASS (self)->reload_connection_status)
+                mm_obj_warn (self, "unable to reload connection status, method not implemented");
+            else {
+                mm_obj_dbg (self, "refreshing connection status");
+                MM_BASE_BEARER_GET_CLASS (self)->reload_connection_status (self,
+                                                                           (GAsyncReadyCallback) reload_connection_status_ready,
+                                                                           task);
+                return;
+            }
+        }
+        ctx->step++;
+        /* fall through */
+
+    case SYNCING_STEP_LAST:
+        /* We are done without errors! */
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+
+    default:
+        break;
+    }
+
+    g_assert_not_reached ();
+}
+
+void
+mm_base_bearer_sync (MMBaseBearer        *self,
+                     GAsyncReadyCallback  callback,
+                     gpointer             user_data)
+{
+    SyncingContext *ctx;
+    GTask          *task;
+
+    /* Create SyncingContext and store the original bearer status */
+    ctx = g_new0 (SyncingContext, 1);
+    ctx->step = SYNCING_STEP_FIRST;
+    ctx->status = self->priv->status;
+
+    /* Create sync steps task and execute it */
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, ctx, (GDestroyNotify)g_free);
+    interface_syncing_step (task);
+}
+
+#endif
+
+/*****************************************************************************/
+
 static gchar *
 log_object_build_id (MMLogObject *_self)
 {

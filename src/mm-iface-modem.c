@@ -1598,8 +1598,9 @@ mm_iface_modem_refresh_signal (MMIfaceModem *self)
 {
     SignalCheckContext *ctx;
 
-    /* Don't refresh polling if we're not enabled */
     ctx = get_signal_check_context (self);
+
+    /* Don't refresh polling if we're not enabled */
     if (!ctx->enabled) {
         mm_obj_dbg (self, "periodic signal check refresh ignored: checks not enabled");
         return;
@@ -4204,6 +4205,203 @@ mm_iface_modem_enable (MMIfaceModem *self,
 
     interface_enabling_step (task);
 }
+
+/*****************************************************************************/
+/* MODEM SYNCHRONIZATION */
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+typedef struct _SyncingContext SyncingContext;
+static void interface_syncing_step (GTask *task);
+
+typedef enum {
+    SYNCING_STEP_FIRST,
+    SYNCING_STEP_DETECT_SIM_SWAP,
+    SYNCING_STEP_REFRESH_SIM_LOCK,
+    SYNCING_STEP_REFRESH_SIGNAL_STRENGTH,
+    SYNCING_STEP_REFRESH_BEARERS,
+    SYNCING_STEP_LAST
+} SyncingStep;
+
+struct _SyncingContext {
+    SyncingStep step;
+};
+
+gboolean
+mm_iface_modem_sync_finish (MMIfaceModem  *self,
+                            GAsyncResult  *res,
+                            GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+sync_sim_lock_ready (MMIfaceModem *self,
+                     GAsyncResult *res,
+                     GTask        *task)
+{
+    SyncingContext     *ctx;
+    g_autoptr (GError)  error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->load_unlock_required_finish (self, res, &error))
+        mm_obj_warn (self, "checking sim lock status failed: %s", error->message);
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_syncing_step (task);
+}
+
+static void
+sync_detect_sim_swap_ready (MMIfaceModem *self,
+                            GAsyncResult *res,
+                            GTask        *task)
+{
+    SyncingContext     *ctx;
+    g_autoptr (GError)  error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    if (!mm_iface_modem_check_for_sim_swap_finish (self, res, &error))
+        mm_obj_warn (self, "checking sim swap failed: %s", error->message);
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_syncing_step (task);
+}
+
+static void
+sync_all_bearers_ready (MMBearerList *bearer_list,
+                        GAsyncResult *res,
+                        GTask        *task)
+{
+    MMIfaceModem       *self;
+    SyncingContext     *ctx;
+    g_autoptr (GError)  error = NULL;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    if (!mm_bearer_list_sync_all_bearers_finish (bearer_list, res, &error))
+        mm_obj_warn (self, "synchronizing all bearer status failed: %s", error->message);
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_syncing_step (task);
+}
+
+static void
+reload_bearers (GTask *task)
+{
+    MMIfaceModem            *self;
+    SyncingContext          *ctx;
+    g_autoptr(MMBearerList)  bearer_list = NULL;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_BEARER_LIST, &bearer_list,
+                  NULL);
+
+    if (!bearer_list) {
+        /* Go on to next step */
+        ctx->step++;
+        interface_syncing_step (task);
+        return;
+    }
+
+    mm_bearer_list_sync_all_bearers (bearer_list,
+                                     (GAsyncReadyCallback)sync_all_bearers_ready,
+                                     task);
+}
+
+static void
+interface_syncing_step (GTask *task)
+{
+    MMIfaceModem   *self;
+    SyncingContext *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx = g_task_get_task_data (task);
+
+    switch (ctx->step) {
+    case SYNCING_STEP_FIRST:
+        ctx->step++;
+        /* fall through */
+
+    case SYNCING_STEP_DETECT_SIM_SWAP:
+        /*
+         * Detect possible SIM swaps.
+         * Checking lock status in all cases after possible SIM swaps are detected.
+         */
+        mm_iface_modem_check_for_sim_swap (
+            self,
+            0,
+            NULL,
+            (GAsyncReadyCallback)sync_detect_sim_swap_ready,
+            task);
+        return;
+
+    case SYNCING_STEP_REFRESH_SIM_LOCK:
+        /*
+         * Refresh SIM lock status and wait until complete.
+         */
+        MM_IFACE_MODEM_GET_INTERFACE (self)->load_unlock_required (
+            self,
+            FALSE,
+            (GAsyncReadyCallback)sync_sim_lock_ready,
+            task);
+        return;
+
+    case SYNCING_STEP_REFRESH_SIGNAL_STRENGTH:
+        /*
+         * Restart the signal strength and access technologies refresh sequence.
+         */
+        mm_iface_modem_refresh_signal (self);
+        ctx->step++;
+        /* fall through */
+
+    case SYNCING_STEP_REFRESH_BEARERS:
+        /*
+         * Refresh bearers.
+         */
+        reload_bearers (task);
+        return;
+
+    case SYNCING_STEP_LAST:
+        /* We are done without errors! */
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+
+    default:
+        break;
+    }
+
+    g_assert_not_reached ();
+}
+
+void
+mm_iface_modem_sync (MMIfaceModem        *self,
+                     GAsyncReadyCallback  callback,
+                     gpointer             user_data)
+{
+    SyncingContext *ctx;
+    GTask          *task;
+
+    /* Create SyncingContext */
+    ctx = g_new0 (SyncingContext, 1);
+    ctx->step = SYNCING_STEP_FIRST;
+
+    /* Create sync steps task and execute it */
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, ctx, (GDestroyNotify)g_free);
+    interface_syncing_step (task);
+}
+
+#endif
 
 /*****************************************************************************/
 /* MODEM INITIALIZATION */
