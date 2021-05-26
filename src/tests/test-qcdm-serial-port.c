@@ -444,10 +444,13 @@ int main (int argc, char **argv)
 {
     g_test_init (&argc, &argv, NULL);
 
-    TESTCASE_PTY ("/MM/QCDM/Verinfo", test_verinfo);
-    TESTCASE_PTY ("/MM/QCDM/Sierra-Cns-Rejected", test_sierra_cns_rejected);
-    TESTCASE_PTY ("/MM/QCDM/Random-Data-Rejected", test_random_data_rejected);
-    TESTCASE_PTY ("/MM/QCDM/Leading-Frame-Markers", test_leading_frame_markers);
+    // Disabled in ChromiumOS because of flakiness.
+    // TODO(b/172214192); Re-enabled them once
+    // https://gitlab.freedesktop.org/mobile-broadband/ModemManager/-/issues/184 is resolved
+    // TESTCASE_PTY ("/MM/QCDM/Verinfo", test_verinfo);
+    // TESTCASE_PTY ("/MM/QCDM/Sierra-Cns-Rejected", test_sierra_cns_rejected);
+    // TESTCASE_PTY ("/MM/QCDM/Random-Data-Rejected", test_random_data_rejected);
+    // TESTCASE_PTY ("/MM/QCDM/Leading-Frame-Markers", test_leading_frame_markers);
 
     return g_test_run ();
 }
