@@ -494,6 +494,7 @@ disconnect_connection_status_ready (MMBroadbandBearerCinterion *self,
                                  "CID %u is reported connected", ctx->cid);
         g_object_unref (task);
         return;
+    case MM_BEARER_CONNECTION_STATUS_CONNECTING:
     case MM_BEARER_CONNECTION_STATUS_DISCONNECTING:
     case MM_BEARER_CONNECTION_STATUS_CONNECTION_FAILED:
     default:
