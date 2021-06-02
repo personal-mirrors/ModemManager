@@ -814,15 +814,19 @@ modem_load_device_identifier (MMIfaceModem *self,
                               GAsyncReadyCallback callback,
                               gpointer user_data)
 {
-    gchar *device_identifier;
-    GTask *task;
+    gchar  *device_identifier;
+    GTask  *task;
+    GError *error = NULL;
+
+    task = g_task_new (self, NULL, callback, user_data);
 
     /* Just use dummy ATI/ATI1 replies, all the other internal info should be
      * enough for uniqueness */
-    device_identifier = mm_broadband_modem_create_device_identifier (MM_BROADBAND_MODEM (self), "", "");
-
-    task = g_task_new (self, NULL, callback, user_data);
-    g_task_return_pointer (task, device_identifier, g_free);
+    device_identifier = mm_broadband_modem_create_device_identifier (MM_BROADBAND_MODEM (self), "", "", &error);
+    if (!device_identifier)
+        g_task_return_error (task, error);
+    else
+        g_task_return_pointer (task, device_identifier, g_free);
     g_object_unref (task);
 }
 
@@ -3588,40 +3592,14 @@ device_notification_cb (MbimDevice *device,
                 mbim_cid_get_printable (service,
                                         mbim_message_indicate_status_get_cid (notification)));
 
-    switch (service) {
-    case MBIM_SERVICE_BASIC_CONNECT:
+    if (service == MBIM_SERVICE_BASIC_CONNECT)
         basic_connect_notification (self, notification);
-        break;
-    case MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS:
+    else if (service == MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS)
         ms_basic_connect_extensions_notification (self, notification);
-        break;
-    case MBIM_SERVICE_SMS:
+    else if (service == MBIM_SERVICE_SMS)
         sms_notification (self, notification);
-        break;
-    case MBIM_SERVICE_USSD:
+    else if (service == MBIM_SERVICE_USSD)
         ussd_notification (self, notification);
-        break;
-    case MBIM_SERVICE_INVALID:
-    case MBIM_SERVICE_PHONEBOOK:
-    case MBIM_SERVICE_STK:
-    case MBIM_SERVICE_AUTH:
-    case MBIM_SERVICE_DSS:
-    case MBIM_SERVICE_MS_FIRMWARE_ID:
-    case MBIM_SERVICE_MS_HOST_SHUTDOWN:
-    case MBIM_SERVICE_PROXY_CONTROL:
-    case MBIM_SERVICE_QMI:
-    case MBIM_SERVICE_ATDS:
-    case MBIM_SERVICE_INTEL_FIRMWARE_UPDATE:
-#if MBIM_CHECK_VERSION (1,25,1)
-    case MBIM_SERVICE_MS_SAR:
-#endif
-#if MBIM_CHECK_VERSION (1,25,3)
-    case MBIM_SERVICE_QDU:
-#endif
-    default:
-        /* Ignore */
-        break;
-    }
 }
 
 static void
