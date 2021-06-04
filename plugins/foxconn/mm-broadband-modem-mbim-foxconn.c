@@ -41,6 +41,7 @@
 static void iface_modem_location_init (MMIfaceModemLocation *iface);
 
 #if defined WITH_QMI
+static void iface_modem_init          (MMIfaceModem *iface);
 static void iface_modem_firmware_init (MMIfaceModemFirmware *iface);
 #endif
 
@@ -48,6 +49,7 @@ static MMIfaceModemLocation *iface_modem_location_parent;
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbimFoxconn, mm_broadband_modem_mbim_foxconn, MM_TYPE_BROADBAND_MODEM_MBIM, 0,
 #if defined WITH_QMI
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_FIRMWARE, iface_modem_firmware_init)
 #endif
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_LOCATION, iface_modem_location_init))
@@ -62,6 +64,62 @@ struct _MMBroadbandModemMbimFoxconnPrivate {
     FeatureSupport unmanaged_gps_support;
 };
 
+
+#if defined WITH_QMI
+
+/*****************************************************************************/
+/* FCC unlock (Modem interface) */
+
+static gboolean
+fcc_unlock_finish (MMIfaceModem  *self,
+                   GAsyncResult  *res,
+                   GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+dms_foxconn_set_fcc_authentication_ready (QmiClientDms *client,
+                                          GAsyncResult *res,
+                                          GTask        *task)
+{
+    GError *error = NULL;
+    g_autoptr(QmiMessageDmsFoxconnSetFccAuthenticationOutput) output = NULL;
+
+    output = qmi_client_dms_foxconn_set_fcc_authentication_finish (client, res, &error);
+    if (!output || !qmi_message_dms_foxconn_set_fcc_authentication_output_get_result (output, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+fcc_unlock (MMIfaceModem        *self,
+            GAsyncReadyCallback  callback,
+            gpointer             user_data)
+{
+    GTask     *task;
+    QmiClient *client = NULL;
+    g_autoptr(QmiMessageDmsFoxconnSetFccAuthenticationInput) input = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_DMS, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    input = qmi_message_dms_foxconn_set_fcc_authentication_input_new ();
+    qmi_message_dms_foxconn_set_fcc_authentication_input_set_value (input, 0x00, NULL);
+    qmi_client_dms_foxconn_set_fcc_authentication (QMI_CLIENT_DMS (client),
+                                                   input,
+                                                   5,
+                                                   NULL,
+                                                   (GAsyncReadyCallback)dms_foxconn_set_fcc_authentication_ready,
+                                                   task);
+}
+
 /*****************************************************************************/
 /* Firmware update settings
  *
@@ -69,8 +127,6 @@ struct _MMBroadbandModemMbimFoxconnPrivate {
  * because this is the only clean way to get the expected firmware version to
  * report.
  */
-
-#if defined WITH_QMI
 
 static MMFirmwareUpdateSettings *
 firmware_load_update_settings_finish (MMIfaceModemFirmware  *self,
@@ -89,24 +145,15 @@ foxconn_get_firmware_version_ready (QmiClientDms *client,
     GError                                       *error = NULL;
     MMFirmwareUpdateSettings                     *update_settings = NULL;
     const gchar                                  *str;
-    MMIfaceModemFirmware                         *self;
 
     output = qmi_client_dms_foxconn_get_firmware_version_finish (client, res, &error);
     if (!output || !qmi_message_dms_foxconn_get_firmware_version_output_get_result (output, &error))
         goto out;
 
-    /* Create update settings now:
-     * 0x105b is the T99W175 module, T99W175 supports QDU,
-     * else support FASTBOOT and QMI PDC.
-     */
-    self = g_task_get_source_object (task);
-    if (mm_base_modem_get_vendor_id (MM_BASE_MODEM (self)) == 0x105b)
-        update_settings = mm_firmware_update_settings_new (MM_MODEM_FIRMWARE_UPDATE_METHOD_MBIM_QDU);
-    else {
-        update_settings = mm_firmware_update_settings_new (MM_MODEM_FIRMWARE_UPDATE_METHOD_FASTBOOT |
-                                                           MM_MODEM_FIRMWARE_UPDATE_METHOD_QMI_PDC);
-        mm_firmware_update_settings_set_fastboot_at (update_settings, "AT^FASTBOOT");
-    }
+    /* Create update settings now */
+    update_settings = mm_firmware_update_settings_new (MM_MODEM_FIRMWARE_UPDATE_METHOD_FASTBOOT |
+                                                       MM_MODEM_FIRMWARE_UPDATE_METHOD_QMI_PDC);
+    mm_firmware_update_settings_set_fastboot_at (update_settings, "AT^FASTBOOT");
 
     qmi_message_dms_foxconn_get_firmware_version_output_get_version (output, &str, NULL);
     mm_firmware_update_settings_set_version (update_settings, str);
@@ -478,6 +525,13 @@ iface_modem_location_init (MMIfaceModemLocation *iface)
 }
 
 #if defined WITH_QMI
+
+static void
+iface_modem_init (MMIfaceModem *iface)
+{
+    iface->fcc_unlock = fcc_unlock;
+    iface->fcc_unlock_finish = fcc_unlock_finish;
+}
 
 static void
 iface_modem_firmware_init (MMIfaceModemFirmware *iface)
