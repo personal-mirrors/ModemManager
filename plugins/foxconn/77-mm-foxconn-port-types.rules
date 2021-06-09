@@ -3,6 +3,7 @@
 ACTION!="add|change|move|bind", GOTO="mm_foxconn_port_types_end"
 
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="0489", GOTO="mm_foxconn_vendorcheck"
+SUBSYSTEMS=="pci", ATTRS{vendor}=="0x105b", GOTO="mm_foxconn_autosuspendchange"
 GOTO="mm_foxconn_port_types_end"
 
 LABEL="mm_foxconn_vendorcheck"
@@ -21,6 +22,12 @@ ATTRS{idVendor}=="0489", ATTRS{idProduct}=="e0b5", ENV{.MM_USBIFNUM}=="02", ENV{
 ATTRS{idVendor}=="0489", ATTRS{idProduct}=="e0b5", ENV{.MM_USBIFNUM}=="03", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1"
 ATTRS{idVendor}=="0489", ATTRS{idProduct}=="e0b5", ENV{.MM_USBIFNUM}=="04", ENV{ID_MM_PORT_TYPE_GPS}="1"
 ATTRS{idVendor}=="0489", ATTRS{idProduct}=="e0b5", ENV{.MM_USBIFNUM}=="05", ENV{ID_MM_PORT_TYPE_QCDM}="1"
+
+GOTO="mm_foxconn_port_types_end"
+
+LABEL="mm_foxconn_autosuspendchange"
+# Foxconn T99w175, autosuspend delay updated for a proper firmware update
+ATTRS{vendor}=="0x105b", ATTRS{device}=="0xe0ab|0xe0b0|0xe0b1", ATTR{power/autosuspend_delay_ms}="10000"
 
 GOTO="mm_foxconn_port_types_end"
 LABEL="mm_foxconn_port_types_end"
