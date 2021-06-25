@@ -298,7 +298,6 @@ mm_modem_3gpp_get_operator_name
 mm_modem_3gpp_dup_operator_name
 mm_modem_3gpp_get_enabled_facility_locks
 mm_modem_3gpp_get_registration_state
-mm_modem_3gpp_get_subscription_state
 mm_modem_3gpp_get_pco
 mm_modem_3gpp_get_eps_ue_mode_operation
 mm_modem_3gpp_get_initial_eps_bearer_path
@@ -544,7 +543,6 @@ MMLocationGpsNmea
 <SUBSECTION Getters>
 mm_location_gps_nmea_get_trace
 mm_location_gps_nmea_get_traces
-mm_location_gps_nmea_build_full
 <SUBSECTION Private>
 mm_location_gps_nmea_new
 mm_location_gps_nmea_new_from_string_variant
@@ -811,8 +809,8 @@ mm_modem_oma_cancel_session_sync
 mm_modem_oma_get_features
 mm_modem_oma_get_session_type
 mm_modem_oma_get_session_state
-mm_modem_peek_pending_network_initiated_sessions
-mm_modem_get_pending_network_initiated_sessions
+mm_modem_oma_peek_pending_network_initiated_sessions
+mm_modem_oma_get_pending_network_initiated_sessions
 <SUBSECTION Standard>
 MMModemOmaClass
 MMModemOmaPrivate
@@ -884,8 +882,6 @@ mm_simple_connect_properties_get_rm_protocol
 mm_simple_connect_properties_set_rm_protocol
 mm_simple_connect_properties_get_multiplex
 mm_simple_connect_properties_set_multiplex
-mm_simple_connect_properties_get_number
-mm_simple_connect_properties_set_number
 <SUBSECTION Private>
 mm_simple_connect_properties_get_bearer_properties
 mm_simple_connect_properties_new_from_dictionary
@@ -915,7 +911,6 @@ mm_simple_status_get_current_bands
 mm_simple_status_get_3gpp_registration_state
 mm_simple_status_get_3gpp_operator_code
 mm_simple_status_get_3gpp_operator_name
-mm_simple_status_get_3gpp_subscription_state
 mm_simple_status_get_cdma_cdma1x_registration_state
 mm_simple_status_get_cdma_evdo_registration_state
 mm_simple_status_get_cdma_nid
@@ -1213,8 +1208,6 @@ mm_bearer_properties_get_rm_protocol
 mm_bearer_properties_set_rm_protocol
 mm_bearer_properties_get_multiplex
 mm_bearer_properties_set_multiplex
-mm_bearer_properties_get_number
-mm_bearer_properties_set_number
 <SUBSECTION Private>
 mm_bearer_properties_new_from_dictionary
 mm_bearer_properties_new_from_string
@@ -1465,12 +1458,6 @@ mm_call_properties_new
 <SUBSECTION GettersSetters>
 mm_call_properties_get_number
 mm_call_properties_set_number
-mm_call_properties_get_direction
-mm_call_properties_set_direction
-mm_call_properties_get_state
-mm_call_properties_set_state
-mm_call_properties_get_state_reason
-mm_call_properties_set_state_reason
 <SUBSECTION Private>
 mm_call_properties_get_dictionary
 mm_call_properties_dup
@@ -1496,8 +1483,6 @@ MMPco
 mm_pco_get_session_id
 mm_pco_is_complete
 mm_pco_get_data
-<SUBSECTION List>
-mm_pco_list_free
 <SUBSECTION Private>
 mm_pco_new
 mm_pco_from_variant
@@ -1826,6 +1811,35 @@ mm_core_error_get_type
 mm_message_error_get_type
 mm_mobile_equipment_error_get_type
 mm_serial_error_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-compat</FILE>
+<TITLE>Deprecated Interface</TITLE>
+<SUBSECTION SimpleConnectProperties>
+mm_simple_connect_properties_get_number
+mm_simple_connect_properties_set_number
+<SUBSECTION BearerProperties>
+mm_bearer_properties_get_number
+mm_bearer_properties_set_number
+<SUBSECTION CallProperties>
+mm_call_properties_get_direction
+mm_call_properties_set_direction
+mm_call_properties_get_state
+mm_call_properties_set_state
+mm_call_properties_get_state_reason
+mm_call_properties_set_state_reason
+<SUBSECTION LocationGpsNmea>
+mm_location_gps_nmea_build_full
+<SUBSECTION Pco>
+mm_pco_list_free
+<SUBSECTION SimpleStatus>
+mm_simple_status_get_3gpp_subscription_state
+<SUBSECTION Modem3gpp>
+mm_modem_3gpp_get_subscription_state
+<SUBSECTION ModemOma>
+mm_modem_peek_pending_network_initiated_sessions
+mm_modem_get_pending_network_initiated_sessions
 </SECTION>
 
 <SECTION>

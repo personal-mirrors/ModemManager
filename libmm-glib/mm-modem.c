@@ -334,6 +334,8 @@ mm_modem_get_supported_capabilities (MMModem *self,
                                      guint *n_capabilities)
 {
     g_return_val_if_fail (MM_IS_MODEM (self), FALSE);
+    g_return_val_if_fail (capabilities != NULL, FALSE);
+    g_return_val_if_fail (n_capabilities != NULL, FALSE);
 
     return ensure_internal_supported_capabilities (self, capabilities, n_capabilities);
 }
@@ -392,43 +394,6 @@ mm_modem_get_current_capabilities (MMModem *self)
 
     return mm_gdbus_modem_get_current_capabilities (MM_GDBUS_MODEM (self));
 }
-
-/*****************************************************************************/
-
-#ifndef MM_DISABLE_DEPRECATED
-
-/**
- * mm_modem_get_max_bearers:
- * @self: a #MMModem.
- *
- * Gets the maximum number of defined packet data bearers this #MMModem
- * supports.
- *
- * This is not the number of active/connected bearers the modem supports,
- * but simply the number of bearers that may be defined at any given time.
- * For example, POTS and CDMA2000-only devices support only one bearer,
- * while GSM/UMTS devices typically support three or more, and any
- * LTE-capable device (whether LTE-only, GSM/UMTS-capable, and/or
- * CDMA2000-capable) also typically support three or more.
- *
- * Returns: the maximum number of defined packet data bearers.
- *
- * Since: 1.0
- * Deprecated: 1.18. There is no way to query the modem how many bearers
- * it supports, so the value exposed in this property in all the different
- * implementations is always equal to the one retrieved with
- * mm_modem_get_max_active_bearers(), so there is no point in using this
- * method.
- */
-guint
-mm_modem_get_max_bearers (MMModem *self)
-{
-    g_return_val_if_fail (MM_IS_MODEM (self), 0);
-
-    return mm_gdbus_modem_get_max_bearers (MM_GDBUS_MODEM (self));
-}
-
-#endif /* MM_DISABLE_DEPRECATED */
 
 /*****************************************************************************/
 
