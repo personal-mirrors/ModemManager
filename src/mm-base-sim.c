@@ -2617,7 +2617,7 @@ initable_init_async (GAsyncInitable *initable,
     mm_gdbus_sim_set_operator_identifier (MM_GDBUS_SIM (initable), NULL);
     mm_gdbus_sim_set_operator_name (MM_GDBUS_SIM (initable), NULL);
 
-    common_init_async (initable, cancellable, callback, user_data);
+  common_init_async(initable, cancellable, callback, user_data);
 }
 
 void

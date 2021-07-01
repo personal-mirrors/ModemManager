@@ -508,3 +508,184 @@ mm_sms_state_from_mbim_message_status (MbimSmsStatus status)
 
     return MM_SMS_STATE_UNKNOWN;
 }
+
+/*****************************************************************************/
+/* esim helpers to obtain eid */
+
+#define UICC_STATUS_OK 144
+#define EID_APDU_HEADER 5
+
+void
+esim_check_step_free (EsimCheckContext *ctx) {
+    g_free(ctx->eid);
+    g_free(ctx);
+}
+
+static void
+check_uicc_close_channel_ready (MbimDevice *device,
+                                GAsyncResult *res,
+                                GTask *task) {
+    g_autoptr(GError)      error = NULL;
+    g_autoptr(MbimMessage) response = NULL;
+    guint32                status;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response,
+                                          MBIM_MESSAGE_TYPE_COMMAND_DONE,
+                                          &error) &&
+        mbim_message_ms_uicc_low_level_access_close_channel_response_parse (
+            response, &status, &error) &&
+        status == UICC_STATUS_OK) {
+            EsimCheckContext *ctx;
+            ctx = g_task_get_task_data (task);
+            /* If ESIM_CHECK_STEP_UICC_CLOSE_CHANNEL is successful,
+                           go on to next step */
+            ctx->step++;
+            esim_check_step (device, task);
+            return;
+    }
+    g_task_return_error (task, g_error_copy (error));
+    g_object_unref (task);
+}
+
+static void
+check_uicc_apdu_ready (MbimDevice *device,
+                       GAsyncResult *res,
+                       GTask *task) {
+    g_autoptr(GError)        error = NULL;
+    g_autoptr(MbimMessage)   response = NULL;
+    guint32                  status;
+    guint32                  response_size;
+    const guint8            *out_response = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE,&error) &&
+        mbim_message_ms_uicc_low_level_access_apdu_response_parse (
+            response,
+            &status,
+            &response_size,
+            &out_response,
+            &error)) {
+        EsimCheckContext *ctx;
+        /* Store results */
+        ctx = g_task_get_task_data (task);
+        ctx->eid = mm_decode_eid ((const gchar *)(out_response + EID_APDU_HEADER),
+                                      response_size - EID_APDU_HEADER);
+
+        /* If ESIM_CHECK_STEP_UICC_GET_APDU is successful, go on to next step */
+        ctx->step++;
+        esim_check_step (device, task);
+        return;
+    }
+    g_task_return_error (task, error);
+    g_object_unref (task);
+}
+
+static void
+check_uicc_open_channel_ready (MbimDevice *device,
+                               GAsyncResult *res,
+                               GTask *task) {
+    g_autoptr(GError)      error = NULL;
+    g_autoptr(MbimMessage) response = NULL;
+    guint32                status;
+    guint32                channel;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        mbim_message_ms_uicc_low_level_access_open_channel_response_parse (
+            response,
+            &status,
+            &channel,
+            NULL,
+            NULL,
+            &error) &&
+            status == UICC_STATUS_OK) {
+                    EsimCheckContext *ctx = g_task_get_task_data (task);
+                    ctx->channel = channel;
+                    /* If ESIM_CHECK_STEP_UICC_OPEN_CHANNEL is successful, go on to next step */
+                    ctx->step++;
+                    esim_check_step (device, task);
+                    return;
+    }
+    g_task_return_error (task, g_error_copy (error));
+    g_object_unref (task);
+}
+
+void
+esim_check_step (MbimDevice *device,
+                 GTask *task)
+{
+    EsimCheckContext      *ctx;
+    g_autoptr(MbimMessage) message = NULL;
+    const guint8           app_id[16] = {0xa0, 0x00, 0x00, 0x05, 0x59, 0x10, 0x10, 0xff,
+                                         0xff, 0xff, 0xff, 0x89, 0x00, 0x00, 0x01, 0x00};
+
+    /* Don't run new steps if we're cancelled */
+    if (g_task_return_error_if_cancelled (task)) {
+        g_object_unref (task);
+        return;
+    }
+
+    ctx = g_task_get_task_data (task);
+    switch (ctx->step) {
+    case ESIM_CHECK_STEP_UICC_OPEN_CHANNEL: {
+        ctx->channel_grp = 1;
+        message = mbim_message_ms_uicc_low_level_access_open_channel_set_new (
+                        sizeof(guint8)*16,
+                        app_id,
+                        4,
+                        ctx->channel_grp,
+                        NULL);
+        mbim_device_command (device,
+                             message,
+                             10,
+                             NULL,
+                             (GAsyncReadyCallback)check_uicc_open_channel_ready,
+                             task);
+        break;
+    }
+    case ESIM_CHECK_STEP_UICC_GET_APDU: {
+        MbimUiccSecureMessaging secure_messaging = MBIM_UICC_SECURE_MESSAGING_NONE;
+        MbimUiccClassByteType class_byte_type = MBIM_UICC_CLASS_BYTE_TYPE_EXTENDED;
+        const guint8 apdu_cmd[12] = {0x81, 0xe2, 0x91, 0x00, 0x06, 0xbf,
+                                     0x3e, 0x03, 0x5c, 0x01, 0x5a, 0x00};
+
+        message = mbim_message_ms_uicc_low_level_access_apdu_set_new (ctx->channel,
+                                                                      secure_messaging,
+                                                                      class_byte_type,
+                                                                      sizeof(guint8)*12,
+                                                                      apdu_cmd,
+                                                                      NULL);
+        mbim_device_command (device,
+                             message,
+                             10,
+                             NULL,
+                             (GAsyncReadyCallback)check_uicc_apdu_ready,
+                             task);
+        break;
+    }
+    case ESIM_CHECK_STEP_UICC_CLOSE_CHANNEL: {
+        message = mbim_message_ms_uicc_low_level_access_close_channel_set_new (
+                      ctx->channel,
+                      ctx->channel_grp,
+                      NULL);
+        mbim_device_command (device,
+                             message,
+                             10,
+                             NULL,
+                             (GAsyncReadyCallback)check_uicc_close_channel_ready,
+                             task);
+        break;
+    }
+    case ESIM_CHECK_STEP_UICC_STEP_LAST:
+        /* We are done without errors! */
+        g_task_return_pointer (task, g_strdup (ctx->eid), g_free);
+        g_object_unref (task);
+        break;
+    default:
+        break;
+    }
+}

@@ -203,6 +203,37 @@ load_imsi (MMBaseSim *self,
 }
 
 /*****************************************************************************/
+/* Load EID */
+
+static gchar *
+load_eid_finish (MMBaseSim *self,
+                 GAsyncResult *res,
+                 GError **error)
+{
+    return g_task_propagate_pointer (G_TASK (res), error);
+}
+
+static void
+load_eid (MMBaseSim *self,
+          GAsyncReadyCallback callback,
+          gpointer user_data)
+{
+    MbimDevice *device;
+    GTask *task;
+    EsimCheckContext *esim_ctx;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    esim_ctx = g_new0 (EsimCheckContext, 1);
+    esim_ctx->step = ESIM_CHECK_STEP_UICC_OPEN_CHANNEL;
+    g_task_set_task_data (task, esim_ctx, (GDestroyNotify)esim_check_step_free);
+    esim_check_step (device, task);
+}
+
+/*****************************************************************************/
 /* Load operator identifier */
 
 static gchar *
@@ -723,6 +754,8 @@ mm_sim_mbim_class_init (MMSimMbimClass *klass)
     base_sim_class->load_sim_identifier_finish = load_sim_identifier_finish;
     base_sim_class->load_imsi = load_imsi;
     base_sim_class->load_imsi_finish = load_imsi_finish;
+    base_sim_class->load_eid = load_eid;
+    base_sim_class->load_eid_finish = load_eid_finish;
     base_sim_class->load_operator_identifier = load_operator_identifier;
     base_sim_class->load_operator_identifier_finish = load_operator_identifier_finish;
     base_sim_class->load_operator_name = load_operator_name;

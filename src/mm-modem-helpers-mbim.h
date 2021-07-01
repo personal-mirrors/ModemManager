@@ -56,4 +56,25 @@ MbimContextIpType   mm_bearer_ip_family_to_mbim_context_ip_type    (MMBearerIpFa
 
 MMSmsState mm_sms_state_from_mbim_message_status (MbimSmsStatus status);
 
+/*****************************************************************************/
+/* ESIM helpers to obtain EID */
+
+typedef enum {
+    ESIM_CHECK_STEP_UICC_OPEN_CHANNEL,
+    ESIM_CHECK_STEP_UICC_GET_APDU,
+    ESIM_CHECK_STEP_UICC_CLOSE_CHANNEL,
+    ESIM_CHECK_STEP_UICC_STEP_LAST
+} EsimCheckStep;
+
+typedef struct {
+    EsimCheckStep step;
+    guint32       channel;
+    guint32       channel_grp;
+    gchar        *eid;
+}EsimCheckContext;
+
+void esim_check_step (MbimDevice *device, GTask *task);
+
+void esim_check_step_free (EsimCheckContext *ctx);
+
 #endif  /* MM_MODEM_HELPERS_MBIM_H */
