@@ -42,10 +42,10 @@
 G_DEFINE_TYPE (MMModemMessaging, mm_modem_messaging, MM_GDBUS_TYPE_MODEM_MESSAGING_PROXY)
 
 struct _MMModemMessagingPrivate {
-    /* Supported Storage */
-    GMutex supported_storages_mutex;
-    guint supported_storages_id;
-    GArray *supported_storages;
+    /* Common mutex to sync access */
+    GMutex mutex;
+
+    PROPERTY_ARRAY_DECLARE (supported_storages)
 };
 
 /*****************************************************************************/
@@ -96,73 +96,6 @@ mm_modem_messaging_dup_path (MMModemMessaging *self)
 
 /*****************************************************************************/
 
-static void
-supported_storages_updated (MMModemMessaging *self,
-                            GParamSpec *pspec)
-{
-    g_mutex_lock (&self->priv->supported_storages_mutex);
-    {
-        GVariant *dictionary;
-
-        if (self->priv->supported_storages)
-            g_array_unref (self->priv->supported_storages);
-
-        dictionary = mm_gdbus_modem_messaging_get_supported_storages (MM_GDBUS_MODEM_MESSAGING (self));
-        self->priv->supported_storages = (dictionary ?
-                                          mm_common_sms_storages_variant_to_garray (dictionary) :
-                                          NULL);
-    }
-    g_mutex_unlock (&self->priv->supported_storages_mutex);
-}
-
-static gboolean
-ensure_internal_supported_storages (MMModemMessaging  *self,
-                                    MMSmsStorage     **dup_storages,
-                                    guint             *dup_storages_n)
-{
-    gboolean ret;
-
-    g_mutex_lock (&self->priv->supported_storages_mutex);
-    {
-        /* If this is the first time ever asking for the array, setup the
-         * update listener and the initial array, if any. */
-        if (!self->priv->supported_storages_id) {
-            GVariant *dictionary;
-
-            dictionary = mm_gdbus_modem_messaging_dup_supported_storages (MM_GDBUS_MODEM_MESSAGING (self));
-            if (dictionary) {
-                self->priv->supported_storages = mm_common_sms_storages_variant_to_garray (dictionary);
-                g_variant_unref (dictionary);
-            }
-
-            /* No need to clear this signal connection when freeing self */
-            self->priv->supported_storages_id =
-                g_signal_connect (self,
-                                  "notify::supported-storages",
-                                  G_CALLBACK (supported_storages_updated),
-                                  NULL);
-        }
-
-        if (!self->priv->supported_storages)
-            ret = FALSE;
-        else {
-            ret = TRUE;
-
-            if (dup_storages && dup_storages_n) {
-                *dup_storages_n = self->priv->supported_storages->len;
-                if (self->priv->supported_storages->len > 0) {
-                    *dup_storages = g_malloc (sizeof (MMSmsStorage) * self->priv->supported_storages->len);
-                    memcpy (*dup_storages, self->priv->supported_storages->data, sizeof (MMSmsStorage) * self->priv->supported_storages->len);
-                } else
-                    *dup_storages = NULL;
-            }
-        }
-    }
-    g_mutex_unlock (&self->priv->supported_storages_mutex);
-
-    return ret;
-}
-
 /**
  * mm_modem_messaging_get_supported_storages:
  * @self: A #MMModem.
@@ -177,17 +110,6 @@ ensure_internal_supported_storages (MMModemMessaging  *self,
  *
  * Since: 1.0
  */
-gboolean
-mm_modem_messaging_get_supported_storages (MMModemMessaging *self,
-                                           MMSmsStorage **storages,
-                                           guint *n_storages)
-{
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), FALSE);
-    g_return_val_if_fail (storages != NULL, FALSE);
-    g_return_val_if_fail (n_storages != NULL, FALSE);
-
-    return ensure_internal_supported_storages (self, storages, n_storages);
-}
 
 /**
  * mm_modem_messaging_peek_supported_storages:
@@ -202,22 +124,11 @@ mm_modem_messaging_get_supported_storages (MMModemMessaging *self,
  *
  * Since: 1.0
  */
-gboolean
-mm_modem_messaging_peek_supported_storages (MMModemMessaging    *self,
-                                            const MMSmsStorage **storages,
-                                            guint               *n_storages)
-{
-    g_return_val_if_fail (MM_IS_MODEM_MESSAGING (self), FALSE);
-    g_return_val_if_fail (storages != NULL, FALSE);
-    g_return_val_if_fail (n_storages != NULL, FALSE);
 
-    if (!ensure_internal_supported_storages (self, NULL, NULL))
-        return FALSE;
-
-    *n_storages = self->priv->supported_storages->len;
-    *storages = (MMSmsStorage *)self->priv->supported_storages->data;
-    return TRUE;
-}
+PROPERTY_ARRAY_DEFINE (supported_storages,
+                       ModemMessaging, modem_messaging, MODEM_MESSAGING,
+                       MMSmsStorage,
+                       mm_common_sms_storages_variant_to_garray)
 
 /*****************************************************************************/
 
@@ -734,11 +645,10 @@ mm_modem_messaging_delete_sync (MMModemMessaging *self,
 static void
 mm_modem_messaging_init (MMModemMessaging *self)
 {
-    /* Setup private data */
-    self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self,
-                                              MM_TYPE_MODEM_MESSAGING,
-                                              MMModemMessagingPrivate);
-    g_mutex_init (&self->priv->supported_storages_mutex);
+    self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self, MM_TYPE_MODEM_MESSAGING, MMModemMessagingPrivate);
+    g_mutex_init (&self->priv->mutex);
+
+    PROPERTY_INITIALIZE (supported_storages, "supported-storages")
 }
 
 static void
@@ -746,10 +656,9 @@ finalize (GObject *object)
 {
     MMModemMessaging *self = MM_MODEM_MESSAGING (object);
 
-    g_mutex_clear (&self->priv->supported_storages_mutex);
+    g_mutex_clear (&self->priv->mutex);
 
-    if (self->priv->supported_storages)
-        g_array_unref (self->priv->supported_storages);
+    PROPERTY_ARRAY_FINALIZE (supported_storages)
 
     G_OBJECT_CLASS (mm_modem_messaging_parent_class)->finalize (object);
 }
@@ -761,6 +670,5 @@ mm_modem_messaging_class_init (MMModemMessagingClass *modem_class)
 
     g_type_class_add_private (object_class, sizeof (MMModemMessagingPrivate));
 
-    /* Virtual methods */
     object_class->finalize = finalize;
 }
