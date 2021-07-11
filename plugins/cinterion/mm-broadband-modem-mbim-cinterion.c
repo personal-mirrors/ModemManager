@@ -10,8 +10,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details:
  *
- * Copyright (C) 2014 Ammonit Measurement GmbH
- * Author: Aleksander Morgado <aleksander@aleksander.es>
+ * Copyright (C) 2021 Aleksander Morgado <aleksander@aleksander.es>
  */
 
 #include <config.h>
@@ -28,7 +27,7 @@
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-location.h"
 #include "mm-iface-modem-voice.h"
-#include "mm-broadband-modem-qmi-cinterion.h"
+#include "mm-broadband-modem-mbim-cinterion.h"
 #include "mm-shared-cinterion.h"
 
 static void iface_modem_init          (MMIfaceModem         *iface);
@@ -42,7 +41,7 @@ static MMIfaceModemLocation *iface_modem_location_parent;
 static MMIfaceModemVoice    *iface_modem_voice_parent;
 static MMIfaceModemTime     *iface_modem_time_parent;
 
-G_DEFINE_TYPE_EXTENDED (MMBroadbandModemQmiCinterion, mm_broadband_modem_qmi_cinterion, MM_TYPE_BROADBAND_MODEM_QMI, 0,
+G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbimCinterion, mm_broadband_modem_mbim_cinterion, MM_TYPE_BROADBAND_MODEM_MBIM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_LOCATION, iface_modem_location_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_VOICE, iface_modem_voice_init)
@@ -51,29 +50,30 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemQmiCinterion, mm_broadband_modem_qmi_cin
 
 /*****************************************************************************/
 
-MMBroadbandModemQmiCinterion *
-mm_broadband_modem_qmi_cinterion_new (const gchar *device,
+MMBroadbandModemMbimCinterion *
+mm_broadband_modem_mbim_cinterion_new (const gchar *device,
                                       const gchar **drivers,
                                       const gchar *plugin,
                                       guint16 vendor_id,
                                       guint16 product_id)
 {
-    return g_object_new (MM_TYPE_BROADBAND_MODEM_QMI_CINTERION,
+    return g_object_new (MM_TYPE_BROADBAND_MODEM_MBIM_CINTERION,
                          MM_BASE_MODEM_DEVICE, device,
                          MM_BASE_MODEM_DRIVERS, drivers,
                          MM_BASE_MODEM_PLUGIN, plugin,
                          MM_BASE_MODEM_VENDOR_ID, vendor_id,
                          MM_BASE_MODEM_PRODUCT_ID, product_id,
-                         /* QMI bearer supports NET only */
+                         /* MBIM bearer supports NET only */
                          MM_BASE_MODEM_DATA_NET_SUPPORTED, TRUE,
                          MM_BASE_MODEM_DATA_TTY_SUPPORTED, FALSE,
                          MM_IFACE_MODEM_SIM_HOT_SWAP_SUPPORTED,  TRUE,
                          MM_IFACE_MODEM_SIM_HOT_SWAP_CONFIGURED, FALSE,
+                         MM_BROADBAND_MODEM_MBIM_INTEL_FIRMWARE_UPDATE_UNSUPPORTED, TRUE,
                          NULL);
 }
 
 static void
-mm_broadband_modem_qmi_cinterion_init (MMBroadbandModemQmiCinterion *self)
+mm_broadband_modem_mbim_cinterion_init (MMBroadbandModemMbimCinterion *self)
 {
 }
 
@@ -163,6 +163,6 @@ shared_cinterion_init (MMSharedCinterion *iface)
 }
 
 static void
-mm_broadband_modem_qmi_cinterion_class_init (MMBroadbandModemQmiCinterionClass *klass)
+mm_broadband_modem_mbim_cinterion_class_init (MMBroadbandModemMbimCinterionClass *klass)
 {
 }
