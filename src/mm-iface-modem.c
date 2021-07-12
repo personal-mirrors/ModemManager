@@ -134,6 +134,72 @@ mm_iface_modem_check_for_sim_swap (MMIfaceModem *self,
     g_object_unref (task);
 }
 
+static void
+sim_slot_free (MMBaseSim *sim)
+{
+    if (sim)
+        g_object_unref (sim);
+}
+
+void
+mm_iface_modem_modify_sim (MMIfaceModem  *self,
+                           guint          slot_index,
+                           MMBaseSim     *new_sim)
+{
+    g_autoptr(MmGdbusModemSkeleton)  skeleton = NULL;
+    g_autoptr(GPtrArray)             sim_slots_old = NULL;
+    g_autoptr(GPtrArray)             sim_slots_new = NULL;
+    guint                            i;
+    GPtrArray                       *sim_slot_paths_array;
+    g_auto(GStrv)                    sim_slot_paths = NULL;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_SIM_SLOTS,     &sim_slots_old,
+                  MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
+                  NULL);
+
+    if (!sim_slots_old) {
+        mm_obj_warn (self, "Failed to process SIM hot swap: couldn't load current list of SIM slots");
+        return;
+    }
+
+    if (!skeleton) {
+        mm_obj_warn (self, "Failed to process SIM hot swap: interface skeleton not available");
+        return;
+    }
+
+    sim_slot_paths_array = g_ptr_array_new ();
+    sim_slots_new        = g_ptr_array_new_with_free_func ((GDestroyNotify) sim_slot_free);
+    for (i = 0; i < sim_slots_old->len; i++) {
+        MMBaseSim   *sim;
+        const gchar *sim_path = NULL;
+
+        if (i == slot_index)
+            sim = new_sim;
+        else
+            sim = MM_BASE_SIM (g_ptr_array_index (sim_slots_old, i));
+
+        if (sim) {
+            g_ptr_array_add (sim_slots_new, g_object_ref (sim));
+            sim_path = mm_base_sim_get_path (sim);
+        } else
+            g_ptr_array_add (sim_slots_new, NULL);
+
+        if (sim_path)
+            g_ptr_array_add (sim_slot_paths_array, g_strdup (sim_path));
+        else
+            g_ptr_array_add (sim_slot_paths_array, g_strdup ("/"));
+    }
+    g_ptr_array_add (sim_slot_paths_array, NULL);
+    sim_slot_paths = (GStrv) g_ptr_array_free (sim_slot_paths_array, FALSE);
+
+    g_object_set (self,
+                  MM_IFACE_MODEM_SIM_SLOTS,
+                  sim_slots_new,
+                  NULL);
+    mm_gdbus_modem_set_sim_slots (MM_GDBUS_MODEM (skeleton), (const gchar *const *) sim_slot_paths);
+}
+
 /*****************************************************************************/
 
 void
@@ -199,7 +265,9 @@ wait_for_final_state_context_complete (GTask *task,
      * 'task' in order to prevent state_changed from being invoked, which
      * invokes wait_for_final_state_context_complete again. */
     if (ctx->state_changed_id) {
-        g_signal_handler_disconnect (self, ctx->state_changed_id);
+        /* may be automatically disconnected during dispose */
+        if (g_signal_handler_is_connected (self, ctx->state_changed_id))
+            g_signal_handler_disconnect (self, ctx->state_changed_id);
         ctx->state_changed_id = 0;
     }
 
