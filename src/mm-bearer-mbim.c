@@ -878,6 +878,7 @@ static gboolean
 load_settings_from_profile (MMBearerMbim    *self,
                             ConnectContext  *ctx,
                             MM3gppProfile   *profile,
+                            MMBearerApnType  default_apn_type,
                             GError         **error)
 {
     MMBearerAllowedAuth  bearer_auth;
@@ -888,9 +889,12 @@ load_settings_from_profile (MMBearerMbim    *self,
     ctx->apn = g_strdup (mm_3gpp_profile_get_apn (profile));
     apn_type = mm_3gpp_profile_get_apn_type (profile);
     if (apn_type == MM_BEARER_APN_TYPE_NONE) {
-        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                     "APN type in profile is not initialized");
-        return FALSE;
+        if (default_apn_type == MM_BEARER_APN_TYPE_NONE) {
+            g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                         "APN type in profile is not initialized");
+            return FALSE;
+        }
+        apn_type = default_apn_type;
     }
     ctx->context_type = mm_bearer_apn_type_to_mbim_context_type (apn_type, self, &inner_error);
     if (inner_error) {
@@ -951,7 +955,7 @@ get_profile_ready (MMIfaceModem3gppProfileManager *modem,
         return;
     }
 
-    if (!load_settings_from_profile (self, ctx, profile, &error)) {
+    if (!load_settings_from_profile (self, ctx, profile, MM_BEARER_APN_TYPE_NONE, &error)) {
         g_prefix_error (&error, "Couldn't load settings from profile: ");
         g_task_return_error (task, error);
         g_object_unref (task);
@@ -1172,11 +1176,13 @@ load_settings_from_bearer (MMBearerMbim        *self,
     if (!g_strcmp0 (data_port_driver, "mhi_net"))
         multiplex_supported = FALSE;
 
-    /* If no multiplex setting given by the user, assume requested */
+    /* If no multiplex setting given by the user, assume default */
     multiplex = mm_bearer_properties_get_multiplex (properties);
+    if (multiplex == MM_BEARER_MULTIPLEX_SUPPORT_UNKNOWN)
+        multiplex = MM_BASE_BEARER_MULTIPLEX_SUPPORT_DEFAULT;
+
     if (multiplex_supported &&
-        (multiplex == MM_BEARER_MULTIPLEX_SUPPORT_UNKNOWN   ||
-         multiplex == MM_BEARER_MULTIPLEX_SUPPORT_REQUESTED ||
+        (multiplex == MM_BEARER_MULTIPLEX_SUPPORT_REQUESTED ||
          multiplex == MM_BEARER_MULTIPLEX_SUPPORT_REQUIRED)) {
         /* the link prefix hint given must be modem-specific */
         ctx->link_prefix_hint = g_strdup_printf ("mbimmux%u.", mm_base_modem_get_dbus_id (MM_BASE_MODEM (ctx->modem)));
@@ -1207,14 +1213,14 @@ load_settings_from_bearer (MMBearerMbim        *self,
         return TRUE;
     }
 
-    /* If not loading from a stored profile, initialize the
-     * APN type to 'internet' by default, which is what we've done
-     * until now. */
-    if (mm_bearer_properties_get_apn_type (properties) == MM_BEARER_APN_TYPE_NONE)
-        mm_bearer_properties_set_apn_type (properties, MM_BEARER_APN_TYPE_DEFAULT);
-
-    /* Use the implicit profile settings in the bearer properties */
-    if (!load_settings_from_profile (self, ctx, mm_bearer_properties_peek_3gpp_profile (properties), error))
+    /* Use the implicit profile settings in the bearer properties.
+     * If not loading from a stored profile, initialize the APN type to 'internet'
+     * (TYPE_DEFAULT) by default, which is what we've done until now. */
+    if (!load_settings_from_profile (self,
+                                     ctx,
+                                     mm_bearer_properties_peek_3gpp_profile (properties),
+                                     MM_BEARER_APN_TYPE_DEFAULT,
+                                     error))
         return FALSE;
 
     /* Is this a 3GPP only modem and no APN or profile id was given? If so, error */
