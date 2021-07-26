@@ -10,8 +10,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details:
  *
- * Copyright (C) 2011 - 2012 Ammonit Measurement GmbH.
- * Author: Aleksander Morgado <aleksander@lanedo.com>
+ * Copyright (C) 2021 Aleksander Morgado <aleksander@aleksander.es>
  */
 
 #include <config.h>
@@ -25,15 +24,15 @@
 #define _LIBMM_INSIDE_MM
 #include <libmm-glib.h>
 
-#include "mm-sim-iridium.h"
+#include "mm-sim-option.h"
 
-G_DEFINE_TYPE (MMSimIridium, mm_sim_iridium, MM_TYPE_BASE_SIM)
+G_DEFINE_TYPE (MMSimOption, mm_sim_option, MM_TYPE_BASE_SIM)
 
 /*****************************************************************************/
 
 MMBaseSim *
-mm_sim_iridium_new_finish (GAsyncResult  *res,
-                           GError       **error)
+mm_sim_option_new_finish (GAsyncResult  *res,
+                          GError       **error)
 {
     GObject *source;
     GObject *sim;
@@ -52,12 +51,12 @@ mm_sim_iridium_new_finish (GAsyncResult  *res,
 }
 
 void
-mm_sim_iridium_new (MMBaseModem *modem,
-                    GCancellable *cancellable,
-                    GAsyncReadyCallback callback,
-                    gpointer user_data)
+mm_sim_option_new (MMBaseModem         *modem,
+                   GCancellable        *cancellable,
+                   GAsyncReadyCallback  callback,
+                   gpointer             user_data)
 {
-    g_async_initable_new_async (MM_TYPE_SIM_IRIDIUM,
+    g_async_initable_new_async (MM_TYPE_SIM_OPTION,
                                 G_PRIORITY_DEFAULT,
                                 cancellable,
                                 callback,
@@ -68,26 +67,16 @@ mm_sim_iridium_new (MMBaseModem *modem,
 }
 
 static void
-mm_sim_iridium_init (MMSimIridium *self)
+mm_sim_option_init (MMSimOption *self)
 {
 }
 
 static void
-mm_sim_iridium_class_init (MMSimIridiumClass *klass)
+mm_sim_option_class_init (MMSimOptionClass *klass)
 {
     MMBaseSimClass *base_sim_class = MM_BASE_SIM_CLASS (klass);
 
-    /* Skip querying the SIM card info, not supported by Iridium modems */
-    base_sim_class->load_sim_identifier = NULL;
-    base_sim_class->load_sim_identifier_finish = NULL;
-    base_sim_class->load_imsi = NULL;
-    base_sim_class->load_imsi_finish = NULL;
-    base_sim_class->load_operator_identifier = NULL;
-    base_sim_class->load_operator_identifier_finish = NULL;
-    base_sim_class->load_operator_name = NULL;
-    base_sim_class->load_operator_name_finish = NULL;
-
-    /* Skip managing preferred networks, not applicable to Iridium modems */
+    /* Skip managing preferred networks, not supported by Option modems */
     base_sim_class->load_preferred_networks = NULL;
     base_sim_class->load_preferred_networks_finish = NULL;
     base_sim_class->set_preferred_networks = NULL;
