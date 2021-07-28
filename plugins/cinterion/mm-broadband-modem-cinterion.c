@@ -100,6 +100,7 @@ struct _MMBroadbandModemCinterionPrivate {
     FeatureSupport sind_psinfo_support;
     FeatureSupport smoni_support;
     FeatureSupport sind_simstatus_support;
+    FeatureSupport scfg_support;
 
     /* Flags for model-based behaviors */
     MMCinterionModemFamily modem_family;
@@ -906,17 +907,11 @@ sind_psinfo_enable_ready (MMBaseModem  *_self,
 }
 
 static void
-set_urc_dest_port_ready (MMBaseModem  *_self,
-                         GAsyncResult *res,
-                         GTask        *task)
+sind_psinfo_enable (GTask *task)
 {
     MMBroadbandModemCinterion *self;
-    g_autoptr(GError)          error = NULL;
 
-    self = MM_BROADBAND_MODEM_CINTERION (_self);
-
-    if (!mm_base_modem_at_command_finish (MM_BASE_MODEM (_self), res, &error))
-        mm_obj_dbg (self, "couldn't guarantee unsolicited events are sent to the correct port: %s", error->message);
+    self = g_task_get_source_object (task);
 
     if (self->priv->sind_psinfo_support == FEATURE_SUPPORTED) {
         /* Enable access technology update reporting */
@@ -934,6 +929,40 @@ set_urc_dest_port_ready (MMBaseModem  *_self,
 }
 
 static void
+set_urc_dest_port_ready (MMBaseModem  *self,
+                         GAsyncResult *res,
+                         GTask        *task)
+{
+    g_autoptr(GError) error = NULL;
+
+    if (!mm_base_modem_at_command_finish (self, res, &error))
+        mm_obj_dbg (self, "couldn't guarantee unsolicited events are sent to the correct port: %s", error->message);
+
+    sind_psinfo_enable (task);
+}
+
+static void
+set_urc_dest_port (GTask *task)
+{
+    MMBroadbandModemCinterion *self;
+
+    self = g_task_get_source_object (task);
+
+    if (self->priv->scfg_support == FEATURE_SUPPORTED) {
+        /* Make sure unsolicited events are sent to an AT port (PLS9 can default to DATA port) */
+        mm_base_modem_at_command (MM_BASE_MODEM (self),
+                                  "^SCFG=\"URC/DstIfc\",\"app\"",
+                                  5,
+                                  FALSE,
+                                  (GAsyncReadyCallback)set_urc_dest_port_ready,
+                                  task);
+        return;
+    }
+
+    sind_psinfo_enable (task);
+}
+
+static void
 parent_enable_unsolicited_events_ready (MMIfaceModem3gpp *self,
                                         GAsyncResult     *res,
                                         GTask            *task)
@@ -943,13 +972,7 @@ parent_enable_unsolicited_events_ready (MMIfaceModem3gpp *self,
     if (!iface_modem_3gpp_parent->enable_unsolicited_events_finish (self, res, &error))
         mm_obj_warn (self, "couldn't enable parent 3GPP unsolicited events: %s", error->message);
 
-    /* Make sure unsolicited events are sent to an AT port (PLS9 can default to DATA port) */
-    mm_base_modem_at_command (MM_BASE_MODEM (self),
-                              "^SCFG=\"URC/DstIfc\",\"app\"",
-                              5,
-                              FALSE,
-                              (GAsyncReadyCallback)set_urc_dest_port_ready,
-                              task);
+    set_urc_dest_port (task);
 }
 
 static void
@@ -1144,6 +1167,16 @@ load_initial_eps_bearer_cid (MMBroadbandModemCinterion *self,
     g_assert (self->priv->initial_eps_bearer_cid < 0);
 
     task = g_task_new (self, NULL, callback, user_data);
+
+    if (self->priv->scfg_support == FEATURE_NOT_SUPPORTED) {
+        mm_obj_dbg (self, "using default EPS bearer context id: 1");
+        self->priv->initial_eps_bearer_cid = 1;
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "^SCFG is unsupported in this device");
+        g_object_unref (task);
+        return;
+    }
+
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               "^SCFG=\"MEopMode/Prov/Cfg\"",
                               20,
@@ -1924,16 +1957,20 @@ scfg_test_ready (MMBaseModem  *_self,
     GArray                    *bands;
 
     response = mm_base_modem_at_command_finish (_self, res, &error);
-    if (!response ||
-        !mm_cinterion_parse_scfg_test (response,
-                                       self->priv->modem_family,
-                                       mm_broadband_modem_get_current_charset (MM_BROADBAND_MODEM (self)),
-                                       &bands,
-                                       &self->priv->rb_format,
-                                       &error))
+    if (!response) {
+        /* only consider SCFG not supported when the command fails, not when
+         * the parsing looking for supported bands fails */
+        self->priv->scfg_support = FEATURE_NOT_SUPPORTED;
         g_task_return_error (task, error);
-    else {
-        if (!mm_cinterion_build_band (bands,
+    } else {
+        self->priv->scfg_support = FEATURE_SUPPORTED;
+        if (!mm_cinterion_parse_scfg_test (response,
+                                           self->priv->modem_family,
+                                           mm_broadband_modem_get_current_charset (MM_BROADBAND_MODEM (self)),
+                                           &bands,
+                                           &self->priv->rb_format,
+                                           &error) ||
+            !mm_cinterion_build_band (bands,
                                       NULL,
                                       FALSE,
                                       self->priv->rb_format,
@@ -1979,7 +2016,20 @@ load_supported_bands (MMIfaceModem        *_self,
 
     mm_obj_dbg (self, "Using cinterion %s modem family", family);
 
+    if (self->priv->scfg_support == FEATURE_SUPPORT_UNKNOWN) {
+        if (mm_kernel_device_get_property (port, "ID_MM_CINTERION_DISABLE_SCFG"))
+            self->priv->scfg_support = FEATURE_NOT_SUPPORTED;
+    }
+
     task = g_task_new (_self, NULL, callback, user_data);
+
+    if (self->priv->scfg_support == FEATURE_NOT_SUPPORTED) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "^SCFG is unsupported in this device");
+        g_object_unref (task);
+        return;
+    }
+
     mm_base_modem_at_command (MM_BASE_MODEM (_self),
                               "AT^SCFG=?",
                               3,
@@ -2024,13 +2074,21 @@ get_band_ready (MMBaseModem  *_self,
 }
 
 static void
-load_current_bands (MMIfaceModem        *self,
+load_current_bands (MMIfaceModem        *_self,
                     GAsyncReadyCallback  callback,
                     gpointer             user_data)
 {
+    MMBroadbandModemCinterion *self = MM_BROADBAND_MODEM_CINTERION (_self);
     GTask *task;
 
     task = g_task_new (self, NULL, callback, user_data);
+
+    if (self->priv->scfg_support == FEATURE_NOT_SUPPORTED) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "^SCFG is unsupported in this device");
+        g_object_unref (task);
+        return;
+    }
 
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               "AT^SCFG?",
@@ -2271,11 +2329,12 @@ set_bands_2g (GTask  *task,
 }
 
 static void
-set_current_bands (MMIfaceModem        *self,
+set_current_bands (MMIfaceModem        *_self,
                    GArray              *bands_array,
                    GAsyncReadyCallback  callback,
                    gpointer             user_data)
 {
+    MMBroadbandModemCinterion *self = MM_BROADBAND_MODEM_CINTERION (_self);
     GTask *task;
 
     /* The bands that we get here are previously validated by the interface, and
@@ -2285,7 +2344,15 @@ set_current_bands (MMIfaceModem        *self,
      * Cinterion modems supporting only 2G have specific combinations allowed.
      */
     task = g_task_new (self, NULL, callback, user_data);
-    if (mm_iface_modem_is_3g (self))
+
+    if (self->priv->scfg_support == FEATURE_NOT_SUPPORTED) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "^SCFG is unsupported in this device");
+        g_object_unref (task);
+        return;
+    }
+
+    if (mm_iface_modem_is_3g (_self))
         set_bands_3g (task, bands_array);
     else
         set_bands_2g (task, bands_array);
@@ -2901,6 +2968,7 @@ mm_broadband_modem_cinterion_init (MMBroadbandModemCinterion *self)
     self->priv->swwan_support          = FEATURE_SUPPORT_UNKNOWN;
     self->priv->smoni_support          = FEATURE_SUPPORT_UNKNOWN;
     self->priv->sind_simstatus_support = FEATURE_SUPPORT_UNKNOWN;
+    self->priv->scfg_support           = FEATURE_SUPPORT_UNKNOWN;
 
     self->priv->ciev_regex = g_regex_new ("\\r\\n\\+CIEV:\\s*([a-z]+),(\\d+)\\r\\n",
                                           G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
