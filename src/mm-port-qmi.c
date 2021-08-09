@@ -31,6 +31,9 @@
 
 #define DEFAULT_LINK_PREALLOCATED_AMOUNT 4
 
+/* as internally defined in the kernel */
+#define RMNET_MAX_PACKET_SIZE 16384
+
 G_DEFINE_TYPE (MMPortQmi, mm_port_qmi, MM_TYPE_PORT)
 
 #if defined WITH_QRTR
@@ -1321,8 +1324,13 @@ setup_master_mtu (GTask *task)
      * aggregation size */
     if (ctx->kernel_data_modes_requested & (MM_PORT_QMI_KERNEL_DATA_MODE_MUX_RMNET | MM_PORT_QMI_KERNEL_DATA_MODE_MUX_QMIWWAN)) {
         /* Load current max datagram size supported */
-        if (MM_PORT_QMI_DAP_IS_SUPPORTED_QMAP (ctx->wda_dl_dap_requested))
+        if (MM_PORT_QMI_DAP_IS_SUPPORTED_QMAP (ctx->wda_dl_dap_requested)) {
             mtu = ctx->wda_dl_dap_max_size_current;
+            if ((ctx->kernel_data_modes_requested & MM_PORT_QMI_KERNEL_DATA_MODE_MUX_RMNET) && (mtu > RMNET_MAX_PACKET_SIZE)) {
+                mm_obj_dbg (self, "mtu limited to maximum rmnet packet size");
+                mtu = RMNET_MAX_PACKET_SIZE;
+            }
+        }
 
         /* If no max aggregation size was specified by the modem (e.g. if we requested QMAP
          * aggregation protocol but the modem doesn't support it), skip */
@@ -2057,7 +2065,8 @@ mm_port_qmi_setup_data_format (MMPortQmi                      *self,
     }
 
     if ((action == MM_PORT_QMI_SETUP_DATA_FORMAT_ACTION_SET_DEFAULT) &&
-        (!(self->priv->kernel_data_modes & (MM_PORT_QMI_KERNEL_DATA_MODE_MUX_RMNET | MM_PORT_QMI_KERNEL_DATA_MODE_MUX_QMIWWAN))) &&
+        (((self->priv->kernel_data_modes & MM_PORT_QMI_KERNEL_DATA_MODE_RAW_IP) && (self->priv->llp == QMI_WDA_LINK_LAYER_PROTOCOL_RAW_IP)) ||
+         ((self->priv->kernel_data_modes & MM_PORT_QMI_KERNEL_DATA_MODE_802_3)  && (self->priv->llp == QMI_WDA_LINK_LAYER_PROTOCOL_802_3))) &&
         !MM_PORT_QMI_DAP_IS_SUPPORTED_QMAP (self->priv->dap)) {
         mm_obj_dbg (self, "multiplex support already disabled when setting up data format");
         g_task_return_boolean (task, TRUE);

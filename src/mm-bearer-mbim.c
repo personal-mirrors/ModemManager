@@ -32,6 +32,7 @@
 #include "mm-port-enums-types.h"
 #include "mm-bearer-mbim.h"
 #include "mm-log-object.h"
+#include "mm-context.h"
 
 G_DEFINE_TYPE (MMBearerMbim, mm_bearer_mbim, MM_TYPE_BASE_BEARER)
 
@@ -1179,10 +1180,14 @@ load_settings_from_bearer (MMBearerMbim        *self,
     if (mm_kernel_device_get_wwandev_sysfs_path (mm_port_peek_kernel_device (ctx->data)))
         multiplex_supported = FALSE;
 
-    /* If no multiplex setting given by the user, assume default */
+    /* If no multiplex setting given by the user, assume none */
     multiplex = mm_bearer_properties_get_multiplex (properties);
-    if (multiplex == MM_BEARER_MULTIPLEX_SUPPORT_UNKNOWN)
-        multiplex = MM_BASE_BEARER_MULTIPLEX_SUPPORT_DEFAULT;
+    if (multiplex == MM_BEARER_MULTIPLEX_SUPPORT_UNKNOWN) {
+        if (mm_context_get_test_multiplex_requested ())
+            multiplex = MM_BEARER_MULTIPLEX_SUPPORT_REQUESTED;
+        else
+            multiplex = MM_BEARER_MULTIPLEX_SUPPORT_NONE;
+    }
 
     if (multiplex_supported &&
         (multiplex == MM_BEARER_MULTIPLEX_SUPPORT_REQUESTED ||
