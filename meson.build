@@ -247,6 +247,9 @@ assert(not enable_qrtr or enable_qmi, 'QRTR support requires QMI enabled')
 assert(not enable_qrtr or qmi_glib_dep.get_pkgconfig_variable('qmi_qrtr_supported').is_odd(), 'Couldn\'t find QRTR support in qmi-glib.')
 config_h.set('WITH_QRTR', enable_qrtr)
 
+# Protocol libs
+libqcdm_dep = subproject('libqcdm').get_variable('libqcdm_dep')
+
 # Distribution version string
 dist_version = get_option('dist_version')
 if dist_version != ''
@@ -254,10 +257,6 @@ if dist_version != ''
 endif
 
 util_dep = cc.find_library('util')
-
-# Protocol libs
-# FIXME: this seems hand fixed in autotools?
-qcdm_standalone = get_option('qcdm_standalone')
 
 # introspection support
 enable_gir = dependency('gobject-introspection-1.0', version: '>= 0.9.6', required: get_option('introspection')).found()
@@ -349,10 +348,6 @@ subdir('po')
 subdir('data')
 subdir('introspection')
 subdir('include')
-
-# FIXME: these two should be resolved as a subproject
-subdir('libqcdm/src')
-subdir('libqcdm/tests')
 
 subdir('libmm-glib')
 subdir('src')

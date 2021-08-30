@@ -1,7 +1,5 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2021 Iñigo Martinez <inigomartinez@gmail.com>
-
-libqcdm_inc = include_directories('.')
 
 sources = files(
   'com.c',
@@ -12,23 +10,21 @@ sources = files(
   'utils.c',
 )
 
-libqcdm = static_library(
+libqcdm = library(
   'qcdm',
   sources: sources,
   include_directories: top_inc,
-  dependencies: glib_deps,
 )
 
 libqcdm_dep = declare_dependency(
-  include_directories: libqcdm_inc,
+  include_directories: '.',
   link_with: libqcdm,
 )
 
-# FIXME: what for? it's unused
-# Test library without symbol versioning
+'''
 libqcdm_test = static_library(
   'qcdm-test',
   sources: 'utils.c',
   include_directories: top_inc,
-  dependencies: glib_deps,
 )
+'''

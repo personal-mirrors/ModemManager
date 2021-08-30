@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2021 Iñigo Martinez <inigomartinez@gmail.com>
 
 test_units = [
@@ -18,23 +18,16 @@ sources = files(
 
 test_units += [['test-qcdm', sources, true]]
 
-incs = [
-  top_inc,
-  libqcdm_inc,
+deps = [
+  glib_dep,
+  libqcdm_dep,
 ]
-
-deps = [glib_deps]
-
-# FIXME: this should be resolved in a diferent way
-if qcdm_standalone
-  deps += libqcdm_dep
-endif
 
 foreach test_unit: test_units
   exe = executable(
     test_unit[0],
     test_unit[1],
-    include_directories: incs,
+    include_directories: top_inc,
     dependencies: deps,
   )
 
