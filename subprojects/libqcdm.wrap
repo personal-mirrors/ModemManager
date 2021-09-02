@@ -1,0 +1,6 @@
+[wrap-file]
+directory = libqcdm-0.1
+
+source_url = https://gitlab.freedesktop.org/inigomartinez/libqcdm/-/archive/0.1/libqcdm-0.1.tar.gz
+source_filename = libqcdm-0.1.tar.gz
+source_hash = ed016933974f250b1f34ccfc1aa4c940991172dfd0ca1d52795837498d68b917
