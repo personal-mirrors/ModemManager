@@ -10,7 +10,7 @@ project(
     'c_std=gnu89',
     'warning_level=2',
   ],
-  meson_version: '>= 0.50.0',
+  meson_version: '>= 0.53.0',
 )
 
 mm_name = meson.project_name()
@@ -54,7 +54,6 @@ source_root = meson.current_source_dir()
 build_root = meson.current_build_dir()
 
 build_aux_dir = source_root / 'build-aux'
-data_dir = source_root / 'data'
 plugins_dir = source_root / 'plugins'
 po_dir = source_root / 'po'
 src_dir = source_root / 'src'
@@ -129,8 +128,6 @@ endif
 
 add_project_arguments(common_args + cc_args, language: 'c')
 
-no_deprecated_declarations_flags = cc.get_supported_arguments('-Wno-deprecated-declarations')
-
 glib_version = '2.56'
 
 gio_unix_dep = dependency('gio-unix-2.0')
@@ -196,21 +193,24 @@ if install_systemdunitdir and systemd_systemdsystemunitdir == ''
 endif
 
 # Suspend/resume support
-libsystemd_dep = dependency('libsystemd', version: '>= 209', required: false)
-if not libsystemd_dep.found()
-  libsystemd_dep = dependency('libsystemd-login', version: '>= 183', required: false)
-  if not libsystemd_dep.found()
-    libsystemd_dep = dependency('libelogind', version: '>= 209', required: false)
-  endif
-endif
-
 enable_systemd_suspend_resume = get_option('systemd_suspend_resume')
-assert(not enable_systemd_suspend_resume or libsystemd_dep.found(), 'libsystemd, libsystemd-login or elogind must be available at runtime for suspend/resume support')
-config_h.set('WITH_SYSTEMD_SUSPEND_RESUME', enable_systemd_suspend_resume)
-
 # systemd journal support
 enable_systemd_journal = get_option('systemd_journal')
-assert(not enable_systemd_journal or libsystemd_dep.found(), 'libsystemd development headers are required')
+
+if enable_systemd_suspend_resume or enable_systemd_journal
+  libsystemd_dep = dependency('libsystemd', version: '>= 209', required: false)
+  if not libsystemd_dep.found()
+    libsystemd_dep = dependency('libsystemd-login', version: '>= 183', required: false)
+    if not libsystemd_dep.found()
+      libsystemd_dep = dependency(
+        'libelogind',
+        version: '>= 209',
+        not_found_message: 'libsystemd, libsystemd-login or elogind must be available at runtime for suspend/resume or systemd journal support',
+      )
+    endif
+  endif
+endif
+config_h.set('WITH_SYSTEMD_SUSPEND_RESUME', enable_systemd_suspend_resume)
 config_h.set('WITH_SYSTEMD_JOURNAL', enable_systemd_journal)
 
 # PolicyKit
@@ -257,10 +257,7 @@ endif
 util_dep = cc.find_library('util')
 
 # introspection support
-enable_gir = get_option('introspection')
-if enable_gir
-  dependency('gobject-introspection-1.0', version: '>= 0.9.6')
-endif
+enable_gir = dependency('gobject-introspection-1.0', version: '>= 0.9.6', required: get_option('introspection')).found()
 
 # vala support
 enable_vapi = get_option('vapi')
@@ -268,75 +265,85 @@ enable_vapi = get_option('vapi')
 # gtkdoc support
 enable_gtk_doc = get_option('gtk_doc')
 
+enable_plugins = not get_option('plugin_disable_all')
+
 plugins_shared = {
-  'foxconn': enable_mbim,
-  'icera': true,
-  'novatel': true,
-  'option': true,
-  'sierra': true,
-  'telit': true,
-  'xmm': true,
+  'foxconn': enable_mbim and enable_plugins,
+  'icera': enable_plugins,
+  'novatel': enable_plugins,
+  'option': enable_plugins,
+  'sierra': enable_plugins,
+  'telit': enable_plugins,
+  'xmm': enable_plugins,
 }
 
 plugins_options = {
-  'altair-lte': [],
-  'anydata': [],
-  'broadmobi': [],
-  'cinterion': [],
+  'altair-lte': enable_plugins,
+  'anydata': enable_plugins,
+  'broadmobi': enable_plugins,
+  'cinterion': enable_plugins,
+  'dell': enable_plugins,
+  'dlink': enable_plugins,
+  'fibocom': enable_plugins,
+  'foxconn': enable_plugins,
+  'generic': enable_plugins,
+  'gosuncn': enable_plugins,
+  'haier': enable_plugins,
+  'huawei': enable_plugins,
+  'iridium': enable_plugins,
+  'linktop': enable_plugins,
+  'longcheer': enable_plugins,
+  'mbm': enable_plugins,
+  'motorola': enable_plugins,
+  'mtk': enable_plugins,
+  'nokia': enable_plugins,
+  'nokia-icera': enable_plugins,
+  'novatel': enable_plugins,
+  'novatel-lte': enable_plugins,
+  'option': enable_plugins,
+  'option-hso': enable_plugins,
+  'pantech': enable_plugins,
+  'qcom-soc': enable_plugins,
+  'quectel': enable_plugins,
+  'samsung': enable_plugins,
+  'sierra-legacy': enable_plugins,
+  'sierra': enable_plugins,
+  'simtech': enable_plugins,
+  'telit': enable_plugins,
+  'thuraya': enable_plugins,
+  'tplink': enable_plugins,
+  'ublox': enable_plugins,
+  'via': enable_plugins,
+  'wavecom': enable_plugins,
+  'x22x': enable_plugins,
+  'zte': enable_plugins,
+}
+
+plugins_options_reqs = {
   'dell': ['foxconn', 'novatel', 'sierra', 'telit', 'xmm'],
-  'dlink': [],
   'fibocom': ['xmm'],
   'foxconn': ['foxconn'],
-  'generic': [],
-  'gosuncn': [],
-  'haier': [],
-  'huawei': [],
-  'iridium': [],
-  'linktop': [],
-  'longcheer': [],
-  'mbm': [],
-  'motorola': [],
-  'mtk': [],
-  'nokia': [],
   'nokia-icera': ['icera'],
   'novatel': ['novatel'],
-  'novatel-lte': [],
   'option': ['option'],
   'option-hso': ['option'],
-  'pantech': [],
-  'qcom-soc': [],
-  'quectel': [],
   'samsung': ['icera'],
   'sierra-legacy': ['icera', 'sierra'],
   'sierra': ['xmm'],
-  'simtech': [],
   'telit': ['telit'],
-  'thuraya': [],
-  'tplink': [],
-  'ublox': [],
-  'via': [],
-  'wavecom': [],
-  'x22x': [],
   'zte': ['icera'],
 }
 
-disable_all_plugins = get_option('plugin_disable_all')
-
-enable_plugins = []
-enable_plugins_shared = []
-if not disable_all_plugins
-  foreach plugin_name, plugin_shared_reqs: plugins_options
-    if get_option('plugin_' + plugin_name.underscorify())
-      enable_plugins += [plugin_name]
-      foreach plugin_req: plugin_shared_reqs
-        assert(plugins_shared[plugin_req], '@0@ required @1@ but is not available'.format(plugin_name, plugin_req))
-        if not enable_plugins_shared.contains(plugin_req)
-          enable_plugins_shared += [plugin_req]
-        endif
-      endforeach
-    endif
-  endforeach
-endif
+foreach plugin_name, _: plugins_options
+  if get_option('plugin_' + plugin_name.underscorify())
+    foreach plugin_req: plugins_options_reqs.get(plugin_name, [])
+      if not plugins_shared[plugin_req]
+        assert(not enable_plugins, '@0@ required @1@ but is not available'.format(plugin_name, plugin_req))
+        plugins_shared += {plugin_req: true}
+      endif
+    endforeach
+  endif
+endforeach
 
 version_conf = {
   'MM_MAJOR_VERSION': mm_major_version,
@@ -377,77 +384,38 @@ configure_file(
   configuration: config_h,
 )
 
-output = '\n' + mm_name + ' ' + mm_version + '\n\n'
-output += '  Build\n'
-output += '    compiler:               ' + cc.get_id() + '\n'
-output += '    cflags:                 ' + ' '.join(cc_args) + '\n'
-output += '  System paths\n'
-output += '    prefix:                 ' + mm_prefix + '\n'
-output += '    D-Bus policy directory: ' + dbus_policy_dir + '\n'
-output += '    udev base directory:    ' + udev_udevdir + '\n'
-output += '    systemd unit directory: ' + systemd_systemdsystemunitdir + '\n\n'
-output += '  Features\n'
-output += '    udev:                   ' + enable_udev.to_string() + '\n'
-output += '    policykit:              ' + polkit + '\n'
-output += '    mbim:                   ' + enable_mbim.to_string() + '\n'
-output += '    qmi:                    ' + enable_qmi.to_string() + '\n'
-output += '    qrtr:                   ' + enable_qrtr.to_string() + '\n'
-output += '    systemd suspend/resume: ' + enable_systemd_suspend_resume.to_string() + '\n'
-output += '    systemd journal:        ' + enable_systemd_journal.to_string() + '\n'
-output += '    at command via dbus:    ' + enable_at_command_via_dbus.to_string() + '\n\n'
-output += '  Shared utils:\n'
-output += '    foxconn:                ' + enable_plugins_shared.contains('foxconn').to_string() + '\n'
-output += '    icera:                  ' + enable_plugins_shared.contains('icera').to_string() + '\n'
-output += '    novatel:                ' + enable_plugins_shared.contains('novatel').to_string() + '\n'
-output += '    option:                 ' + enable_plugins_shared.contains('option').to_string() + '\n'
-output += '    sierra:                 ' + enable_plugins_shared.contains('sierra').to_string() + '\n'
-output += '    telit:                  ' + enable_plugins_shared.contains('telit').to_string() + '\n'
-output += '    xmm:                    ' + enable_plugins_shared.contains('xmm').to_string() + '\n'
-output += '  Plugins:\n'
-output += '    altair-lte:             ' + enable_plugins.contains('altair-lte').to_string() + '\n'
-output += '    anydata:                ' + enable_plugins.contains('anydata').to_string() + '\n'
-output += '    broadmobi:              ' + enable_plugins.contains('broadmobi').to_string() + '\n'
-output += '    cinterion:              ' + enable_plugins.contains('cinterion').to_string() + '\n'
-output += '    dell:                   ' + enable_plugins.contains('dell').to_string() + '\n'
-output += '    dlink:                  ' + enable_plugins.contains('dlink').to_string() + '\n'
-output += '    fibocom:                ' + enable_plugins.contains('fibocom').to_string() + '\n'
-output += '    foxconn:                ' + enable_plugins.contains('foxconn').to_string() + '\n'
-output += '    generic:                ' + enable_plugins.contains('generic').to_string() + '\n'
-output += '    gosuncn:                ' + enable_plugins.contains('gosuncn').to_string() + '\n'
-output += '    haier:                  ' + enable_plugins.contains('haier').to_string() + '\n'
-output += '    huawei:                 ' + enable_plugins.contains('huawei').to_string() + '\n'
-output += '    iridium:                ' + enable_plugins.contains('iridium').to_string() + '\n'
-output += '    linktop:                ' + enable_plugins.contains('linktop').to_string() + '\n'
-output += '    longcheer:              ' + enable_plugins.contains('longcheer').to_string() + '\n'
-output += '    mbm:                    ' + enable_plugins.contains('mbm').to_string() + '\n'
-output += '    motorola:               ' + enable_plugins.contains('motorola').to_string() + '\n'
-output += '    mtk:                    ' + enable_plugins.contains('mtk').to_string() + '\n'
-output += '    nokia:                  ' + enable_plugins.contains('nokia').to_string() + '\n'
-output += '    nokia-icera:            ' + enable_plugins.contains('nokia-icera').to_string() + '\n'
-output += '    novatel:                ' + enable_plugins.contains('novatel').to_string() + '\n'
-output += '    novatel-lte:            ' + enable_plugins.contains('novatel-lte').to_string() + '\n'
-output += '    option:                 ' + enable_plugins.contains('option').to_string() + '\n'
-output += '    option-hso:             ' + enable_plugins.contains('option-hso').to_string() + '\n'
-output += '    pantech:                ' + enable_plugins.contains('pantech').to_string() + '\n'
-output += '    qcom-soc:               ' + enable_plugins.contains('qcom-soc').to_string() + '\n'
-output += '    quectel:                ' + enable_plugins.contains('quectel').to_string() + '\n'
-output += '    samsung:                ' + enable_plugins.contains('samsung').to_string() + '\n'
-output += '    sierra:                 ' + enable_plugins.contains('sierra').to_string() + '\n'
-output += '    sierra-legacy:          ' + enable_plugins.contains('sierra-legacy').to_string() + '\n'
-output += '    simtech:                ' + enable_plugins.contains('simtech').to_string() + '\n'
-output += '    telit:                  ' + enable_plugins.contains('telit').to_string() + '\n'
-output += '    thuraya:                ' + enable_plugins.contains('thuraya').to_string() + '\n'
-output += '    tplink:                 ' + enable_plugins.contains('tplink').to_string() + '\n'
-output += '    ublox:                  ' + enable_plugins.contains('ublox').to_string() + '\n'
-output += '    via:                    ' + enable_plugins.contains('via').to_string() + '\n'
-output += '    wavecom:                ' + enable_plugins.contains('wavecom').to_string() + '\n'
-output += '    x22x:                   ' + enable_plugins.contains('x22x').to_string() + '\n'
-output += '    zte:                    ' + enable_plugins.contains('zte').to_string() + '\n'
-output += '  Miscellaneous:\n'
-output += '    gobject introspection:  ' + enable_gir.to_string() + '\n'
-output += '    Man:                    ' + enable_man.to_string() + '\n'
-output += '    Documentation:          ' + enable_gtk_doc.to_string() + '\n'
-output += '    bash completion:        ' + enable_bash_completion.to_string() + '\n'
-output += '    vala bindings:          ' + enable_vapi.to_string() + '\n'
-output += '    code_coverage:          ' + get_option('b_coverage').to_string()
-message(output)
+summary({
+  'compiler': cc.get_id(),
+  'cflags': cc_args,
+}, section: 'Build')
+
+summary({
+  'prefix': mm_prefix,
+  'D-Bus policy directory': dbus_policy_dir,
+  'udev base directory': udev_udevdir,
+  'systemd user unit directory': systemd_systemdsystemunitdir,
+}, section: 'System paths')
+
+summary({
+  'udev': enable_udev,
+  'policykit': polkit,
+  'mbim': enable_mbim,
+  'qmi': enable_qmi,
+  'qrtr': enable_qrtr,
+  'systemd suspend/resume': enable_systemd_suspend_resume,
+  'systemd journal': enable_systemd_journal,
+  'at command via dbus': enable_at_command_via_dbus,
+}, section: 'Features')
+
+summary(plugins_shared, section: 'Shared utils')
+
+summary(plugins_options, section: 'Plugins')
+
+summary({
+  'gobject introspection': enable_gir,
+  'Man': enable_man,
+  'Documentation': enable_gtk_doc,
+  'bash completion': enable_bash_completion,
+  'vala bindings': enable_vapi,
+  'code coverage': get_option('b_coverage'),
+}, section: 'Miscellaneous')
