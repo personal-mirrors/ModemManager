@@ -34,6 +34,35 @@
     </method>
 
     <!--
+        SetupThresholds:
+        @settings: threshold values to set. 0 to use defult modem behavior.
+
+        Setup threshold values for signal quality information retrieval.
+
+        <variablelist>
+          <varlistentry><term><literal>"rssi_threshold"</literal></term>
+            <listitem>
+              The difference in RSSI coded values, given as an
+              unsigned integer (signature <literal>"u"</literal>).
+            </listitem>
+          </varlistentry>
+          <varlistentry><term><literal>"error_rate_threshold"</literal></term>
+            <listitem>
+              The difference in ErrorRate coded values that trigger a
+              report, given as an unsigned integer (signature <literal>"u"</literal>).
+              Use 0xffffffff to not receive any report based on changes
+              in the value.
+            </listitem>
+          </varlistentry>
+        </variablelist>
+
+        Since: 1.19
+    -->
+    <method name="SetupThresholds">
+      <arg name="settings" type="a{sv}" direction="in" />
+    </method>
+
+    <!--
         Rate:
 
         Refresh rate for the extended signal quality information updates,
@@ -42,6 +71,28 @@
         Since: 1.2
     -->
     <property name="Rate" type="u" access="read" />
+
+    <!--
+        RssiThreshold:
+
+        The difference in RSSI coded values that triggers a report.
+        Use value 0xffffffff for not to be considered.
+
+        Since: 1.19
+    -->
+
+    <property name="RssiThreshold" type="u" access="read" />
+
+    <!--
+        ErrorRateThreshold:
+
+        The difference in ErrorRate coded values that triggers a
+        report. Use value 0xffffffff for not to be considered.
+
+        Since: 1.19
+    -->
+
+    <property name="ErrorRateThreshold" type="u" access="read" />
 
     <!--
         Cdma:
@@ -66,6 +117,14 @@
             <para>
               The CDMA1x Ec/Io, in dBm, given as a floating point value
               (signature <literal>"d"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"error-rate"</literal></term>
+          <listitem>
+            <para>
+              Channel bit error rate in coded value, given as a unsigned
+              integer (signature <literal>"u"</literal>). Since: 1.19
             </para>
           </listitem>
         </varlistentry>
@@ -117,6 +176,14 @@
             </para>
           </listitem>
         </varlistentry>
+        <varlistentry><term><literal>"error-rate"</literal></term>
+          <listitem>
+            <para>
+              Channel bit error rate in coded value, given as a unsigned
+              integer (signature <literal>"u"</literal>). Since: 1.19
+            </para>
+          </listitem>
+        </varlistentry>
         </variablelist>
 
         Since: 1.2
@@ -138,6 +205,14 @@
             <para>
               The GSM RSSI (Received Signal Strength Indication), in dBm,
               given as a floating point value (signature <literal>"d"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"error-rate"</literal></term>
+          <listitem>
+            <para>
+              Channel bit error rate in coded value, given as a unsigned
+              integer (signature <literal>"u"</literal>). Since: 1.19
             </para>
           </listitem>
         </varlistentry>
@@ -178,6 +253,14 @@
             <para>
               The UMTS Ec/Io, in dB, given as a floating point value
               (signature <literal>"d"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"error-rate"</literal></term>
+          <listitem>
+            <para>
+              Channel bit error rate in coded value, given as a unsigned
+              integer (signature <literal>"u"</literal>). Since: 1.19
             </para>
           </listitem>
         </varlistentry>
@@ -229,6 +312,14 @@
             </para>
           </listitem>
         </varlistentry>
+        <varlistentry><term><literal>"error-rate"</literal></term>
+          <listitem>
+            <para>
+              Channel bit error rate in coded value, given as a unsigned
+              integer (signature <literal>"u"</literal>). Since: 1.19
+            </para>
+          </listitem>
+        </varlistentry>
         </variablelist>
 
         Since: 1.2
@@ -266,6 +357,14 @@
             <para>
               The 5G S/R ratio, in dB, given as
               a floating point value (signature <literal>"d"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"error-rate"</literal></term>
+          <listitem>
+            <para>
+              Channel bit error rate in coded value, given as a unsigned
+              integer (signature <literal>"u"</literal>). Since: 1.19
             </para>
           </listitem>
         </varlistentry>
