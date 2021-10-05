@@ -406,7 +406,8 @@
           <varlistentry><term><literal>"apn"</literal></term>
             <listitem><para>
               The Access Point Name to use in the connection, given as a string
-              value (signature <literal>"s"</literal>).
+              value (signature <literal>"s"</literal>). For 5G NGC, this field
+              contains the Data Network Name (DNN) in WCHAR string.
             </para></listitem>
           </varlistentry>
           <varlistentry><term><literal>"ip-type"</literal></term>
@@ -484,6 +485,18 @@
               <link linkend="MMBearerMultiplexSupport">MMBearerMultiplexSupport</link>
               value (signature <literal>"u"</literal>). Since 1.18.
             </listitem>
+          </varlistentry>
+        </variablelist>
+
+        The following settings apply to 3GPP (5GNR) devices:
+
+        <variablelist>
+          <varlistentry><term><literal>"media-preference"</literal></term>
+            <listitem><para>
+              Preference of media or access type, such as Cellular (3GPP),
+              WLAN (non-3GPP), or others, for the PDU session establishment
+              request or PDP context activation request. Since 1.19.
+            </para></listitem>
           </varlistentry>
         </variablelist>
 
