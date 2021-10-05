@@ -1107,6 +1107,39 @@ modem_load_unlock_required_finish (MMIfaceModem *self,
     return (MMModemLock)value;
 }
 
+#if defined RADIO_OFF_WITH_NO_SIM
+
+static void
+query_radio_state_ready (MbimDevice   *device,
+                         GAsyncResult *res,
+                         GTask *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    g_autoptr(GError)       error = NULL;
+    MbimRadioSwitchState    hardware_radio_state;
+    MbimRadioSwitchState    software_radio_state;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_printerr ("error: operation failed: %s\n", error->message);
+        g_task_return_error (task, error);
+    }
+
+    if (!mbim_message_radio_state_response_parse (
+            response,
+            &hardware_radio_state,
+            &software_radio_state,
+            &error)) {
+        g_printerr ("error: couldn't parse response message: %s\n", error->message);
+        g_task_return_error (task, error);
+     }
+
+    if (response)
+        mbim_message_unref (response);
+}
+
+#endif
+
 static void
 pin_query_ready (MbimDevice *device,
                  GAsyncResult *res,
@@ -1210,6 +1243,10 @@ unlock_required_subscriber_ready_state_ready (MbimDevice *device,
     /* Need to retry? */
     if (ready_state == MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED ||
         ready_state == MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED) {
+#if defined RADIO_OFF_WITH_NO_SIM
+        MbimMessage *message;
+        MbimRadioSwitchState radio_state;
+#endif
         /* All retries consumed? issue error */
         if (ctx->last_attempt) {
             if (ready_state == MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED)
@@ -1220,6 +1257,18 @@ unlock_required_subscriber_ready_state_ready (MbimDevice *device,
         } else
             g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_RETRY,
                                      "SIM not ready yet (retry)");
+#if defined RADIO_OFF_WITH_NO_SIM
+	/* Set radio off */
+        radio_state = MBIM_RADIO_SWITCH_STATE_OFF;
+        message = mbim_message_radio_state_set_new (radio_state, NULL);
+        mbim_device_command (device,
+                             message,
+                             10,
+                             NULL,
+                             (GAsyncReadyCallback)query_radio_state_ready,
+                             NULL);
+        mbim_message_unref (message);
+#endif
         g_object_unref (task);
         goto out;
     }
