@@ -56,6 +56,17 @@ struct _MMIfaceModemSignal {
                                      MMSignal **lte,
                                      MMSignal **nr5g,
                                      GError **error);
+
+    /* setup threshold values */
+    void     (* setup_thresholds)    (MMIfaceModemSignal *self,
+                                     guint32 rssi_threshold,
+                                     guint32 error_rate_threshold,
+                                     GAsyncReadyCallback callback,
+                                     gpointer user_data);
+    gboolean (* setup_thresholds_finish) (MMIfaceModemSignal *self,
+                                     GAsyncResult *res,
+                                     GError **error);
+
 };
 
 GType mm_iface_modem_signal_get_type (void);
@@ -86,6 +97,12 @@ void     mm_iface_modem_signal_disable        (MMIfaceModemSignal *self,
 gboolean mm_iface_modem_signal_disable_finish (MMIfaceModemSignal *self,
                                                GAsyncResult *res,
                                                GError **error);
+
+void mm_iface_update_signal_values(MMIfaceModemSignal *self,
+                                            MMSignal *gsm,
+                                            MMSignal *umts,
+                                            MMSignal *lte,
+                                            MMSignal *nr5g);
 
 /* Shutdown Signal interface */
 void mm_iface_modem_signal_shutdown (MMIfaceModemSignal *self);

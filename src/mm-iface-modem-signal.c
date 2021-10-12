@@ -293,6 +293,257 @@ handle_setup (MmGdbusModemSignal *skeleton,
     return TRUE;
 }
 
+void 
+mm_iface_update_signal_values(MMIfaceModemSignal *self,
+                                        MMSignal *gsm,
+                                        MMSignal *umts,
+                                        MMSignal *lte,
+                                        MMSignal *nr5g)
+{
+    g_autoptr(GVariant) dict_gsm = NULL;
+    g_autoptr(GVariant) dict_umts = NULL;
+    g_autoptr(GVariant) dict_lte = NULL;
+    g_autoptr(GVariant) dict_nr5g = NULL;
+    g_autoptr(MmGdbusModemSignalSkeleton) skeleton = NULL;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_SIGNAL_DBUS_SKELETON, &skeleton,
+                  NULL);
+    if (!skeleton) {
+        mm_obj_warn (self, "cannot update extended signal information: couldn't get interface skeleton");
+        return;
+    }
+
+    if (gsm) {
+        dict_gsm = mm_signal_get_dictionary (gsm);
+        mm_gdbus_modem_signal_set_gsm (MM_GDBUS_MODEM_SIGNAL (skeleton), dict_gsm);
+    }
+
+    if (umts) {
+        dict_umts = mm_signal_get_dictionary (umts);
+        mm_gdbus_modem_signal_set_umts (MM_GDBUS_MODEM_SIGNAL (skeleton), dict_umts);
+    }
+
+    if (lte) {
+        dict_lte = mm_signal_get_dictionary (lte);
+        mm_gdbus_modem_signal_set_lte (MM_GDBUS_MODEM_SIGNAL (skeleton), dict_lte);
+    }
+
+    if (nr5g) {
+        dict_nr5g = mm_signal_get_dictionary (nr5g);
+        mm_gdbus_modem_signal_set_nr5g (MM_GDBUS_MODEM_SIGNAL (skeleton), dict_nr5g);
+    }
+
+    /* Flush right away */
+    g_dbus_interface_skeleton_flush (G_DBUS_INTERFACE_SKELETON (skeleton));
+}
+
+/*****************************************************************************/
+
+typedef struct {
+    GDBusMethodInvocation *invocation;
+    MmGdbusModemSignal *skeleton;
+    MMIfaceModemSignal *self;
+    GVariant *settings;
+    guint32 rssi_threshold;
+    guint32 error_rate_threshold;
+} HandleSetupThresholdsContext;
+
+static void
+handle_setup_thresholds_context_free (HandleSetupThresholdsContext *ctx)
+{
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->skeleton);
+    g_object_unref (ctx->self);
+    if (ctx->settings)
+        g_variant_unref (ctx->settings);
+    g_slice_free (HandleSetupThresholdsContext, ctx);
+}
+
+static gboolean
+mm_get_threshold_settings_new_from_dictionary (HandleSetupThresholdsContext *ctx,
+                               GError **error)
+{
+    GError *inner_error = NULL;
+    GVariantIter iter;
+    gchar *key;
+    GVariant *value;
+
+    if (!g_variant_is_of_type (ctx->settings, G_VARIANT_TYPE ("a{sv}"))) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_INVALID_ARGS,
+                     "Cannot get threshold settings from dictionary: "
+                     "invalid variant type received");
+        return FALSE;
+    }
+
+    g_variant_iter_init (&iter, ctx->settings);
+    while ( !inner_error && g_variant_iter_next (&iter, "{sv}", &key, &value))
+    {
+        mm_obj_dbg (ctx->self, "%s loop",__func__);
+        if (g_str_equal (key, "rssi_threshold"))
+        {
+            ctx->rssi_threshold = g_variant_get_uint32 (value);
+        }
+        else if (g_str_equal (key, "error_rate_threshold"))
+        {
+            ctx->error_rate_threshold = g_variant_get_uint32 (value);
+        }
+        else
+        {
+            /* Set inner error, will stop the loop */
+            inner_error = g_error_new (MM_CORE_ERROR,
+                                       MM_CORE_ERROR_INVALID_ARGS,
+                                       "Invalid settings dictionary, unexpected key '%s'",
+                                       key);
+            mm_obj_dbg (ctx->self, "%s inner_error",__func__);
+        }
+
+        g_free (key);
+        g_variant_unref (value);
+    }
+
+    if (inner_error)
+    {
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void
+handle_setup_thresholds_ready (MMIfaceModemSignal *self,
+                       GAsyncResult *res,
+                       HandleSetupThresholdsContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!MM_IFACE_MODEM_SIGNAL_GET_INTERFACE (ctx->self)->setup_thresholds_finish (ctx->self, res, &error))
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+    else {
+        /* Update the property with the latest threshold setting*/
+        mm_gdbus_modem_signal_set_rssi_threshold(ctx->skeleton,ctx->rssi_threshold);
+        mm_gdbus_modem_signal_set_error_rate_threshold(ctx->skeleton,ctx->error_rate_threshold);
+        mm_gdbus_modem_signal_complete_setup_thresholds (ctx->skeleton, ctx->invocation);
+    }
+
+    handle_setup_thresholds_context_free (ctx);
+}
+
+static gboolean
+check_threshold_settings (HandleSetupThresholdsContext *ctx,
+                       GError **error)
+{
+    MmGdbusModemSignal *skeleton;
+    MMModemState        modem_state;
+    guint32             old_rssi_threshold;
+    guint32             old_error_threshold;
+
+    g_object_get (ctx->self,
+                  MM_IFACE_MODEM_SIGNAL_DBUS_SKELETON, &skeleton,
+                  MM_IFACE_MODEM_STATE, &modem_state,
+                  NULL);
+
+    if (!skeleton) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_FAILED,
+                     "Couldn't get interface skeleton");
+        return FALSE;
+    }
+
+    if (modem_state < MM_MODEM_STATE_ENABLING) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_WRONG_STATE,
+                     "Modem in wrong state");
+        return FALSE;
+    }
+
+    /* Compare to old threshold values */
+    old_rssi_threshold = mm_gdbus_modem_signal_get_rssi_threshold(skeleton);
+    old_error_threshold = mm_gdbus_modem_signal_get_error_rate_threshold(skeleton);
+
+    /* Set older threshold values before reading dictionary. So that if only
+       one value is passed then the other threshold will be maintained as set
+       previously*/
+    ctx->rssi_threshold = old_rssi_threshold;
+    ctx->error_rate_threshold = old_error_threshold;
+
+    if (!mm_get_threshold_settings_new_from_dictionary (ctx, error))
+    {
+        return FALSE;
+    }
+
+    if ((ctx->rssi_threshold == old_rssi_threshold) && (ctx->error_rate_threshold == old_error_threshold)) {
+        /* Already there */
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_INVALID_ARGS,
+                     "Same threshold settings already configured");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static void
+handle_setup_thresholds_auth_ready (MMBaseModem *self,
+                         GAsyncResult *res,
+                         HandleSetupThresholdsContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_authorize_finish (self, res, &error))
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+
+    if (!MM_IFACE_MODEM_SIGNAL_GET_INTERFACE (ctx->self)->setup_thresholds ||
+        !MM_IFACE_MODEM_SIGNAL_GET_INTERFACE (ctx->self)->setup_thresholds_finish) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot setup threshold: operation not supported");
+        handle_setup_thresholds_context_free (ctx);
+        return;
+    }
+
+    if (!(check_threshold_settings (ctx,&error))) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_setup_thresholds_context_free (ctx);
+        return;
+    }
+
+    MM_IFACE_MODEM_SIGNAL_GET_INTERFACE (ctx->self)->setup_thresholds (
+        ctx->self,
+        ctx->rssi_threshold,
+        ctx->error_rate_threshold,
+        (GAsyncReadyCallback)handle_setup_thresholds_ready,
+        ctx);
+}
+
+static gboolean
+handle_setup_thresholds (MmGdbusModemSignal *skeleton,
+              GDBusMethodInvocation *invocation,
+              GVariant *settings,
+              MMIfaceModemSignal *self)
+{
+    HandleSetupThresholdsContext *ctx;
+
+    ctx = g_slice_new0 (HandleSetupThresholdsContext);
+    ctx->invocation = g_object_ref (invocation);
+    ctx->skeleton = g_object_ref (skeleton);
+    ctx->self = g_object_ref (self);
+    ctx->settings = g_variant_ref (settings);
+
+    mm_base_modem_authorize (MM_BASE_MODEM (self),
+                             invocation,
+                             MM_AUTHORIZATION_DEVICE_CONTROL,
+                             (GAsyncReadyCallback)handle_setup_thresholds_auth_ready,
+                             ctx);
+    return TRUE;
+}
+
 /*****************************************************************************/
 
 gboolean
@@ -480,6 +731,10 @@ interface_initialization_step (GTask *task)
         g_signal_connect (ctx->skeleton,
                           "handle-setup",
                           G_CALLBACK (handle_setup),
+                          self);
+        g_signal_connect (ctx->skeleton,
+                          "handle-setup-thresholds",
+                          G_CALLBACK (handle_setup_thresholds),
                           self);
         /* Finally, export the new interface */
         mm_gdbus_object_skeleton_set_modem_signal (MM_GDBUS_OBJECT_SKELETON (self),
