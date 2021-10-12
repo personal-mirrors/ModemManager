@@ -34,6 +34,15 @@ G_BEGIN_DECLS
  */
 #define MM_SIGNAL_UNKNOWN -G_MAXDOUBLE
 
+/**
+ * MM_SIGNAL_UNKNOWN_UINT:
+ *
+ * Identifier for an unknown signal uint value.
+ *
+ * Since: 1.19
+ */
+#define MM_SIGNAL_UNKNOWN_UINT -G_MAXUINT
+
 #define MM_TYPE_SIGNAL            (mm_signal_get_type ())
 #define MM_SIGNAL(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_SIGNAL, MMSignal))
 #define MM_SIGNAL_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass),  MM_TYPE_SIGNAL, MMSignalClass))
@@ -73,6 +82,7 @@ gdouble  mm_signal_get_io   (MMSignal *self);
 gdouble  mm_signal_get_rsrq (MMSignal *self);
 gdouble  mm_signal_get_rsrp (MMSignal *self);
 gdouble  mm_signal_get_snr  (MMSignal *self);
+guint    mm_signal_get_error_rate (MMSignal *self);
 
 /*****************************************************************************/
 /* ModemManager/libmm-glib/mmcli specific methods */
@@ -95,6 +105,7 @@ void mm_signal_set_io   (MMSignal *self, gdouble value);
 void mm_signal_set_rsrq (MMSignal *self, gdouble value);
 void mm_signal_set_rsrp (MMSignal *self, gdouble value);
 void mm_signal_set_snr  (MMSignal *self, gdouble value);
+void mm_signal_set_error_rate  (MMSignal *self, guint value);
 
 #endif
 

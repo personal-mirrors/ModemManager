@@ -187,6 +187,91 @@ mm_modem_signal_setup_sync (MMModemSignal *self,
 /*****************************************************************************/
 
 /**
+ * mm_modem_signal_setup_thresholds_finish:
+ * @self: A #MMModemSignal.
+ * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to
+ *  mm_modem_signal_setup_thresholds().
+ * @error: Return location for error or %NULL.
+ *
+ * Finishes an operation started with mm_modem_signal_setup_thresholds().
+ *
+ * Returns: %TRUE if the setup was successful, %FALSE if @error is set.
+ *
+ * Since: 1.19
+ */
+gboolean
+mm_modem_signal_setup_thresholds_finish (MMModemSignal *self,
+                              GAsyncResult *res,
+                              GError **error)
+{
+    g_return_val_if_fail (MM_IS_MODEM_SIGNAL (self), FALSE);
+
+    return mm_gdbus_modem_signal_call_setup_thresholds_finish (MM_GDBUS_MODEM_SIGNAL (self), res, error);
+}
+
+/**
+ * mm_modem_signal_setup_thresholds:
+ * @self: A #MMModemSignal.
+ * @settings: Threshold values to be set.
+ * @cancellable: (allow-none): A #GCancellable or %NULL.
+ * @callback: A #GAsyncReadyCallback to call when the request is satisfied or
+ *  %NULL.
+ * @user_data: User data to pass to @callback.
+ *
+ * Asynchronously setups the threshold values for signal quality retrieval.
+ *
+ * When the operation is finished, @callback will be invoked in the
+ * <link linkend="g-main-context-push-thread-default">thread-default main loop</link>
+ * of the thread you are calling this method from. You can then call
+ * mm_modem_signal_setup_thresholds_finish() to get the result of the operation.
+ *
+ * See mm_modem_signal_setup_thresholds_sync() for the synchronous, blocking version of
+ * this method.
+ *
+ * Since: 1.19
+ */
+void
+mm_modem_signal_setup_thresholds (MMModemSignal *self,
+                       GVariant *settings,
+                       GCancellable *cancellable,
+                       GAsyncReadyCallback callback,
+                       gpointer user_data)
+{
+    g_return_if_fail (MM_IS_MODEM_SIGNAL (self));
+
+    mm_gdbus_modem_signal_call_setup_thresholds (MM_GDBUS_MODEM_SIGNAL (self), settings, cancellable, callback, user_data);
+}
+
+/**
+ * mm_modem_signal_setup_thresholds_sync:
+ * @self: A #MMModemSignal.
+ * @settings: Threshold values to be set.
+ * @cancellable: (allow-none): A #GCancellable or %NULL.
+ * @error: Return location for error or %NULL.
+ *
+ * Synchronously setups the threshold values for signal quality retrieval.
+ *
+ * The calling thread is blocked until a reply is received. See
+ * mm_modem_signal_setup_thresholds() for the asynchronous version of this method.
+ *
+ * Returns: %TRUE if the setup was successful, %FALSE if @error is set.
+ *
+ * Since: 1.19
+ */
+gboolean
+mm_modem_signal_setup_thresholds_sync (MMModemSignal *self,
+                            GVariant *settings,
+                            GCancellable *cancellable,
+                            GError **error)
+{
+    g_return_val_if_fail (MM_IS_MODEM_SIGNAL (self), FALSE);
+
+    return mm_gdbus_modem_signal_call_setup_thresholds_sync (MM_GDBUS_MODEM_SIGNAL (self), settings, cancellable, error);
+}
+
+/*****************************************************************************/
+
+/**
  * mm_modem_signal_get_rate:
  * @self: A #MMModemSignal.
  *
@@ -202,6 +287,46 @@ mm_modem_signal_get_rate (MMModemSignal *self)
     g_return_val_if_fail (MM_IS_MODEM_SIGNAL (self), 0);
 
     return mm_gdbus_modem_signal_get_rate (MM_GDBUS_MODEM_SIGNAL (self));
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_modem_signal_get_rssi_threshold:
+ * @self: A #MMModemSignal.
+ *
+ * Gets the currently configured RSSI threshold.
+ *
+ * Returns: the rssi threshold.
+ *
+ * Since: 1.19
+ */
+guint
+mm_modem_signal_get_rssi_threshold (MMModemSignal *self)
+{
+    g_return_val_if_fail (MM_IS_MODEM_SIGNAL (self), 0);
+
+    return mm_gdbus_modem_signal_get_rssi_threshold (MM_GDBUS_MODEM_SIGNAL (self));
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_modem_signal_get_error_rate_threshold:
+ * @self: A #MMModemSignal.
+ *
+ * Gets the currently configured error rate threshold.
+ *
+ * Returns: the error rate threshold.
+ *
+ * Since: 1.19
+ */
+guint
+mm_modem_signal_get_error_rate_threshold (MMModemSignal *self)
+{
+    g_return_val_if_fail (MM_IS_MODEM_SIGNAL (self), 0);
+
+    return mm_gdbus_modem_signal_get_error_rate_threshold (MM_GDBUS_MODEM_SIGNAL (self));
 }
 
 /*****************************************************************************/
