@@ -3359,24 +3359,45 @@ bearer_list_report_disconnected_status (MMBaseBearer *bearer,
 
 static void
 basic_connect_notification_connect (MMBroadbandModemMbim *self,
-                                    MbimMessage          *notification)
+                                    MbimMessage          *notification,
+                                    MbimDevice *device)
 {
     guint32                  session_id;
     MbimActivationState      activation_state;
     const MbimUuid          *context_type;
     guint32                  nw_error;
     g_autoptr(MMBearerList)  bearer_list = NULL;
+    MbimAccessMediaType      media_preference;
+    gchar                   *access_string;
 
-    if (!mbim_message_connect_notification_parse (
-            notification,
-            &session_id,
-            &activation_state,
-            NULL, /* voice_call_state */
-            NULL, /* ip_type */
-            &context_type,
-            &nw_error,
-            NULL)) {
-        return;
+    if (MBIM_V3 == mm_get_version(device)) {
+        if (!mbim_message_ms_basic_connect_v3_connect_notification_parse (
+                notification,
+                &session_id,
+                &activation_state,
+                NULL, /* voice_call_state */
+                NULL, /* ip_type */
+                &context_type,
+                &nw_error,
+                &media_preference,
+                &access_string,
+                NULL,
+                NULL)) {
+            return;
+        }
+    }
+    else {
+        if (!mbim_message_connect_notification_parse (
+                notification,
+                &session_id,
+                &activation_state,
+                NULL, /* voice_call_state */
+                NULL, /* ip_type */
+                &context_type,
+                &nw_error,
+                NULL)) {
+            return;
+        }
     }
 
     g_object_get (self,
@@ -3513,7 +3534,8 @@ sms_notification_read_flash_sms (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification (MMBroadbandModemMbim *self,
-                            MbimMessage *notification)
+                            MbimMessage *notification,
+                            MbimDevice *device)
 {
     switch (mbim_message_indicate_status_get_cid (notification)) {
     case MBIM_CID_BASIC_CONNECT_SIGNAL_STATE:
@@ -3526,7 +3548,7 @@ basic_connect_notification (MMBroadbandModemMbim *self,
         break;
     case MBIM_CID_BASIC_CONNECT_CONNECT:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_CONNECT)
-            basic_connect_notification_connect (self, notification);
+            basic_connect_notification_connect (self, notification, device);
         break;
     case MBIM_CID_BASIC_CONNECT_SUBSCRIBER_READY_STATUS:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO)
@@ -3843,7 +3865,7 @@ device_notification_cb (MbimDevice *device,
                                         mbim_message_indicate_status_get_cid (notification)));
 
     if (service == MBIM_SERVICE_BASIC_CONNECT)
-        basic_connect_notification (self, notification);
+        basic_connect_notification (self, notification, device);
     else if (service == MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS)
         ms_basic_connect_extensions_notification (self, notification);
     else if (service == MBIM_SERVICE_SMS)

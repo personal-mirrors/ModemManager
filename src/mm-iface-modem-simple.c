@@ -695,6 +695,7 @@ connect_auth_ready (MMBaseModem *self,
         gchar                    *str;
         MMBearerIpFamily          ip_family;
         gint                      profile_id;
+        MMAccessMediaType         media_preference;
 
 #define VALIDATE_UNSPECIFIED(str) (str ? str : "unspecified")
 
@@ -741,6 +742,10 @@ connect_auth_ready (MMBaseModem *self,
                                                                     mm_bearer_multiplex_support_get_string (multiplex) :
                                                                     NULL));
 
+        media_preference = mm_simple_connect_properties_get_media_preference (ctx->properties);
+        mm_obj_dbg (self, "   media-preference: %s", VALIDATE_UNSPECIFIED (media_preference != MM_ACCESS_MEDIA_TYPE_NONE ?
+                                                                    mm_access_mdeia_type_get_string (media_preference) :
+                                                                    NULL));
 #undef VALIDATE_UNSPECIFIED
     }
 

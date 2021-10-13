@@ -33,6 +33,7 @@
 #include "mm-bearer-mbim.h"
 #include "mm-log-object.h"
 #include "mm-context.h"
+#include "mm-enums-types.h"
 
 G_DEFINE_TYPE (MMBearerMbim, mm_bearer_mbim, MM_TYPE_BASE_BEARER)
 
@@ -224,6 +225,7 @@ typedef struct {
     MbimAuthProtocol       auth;
     MbimContextIpType      requested_ip_type;
     MbimContextIpType      activated_ip_type;
+    MbimAccessMediaType    media_preference;
     /* multiplex support */
     guint                  session_id;
     gchar                 *link_prefix_hint;
@@ -603,6 +605,8 @@ connect_set_ready (MbimDevice   *device,
     guint32                 session_id;
     MbimActivationState     activation_state;
     guint32                 nw_error;
+    MbimAccessMediaType     media_preference;
+    gchar                  *access_string;
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
@@ -610,37 +614,74 @@ connect_set_ready (MbimDevice   *device,
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
         (mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
-         error->code == MBIM_STATUS_ERROR_FAILURE)) {
+        error->code == MBIM_STATUS_ERROR_FAILURE)) {
         g_autoptr(GError) inner_error = NULL;
 
-        if (mbim_message_connect_response_parse (
-                response,
-                &session_id,
-                &activation_state,
-                NULL, /* voice_call_state */
-                &ctx->activated_ip_type,
-                NULL, /* context_type */
-                &nw_error,
-                &inner_error)) {
-            /* Report the IP type we asked for and the one returned by the modem */
-            mm_obj_dbg (self, "session ID '%u': %s (requested IP type: %s, activated IP type: %s, nw error: %s)",
-                        session_id,
-                        mbim_activation_state_get_string (activation_state),
-                        mbim_context_ip_type_get_string (ctx->requested_ip_type),
-                        mbim_context_ip_type_get_string (ctx->activated_ip_type),
-                        mbim_nw_error_get_string (nw_error));
-            /* If the response reports an ACTIVATED state, we're good even if
-             * there is a nw_error set (e.g. asking for IPv4v6 may return a
-             * 'pdp-type-ipv4-only-allowed' nw_error). */
-            if (activation_state != MBIM_ACTIVATION_STATE_ACTIVATED &&
-                activation_state != MBIM_ACTIVATION_STATE_ACTIVATING) {
-                g_clear_error (&error);
-                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
+        if (MBIM_V3 == mm_get_version(device)) {
+            if (mbim_message_ms_basic_connect_v3_connect_response_parse (
+                    response,
+                    &session_id,
+                    &activation_state,
+                    NULL,
+                    &ctx->activated_ip_type,
+                    NULL,
+                    &nw_error,
+                    &media_preference,
+                    &access_string,
+                    NULL,
+                    &inner_error)) {
+                /* Report the IP type we asked for and the one returned by the modem */
+                mm_obj_dbg (self, "session ID '%u': %s (requested IP type: %s, activated IP type: %s, nw error: %s)",
+                            session_id,
+                            mbim_activation_state_get_string (activation_state),
+                            mbim_context_ip_type_get_string (ctx->requested_ip_type),
+                            mbim_context_ip_type_get_string (ctx->activated_ip_type),
+                            mbim_nw_error_get_string (nw_error));
+                /* If the response reports an ACTIVATED state, we're good even if
+                * there is a nw_error set (e.g. asking for IPv4v6 may return a
+                * 'pdp-type-ipv4-only-allowed' nw_error). */
+                if (activation_state != MBIM_ACTIVATION_STATE_ACTIVATED &&
+                    activation_state != MBIM_ACTIVATION_STATE_ACTIVATING) {
+                    g_clear_error (&error);
+                    error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
+                 }
+
+            } else {
+                /* Prefer the error from the result to the parsing error */
+                if (!error)
+                    error = g_steal_pointer (&inner_error);
             }
-        } else {
-            /* Prefer the error from the result to the parsing error */
-            if (!error)
-                error = g_steal_pointer (&inner_error);
+        }
+        else {
+            if (mbim_message_connect_response_parse (
+                    response,
+                    &session_id,
+                    &activation_state,
+                    NULL, /* voice_call_state */
+                    &ctx->activated_ip_type,
+                    NULL, /* context_type */
+                    &nw_error,
+                    &inner_error)) {
+                /* Report the IP type we asked for and the one returned by the modem */
+                mm_obj_dbg (self, "session ID '%u': %s (requested IP type: %s, activated IP type: %s, nw error: %s)",
+                            session_id,
+                            mbim_activation_state_get_string (activation_state),
+                            mbim_context_ip_type_get_string (ctx->requested_ip_type),
+                            mbim_context_ip_type_get_string (ctx->activated_ip_type),
+                            mbim_nw_error_get_string (nw_error));
+                /* If the response reports an ACTIVATED state, we're good even if
+                 * there is a nw_error set (e.g. asking for IPv4v6 may return a
+                 * 'pdp-type-ipv4-only-allowed' nw_error). */
+                if (activation_state != MBIM_ACTIVATION_STATE_ACTIVATED &&
+                    activation_state != MBIM_ACTIVATION_STATE_ACTIVATING) {
+                    g_clear_error (&error);
+                   error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
+                }
+            } else {
+                /* Prefer the error from the result to the parsing error */
+                if (!error)
+                    error = g_steal_pointer (&inner_error);
+            }
         }
     }
 
@@ -684,23 +725,45 @@ check_disconnected_ready (MbimDevice   *device,
     g_autoptr(MbimMessage)  response = NULL;
     guint32                 session_id;
     MbimActivationState     activation_state;
+    MbimAccessMediaType     media_preference;
+    gchar                  *access_string;
+
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_connect_response_parse (
-            response,
-            &session_id,
-            &activation_state,
-            NULL, /* voice_call_state */
-            NULL, /* ip_type */
-            NULL, /* context_type */
-            NULL, /* nw_error */
-            &error)) {
-        mm_obj_dbg (self, "session ID '%u': %s", session_id, mbim_activation_state_get_string (activation_state));
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        if (MBIM_V3 == mm_get_version(device)) {
+            if (mbim_message_ms_basic_connect_v3_connect_response_parse (
+                response,
+                &session_id,
+                &activation_state,
+                NULL, /* voice_call_state */
+                NULL, /* ip_type */
+                NULL, /* context_type */
+                NULL, /* nw_error */
+                &media_preference,
+                &access_string,
+                NULL,
+                &error)) {
+            mm_obj_dbg (self, "session ID '%u': %s", session_id, mbim_activation_state_get_string (activation_state));
+            }
+        }
+        else {
+            if (mbim_message_connect_response_parse (
+                response,
+                &session_id,
+                &activation_state,
+                NULL, /* voice_call_state */
+                NULL, /* ip_type */
+                NULL, /* context_type */
+                NULL, /* nw_error */
+                &error)) {
+            mm_obj_dbg (self, "session ID '%u': %s", session_id, mbim_activation_state_get_string (activation_state));
+            }
+        }
     } else
         activation_state = MBIM_ACTIVATION_STATE_UNKNOWN;
 
@@ -1044,14 +1107,21 @@ connect_context_step (GTask *task)
 
     case CONNECT_STEP_CHECK_DISCONNECTED:
         mm_obj_dbg (self, "checking if session %u is disconnected...", ctx->session_id);
-        message = mbim_message_connect_query_new (
-                      ctx->session_id,
-                      MBIM_ACTIVATION_STATE_UNKNOWN,
-                      MBIM_VOICE_CALL_STATE_NONE,
-                      MBIM_CONTEXT_IP_TYPE_DEFAULT,
-                      mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
-                      0,
-                      NULL);
+
+        if (MBIM_V3 == mm_get_version(mm_port_mbim_peek_device (ctx->mbim)))
+            message = mbim_message_ms_basic_connect_v3_connect_query_new (
+                          ctx->session_id,
+                          NULL);
+        else
+            message = mbim_message_connect_query_new (
+                          ctx->session_id,
+                          MBIM_ACTIVATION_STATE_UNKNOWN,
+                          MBIM_VOICE_CALL_STATE_NONE,
+                          MBIM_CONTEXT_IP_TYPE_DEFAULT,
+                          mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
+                          0,
+                          NULL);
+
         mbim_device_command (mm_port_mbim_peek_device (ctx->mbim),
                              message,
                              10,
@@ -1062,17 +1132,32 @@ connect_context_step (GTask *task)
 
     case CONNECT_STEP_ENSURE_DISCONNECTED:
         mm_obj_dbg (self, "ensuring session %u is disconnected...", ctx->session_id);
-        message = mbim_message_connect_set_new (
-                      ctx->session_id,
-                      MBIM_ACTIVATION_COMMAND_DEACTIVATE,
-                      "",
-                      "",
-                      "",
-                      MBIM_COMPRESSION_NONE,
-                      MBIM_AUTH_PROTOCOL_NONE,
-                      MBIM_CONTEXT_IP_TYPE_DEFAULT,
-                      mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
-                      NULL);
+        if (MBIM_V3 == mm_get_version(mm_port_mbim_peek_device (ctx->mbim)))
+            message = mbim_message_ms_basic_connect_v3_connect_set_new (
+                          ctx->session_id,
+                          MBIM_ACTIVATION_COMMAND_DEACTIVATE,
+                          MBIM_COMPRESSION_NONE,
+                          MBIM_AUTH_PROTOCOL_NONE,
+                          MBIM_CONTEXT_IP_TYPE_DEFAULT,
+                          mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
+                          MBIM_ACCESS_MEDIA_TYPE_UNKNOWN,
+                          "",
+                          "",
+                          "",
+                          NULL,
+                          NULL);
+        else
+            message = mbim_message_connect_set_new (
+                          ctx->session_id,
+                          MBIM_ACTIVATION_COMMAND_DEACTIVATE,
+                          "",
+                          "",
+                          "",
+                          MBIM_COMPRESSION_NONE,
+                          MBIM_AUTH_PROTOCOL_NONE,
+                          MBIM_CONTEXT_IP_TYPE_DEFAULT,
+                          mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
+                          NULL);
         mbim_device_command (mm_port_mbim_peek_device (ctx->mbim),
                              message,
                              MM_BASE_BEARER_DEFAULT_DISCONNECTION_TIMEOUT,
@@ -1084,17 +1169,33 @@ connect_context_step (GTask *task)
     case CONNECT_STEP_CONNECT:
         mm_obj_dbg (self, "launching %s connection in session %u...",
                     mbim_context_ip_type_get_string (ctx->requested_ip_type), ctx->session_id);
-        message = mbim_message_connect_set_new (
-                      ctx->session_id,
-                      MBIM_ACTIVATION_COMMAND_ACTIVATE,
-                      ctx->apn ? ctx->apn : "",
-                      ctx->user ? ctx->user : "",
-                      ctx->password ? ctx->password : "",
-                      MBIM_COMPRESSION_NONE,
-                      ctx->auth,
-                      ctx->requested_ip_type,
-                      mbim_uuid_from_context_type (ctx->context_type),
-                      NULL);
+
+        if (MBIM_V3 == mm_get_version(mm_port_mbim_peek_device (ctx->mbim)))
+            message = mbim_message_ms_basic_connect_v3_connect_set_new (
+                           ctx->session_id,
+                           MBIM_ACTIVATION_COMMAND_ACTIVATE,
+                           MBIM_COMPRESSION_NONE,
+                           ctx->auth,
+                           ctx->requested_ip_type,
+                           mbim_uuid_from_context_type (ctx->context_type),
+                           ctx->media_preference,
+                           ctx->apn ? ctx->apn : "",
+                           ctx->user ? ctx->user : "",
+                           ctx->password ? ctx->password : "",
+                           NULL,
+                           NULL);
+        else
+            message = mbim_message_connect_set_new (
+                          ctx->session_id,
+                          MBIM_ACTIVATION_COMMAND_ACTIVATE,
+                          ctx->apn ? ctx->apn : "",
+                          ctx->user ? ctx->user : "",
+                          ctx->password ? ctx->password : "",
+                          MBIM_COMPRESSION_NONE,
+                          ctx->auth,
+                          ctx->requested_ip_type,
+                          mbim_uuid_from_context_type (ctx->context_type),
+                          NULL);
         mbim_device_command (mm_port_mbim_peek_device (ctx->mbim),
                              message,
                              MM_BASE_BEARER_DEFAULT_CONNECTION_TIMEOUT,
@@ -1359,6 +1460,8 @@ disconnect_set_ready (MbimDevice   *device,
     g_autoptr(GError)       inner_error = NULL;
     gboolean                result = FALSE;
     gboolean                parsed_result = FALSE;
+    MbimAccessMediaType     media_preference;
+    gchar                  *access_string;
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
@@ -1373,15 +1476,29 @@ disconnect_set_ready (MbimDevice   *device,
     if (result ||
         g_error_matches (error, MBIM_STATUS_ERROR, MBIM_STATUS_ERROR_FAILURE) ||
         g_error_matches (error, MBIM_STATUS_ERROR, MBIM_STATUS_ERROR_CONTEXT_NOT_ACTIVATED)) {
-        parsed_result = mbim_message_connect_response_parse (
-                             response,
-                             &session_id,
-                             &activation_state,
-                             NULL, /* voice_call_state */
-                             NULL, /* ip_type */
-                             NULL, /* context_type */
-                             &nw_error,
-                             &inner_error);
+        if (MBIM_V3 == mm_get_version(device))
+            parsed_result = mbim_message_ms_basic_connect_v3_connect_response_parse (
+                                response,
+                                &session_id,
+                                &activation_state,
+                                NULL, /* voice_call_state */
+                                NULL, /* ip_type */
+                                NULL, /* context_type */
+                                &nw_error,
+                                &media_preference,
+                                &access_string,
+                                NULL,
+                                &inner_error);
+        else
+            parsed_result = mbim_message_connect_response_parse (
+                                response,
+                                &session_id,
+                                &activation_state,
+                                NULL, /* voice_call_state */
+                                NULL, /* ip_type */
+                                NULL, /* context_type */
+                                &nw_error,
+                                &inner_error);
     }
 
     /* Now handle different response / error cases */
@@ -1447,17 +1564,32 @@ disconnect_context_step (GTask *task)
     case DISCONNECT_STEP_DISCONNECT: {
         g_autoptr(MbimMessage) message = NULL;
 
-        message = mbim_message_connect_set_new (
-                      ctx->session_id,
-                      MBIM_ACTIVATION_COMMAND_DEACTIVATE,
-                      "",
-                      "",
-                      "",
-                      MBIM_COMPRESSION_NONE,
-                      MBIM_AUTH_PROTOCOL_NONE,
-                      MBIM_CONTEXT_IP_TYPE_DEFAULT,
-                      mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
-                      NULL);
+        if (MBIM_V3 == mm_get_version(mm_port_mbim_peek_device (ctx->mbim)))
+            message = mbim_message_ms_basic_connect_v3_connect_set_new (
+                          ctx->session_id,
+                          MBIM_ACTIVATION_COMMAND_DEACTIVATE,
+                          MBIM_COMPRESSION_NONE,
+                          MBIM_AUTH_PROTOCOL_NONE,
+                          MBIM_CONTEXT_IP_TYPE_DEFAULT,
+                          mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
+                          MBIM_ACCESS_MEDIA_TYPE_UNKNOWN,
+                          "",
+                          "",
+                          "",
+                          NULL,
+                          NULL);
+        else
+            message = mbim_message_connect_set_new (
+                          ctx->session_id,
+                          MBIM_ACTIVATION_COMMAND_DEACTIVATE,
+                          "",
+                          "",
+                          "",
+                          MBIM_COMPRESSION_NONE,
+                          MBIM_AUTH_PROTOCOL_NONE,
+                          MBIM_CONTEXT_IP_TYPE_DEFAULT,
+                          mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
+                          NULL);
         mbim_device_command (mm_port_mbim_peek_device (ctx->mbim),
                              message,
                              MM_BASE_BEARER_DEFAULT_DISCONNECTION_TIMEOUT,
@@ -1573,21 +1705,44 @@ reload_connection_status_ready (MbimDevice   *device,
 
     response = mbim_device_command_finish (device, res, &error);
     if (!response ||
-        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
-        !mbim_message_connect_response_parse (
-            response,
-            &session_id,
-            &activation_state,
-            NULL, /* voice_call_state */
-            NULL, /* ip_type */
-            NULL, /* context_type */
-            NULL, /* nw_error */
-            &error)) {
-        g_prefix_error (&error, "Cannot load session ID '%u' status: ",
-                        mm_bearer_mbim_get_session_id (MM_BEARER_MBIM (self)));
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
+        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        if (MBIM_V3 == mm_get_version(device)) {
+            if (!mbim_message_ms_basic_connect_v3_connect_response_parse (
+                response,
+                &session_id,
+                &activation_state,
+                NULL, /* voice_call_state */
+                NULL, /* ip_type */
+                NULL, /* context_type */
+                NULL, /* nw_error */
+                NULL,
+                NULL,
+                NULL,
+                &error)) {
+            g_prefix_error (&error, "Cannot load session ID '%u' status: ",
+                            mm_bearer_mbim_get_session_id (MM_BEARER_MBIM (self)));
+            g_task_return_error (task, error);
+            g_object_unref (task);
+            return;
+            }
+        }
+        else {
+            if (!mbim_message_connect_response_parse (
+                response,
+                &session_id,
+                &activation_state,
+                NULL, /* voice_call_state */
+                NULL, /* ip_type */
+                NULL, /* context_type */
+                NULL, /* nw_error */
+                &error)) {
+            g_prefix_error (&error, "Cannot load session ID '%u' status: ",
+                            mm_bearer_mbim_get_session_id (MM_BEARER_MBIM (self)));
+            g_task_return_error (task, error);
+            g_object_unref (task);
+            return;
+            }
+        }
     }
 
     mm_obj_dbg (self, "session ID '%u': %s", session_id, mbim_activation_state_get_string (activation_state));
@@ -1633,13 +1788,17 @@ reload_connection_status (MMBaseBearer        *self,
         return;
 
     task = g_task_new (self, NULL, callback, user_data);
-    message = mbim_message_connect_query_new (mm_bearer_mbim_get_session_id (MM_BEARER_MBIM (self)),
-                                              MBIM_ACTIVATION_STATE_UNKNOWN,
-                                              MBIM_VOICE_CALL_STATE_NONE,
-                                              MBIM_CONTEXT_IP_TYPE_DEFAULT,
-                                              mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
-                                              0,
-                                              NULL);
+    if (MBIM_V3 == mm_get_version(mm_port_mbim_peek_device (mbim)))
+        message = mbim_message_ms_basic_connect_v3_connect_query_new (mm_bearer_mbim_get_session_id (MM_BEARER_MBIM (self)),
+                                                                      NULL);
+    else
+        message = mbim_message_connect_query_new (mm_bearer_mbim_get_session_id (MM_BEARER_MBIM (self)),
+                                                  MBIM_ACTIVATION_STATE_UNKNOWN,
+                                                  MBIM_VOICE_CALL_STATE_NONE,
+                                                  MBIM_CONTEXT_IP_TYPE_DEFAULT,
+                                                  mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
+                                                  0,
+                                                  NULL);
     mbim_device_command (mm_port_mbim_peek_device (mbim),
                          message,
                          10,

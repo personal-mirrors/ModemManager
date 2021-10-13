@@ -36,6 +36,7 @@ G_DEFINE_TYPE (MMBearerProperties, mm_bearer_properties, G_TYPE_OBJECT)
 #define PROPERTY_ALLOW_ROAMING "allow-roaming"
 #define PROPERTY_RM_PROTOCOL   "rm-protocol"
 #define PROPERTY_MULTIPLEX     "multiplex"
+#define PROPERTY_MEDIA_PREFERENCE "media-preference"
 
 /* no longer used properties */
 #define DEPRECATED_PROPERTY_NUMBER "number"
@@ -51,6 +52,7 @@ struct _MMBearerPropertiesPrivate {
     MMModemCdmaRmProtocol rm_protocol;
     /* Multiplex support */
     MMBearerMultiplexSupport multiplex;
+    MMAccessMediaType media_preference;
 };
 
 /*****************************************************************************/
@@ -444,6 +446,43 @@ mm_bearer_properties_get_multiplex (MMBearerProperties *self)
 /*****************************************************************************/
 
 /**
+ * mm_bearer_properties_set_media_preference:
+ * @self: a #MMBearerProperties.
+ * @media_preference: a #MMAccessMediaType.
+ *
+ * Gets the type of media preference requested by the user.
+ *
+ * Since: 1.18
+ */
+void
+mm_bearer_properties_set_media_preference (MMBearerProperties *self,
+                                           MMAccessMediaType  media_preference)
+{
+    g_return_if_fail (MM_IS_BEARER_PROPERTIES (self));
+
+    self->priv->media_preference = media_preference;
+}
+
+/**
+ * mm_bearer_properties_get_media_preference:
+ * @self: a #MMBearerProperties.
+ *
+ * Gets the type of media preference requested by the user.
+ *
+ * Returns: a #MMAccessMediaType.
+ *
+ * Since: 1.18
+ */
+MMAccessMediaType
+mm_bearer_properties_get_media_preference (MMBearerProperties *self)
+{
+    g_return_val_if_fail (MM_IS_BEARER_PROPERTIES (self), MM_ACCESS_MEDIA_TYPE_NONE);
+
+    return self->priv->media_preference;
+}
+/*****************************************************************************/
+
+/**
  * mm_bearer_properties_peek_3gpp_profile: (skip)
  */
 MM3gppProfile *
@@ -552,6 +591,12 @@ mm_bearer_properties_consume_string (MMBearerProperties  *self,
         multiplex = mm_common_get_multiplex_support_from_string (value, &inner_error);
         if (!inner_error)
             mm_bearer_properties_set_multiplex (self, multiplex);
+    } else if (g_str_equal (key, PROPERTY_MEDIA_PREFERENCE)) {
+        MMAccessMediaType media_preference;
+
+        media_preference = mm_common_get_media_type_from_string (value, &inner_error);
+        if (!inner_error)
+            mm_bearer_properties_set_media_preference (self, media_preference);
     } else if (g_str_equal (key, DEPRECATED_PROPERTY_NUMBER)) {
         /* NO-OP */
     } else {
@@ -632,6 +677,8 @@ mm_bearer_properties_consume_variant (MMBearerProperties  *self,
         mm_bearer_properties_set_rm_protocol (self, g_variant_get_uint32 (value));
     else if (g_str_equal (key, PROPERTY_MULTIPLEX))
         mm_bearer_properties_set_multiplex (self, g_variant_get_uint32 (value));
+    else if (g_str_equal (key, PROPERTY_MEDIA_PREFERENCE))
+        mm_bearer_properties_set_media_preference (self, g_variant_get_uint32 (value));
     else if (g_str_equal (key, DEPRECATED_PROPERTY_NUMBER)) {
         /* NO-OP */
     } else {

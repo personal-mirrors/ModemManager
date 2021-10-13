@@ -1617,4 +1617,17 @@ typedef enum { /*< underscore_name=mm_bearer_apn_type >*/
     MM_BEARER_APN_TYPE_TETHERING   = 1 << 16,
 } MMBearerApnType;
 
+/**
+ * MMAccessMediaType:
+ * @MM_ACCESS_MEDIA_TYPE_NONE: Unknown or unsupported.
+ * @MM_ACCESS_MEDIA_TYPE_3GPP: 3GPP access media.
+ * @MM_ACCESS_MEDIA_TYPE_3GPP_PREFERED: 3GPP access media is preferred.
+ *
+*/
+typedef enum { /*< underscore_name=mm_access_mdeia_type >*/
+    MM_ACCESS_MEDIA_TYPE_NONE          = 0,
+    MM_ACCESS_MEDIA_TYPE_3GPP          = 1,
+    MM_ACCESS_MEDIA_TYPE_3GPP_PREFERED = 2,
+} MMAccessMediaType;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */
