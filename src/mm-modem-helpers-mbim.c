@@ -503,3 +503,46 @@ mm_sms_state_from_mbim_message_status (MbimSmsStatus status)
     return MM_SMS_STATE_UNKNOWN;
 }
 
+MMSimType
+mm_sim_type_from_mbim_subscriber_ready_status_flag(MbimSubscriberReadyStatusFlag ready_flag)
+{
+    /* Here if the ESIM mask is enabled then the current SIM is a ESIM */
+    if (ready_flag & MBIM_SUBSCRIBER_READY_STATUS_FLAG_ESIM)
+        return MM_SIM_TYPE_ESIM;
+    else
+        return MM_SIM_TYPE_PHYSICAL;
+}
+
+MMSimEsimStatus
+mm_sim_esim_status_from_mbim_subscriber_ready_status_flag(MbimSubscriberReadyState ready_state,MbimSubscriberReadyStatusFlag ready_flag)
+{
+    /* Here if the ESIM mask is enabled setting profiles to known */
+    if (ready_flag & MBIM_SUBSCRIBER_READY_STATUS_FLAG_ESIM) {
+            if (MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE == ready_state)
+                return MM_SIM_ESIM_STATUS_NO_PROFILES;
+            else
+                return MM_SIM_ESIM_STATUS_WITH_PROFILES;
+    }
+    else
+        return MM_SIM_ESIM_STATUS_UNKNOWN;
+}
+
+MMSimRemovability
+mm_sim_removability_from_mbim_subscriber_ready_status_flag(MbimSubscriberReadyStatusFlag ready_flag)
+{
+    /* Here if the SIM removability is set based on both flags, sim removability known and sim removable */
+    if (ready_flag & MBIM_SUBSCRIBER_READY_STATUS_FLAG_SIM_REMOVABILITY_KNOWN) {
+        if (ready_flag & MBIM_SUBSCRIBER_READY_STATUS_FLAG_SIM_REMOVABLE)
+            return MM_SIM_REMOVABILITY_REMOVABLE;
+        else
+            return MM_SIM_REMOVABILITY_NOT_REMOVABLE;
+    }
+    else
+        return MM_SIM_REMOVABILITY_UNKNOWN;
+}
+
+guint8
+mm_get_version (MbimDevice *device)
+{
+    return mbim_device_get_ms_mbimex_version(device, NULL);
+}

@@ -83,34 +83,50 @@ simid_subscriber_ready_state_ready (MbimDevice *device,
                                     GAsyncResult *res,
                                     GTask *task)
 {
-    MbimMessage *response;
-    GError *error = NULL;
-    gchar *sim_iccid = NULL;
-    g_autofree gchar *raw_iccid = NULL;
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                  *error = NULL;
+    gchar                   *sim_iccid;
+    g_autofree gchar        *raw_iccid = NULL;
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_subscriber_ready_status_response_parse (
-            response,
-            NULL, /* ready_state */
-            NULL, /* subscriber_id */
-            &raw_iccid,
-            NULL, /* ready_info */
-            NULL, /* telephone_numbers_count */
-            NULL, /* telephone_numbers */
-            &error))
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+
+        /* Call the parse response based on MBIM version */
+        if (MBIM_V3 == mm_get_version (device) ) {
+            if (!(mbim_message_ms_basic_connect_v3_subscriber_ready_status_response_parse (
+                            response,
+                            NULL, /* ready_state */
+                            NULL, /* flags */
+                            NULL, /* subscriber_id */
+                            &raw_iccid,
+                            NULL, /* ready_info */
+                            NULL, /* telephone_numbers_count */
+                            NULL, /* telephone_numbers */
+                            &error))) {
+                g_task_return_error (task, error);
+                goto out;
+            }
+        } else {
+            if (!(mbim_message_subscriber_ready_status_response_parse (
+                            response,
+                            NULL, /* ready_state */
+                            NULL, /* subscriber_id */
+                            &raw_iccid,
+                            NULL, /* ready_info */
+                            NULL, /* telephone_numbers_count */
+                            NULL, /* telephone_numbers */
+                            &error))) {
+                g_task_return_error (task, error);
+                goto out;
+            }
+        }
         sim_iccid = mm_3gpp_parse_iccid (raw_iccid, &error);
-
-    if (error)
-        g_task_return_error (task, error);
-    else
         g_task_return_pointer (task, sim_iccid, g_free);
+    }
 
+out:
     g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
 }
 
 static void
@@ -153,29 +169,48 @@ imsi_subscriber_ready_state_ready (MbimDevice *device,
                                    GAsyncResult *res,
                                    GTask *task)
 {
-    MbimMessage *response;
-    GError *error = NULL;
-    gchar *subscriber_id;
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                  *error = NULL;
+    gchar                   *subscriber_id;
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_subscriber_ready_status_response_parse (
-            response,
-            NULL, /* ready_state */
-            &subscriber_id,
-            NULL, /* sim_iccid */
-            NULL, /* ready_info */
-            NULL, /* telephone_numbers_count */
-            NULL, /* telephone_numbers */
-            &error))
-        g_task_return_pointer (task, subscriber_id, g_free);
-    else
-        g_task_return_error (task, error);
-    g_object_unref (task);
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
 
-    if (response)
-        mbim_message_unref (response);
+        /* Call the parse response based on MBIM version */
+        if (MBIM_V3 == mm_get_version (device) ) {
+            if (!(mbim_message_ms_basic_connect_v3_subscriber_ready_status_response_parse (
+                            response,
+                            NULL, /* ready_state */
+                            NULL, /* flags */
+                            &subscriber_id,
+                            NULL, /* sim_iccid */
+                            NULL, /* ready_info */
+                            NULL, /* telephone_numbers_count */
+                            NULL, /* telephone_numbers */
+                            &error))) {
+                    g_task_return_error (task, error);
+                    goto out;
+                }
+        } else {
+            if (!(mbim_message_subscriber_ready_status_response_parse (
+                            response,
+                            NULL, /* ready_state */
+                            &subscriber_id,
+                            NULL, /* sim_iccid */
+                            NULL, /* ready_info */
+                            NULL, /* telephone_numbers_count */
+                            NULL, /* telephone_numbers */
+                            &error))) {
+                    g_task_return_error (task, error);
+                    goto out;
+                }
+        }
+        g_task_return_pointer (task, subscriber_id, g_free);
+    }
+
+out:
+    g_object_unref (task);
 }
 
 static void

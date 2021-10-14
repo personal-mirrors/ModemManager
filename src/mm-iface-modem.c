@@ -200,6 +200,23 @@ mm_iface_modem_modify_sim (MMIfaceModem  *self,
     mm_gdbus_modem_set_sim_slots (MM_GDBUS_MODEM (skeleton), (const gchar *const *) sim_slot_paths);
 }
 
+void
+mm_iface_modem_update_sim_details (MMIfaceModem  *self,
+                                    MMSimType  sim_type,
+                                    MMSimEsimStatus  esim_staus,
+                                    MMSimRemovability  sim_removal_staus)
+{
+    g_autoptr(MmGdbusModemSkeleton)  skeleton = NULL;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
+                  NULL);
+
+    mm_gdbus_modem_set_sim_type (MM_GDBUS_MODEM (skeleton), sim_type);
+    mm_gdbus_modem_set_esim_status (MM_GDBUS_MODEM (skeleton), esim_staus);
+    mm_gdbus_modem_set_sim_removability (MM_GDBUS_MODEM (skeleton), sim_removal_staus);
+}
+
 /*****************************************************************************/
 
 void
@@ -5916,6 +5933,9 @@ mm_iface_modem_initialize (MMIfaceModem *self,
         mm_gdbus_modem_set_supported_ip_families (skeleton, MM_BEARER_IP_FAMILY_NONE);
         mm_gdbus_modem_set_power_state (skeleton, MM_MODEM_POWER_STATE_UNKNOWN);
         mm_gdbus_modem_set_state_failed_reason (skeleton, MM_MODEM_STATE_FAILED_REASON_NONE);
+        mm_gdbus_modem_set_sim_type (skeleton, MM_SIM_TYPE_UNKNOWN);
+        mm_gdbus_modem_set_esim_status (skeleton, MM_SIM_ESIM_STATUS_UNKNOWN);
+        mm_gdbus_modem_set_sim_removability (skeleton, MM_SIM_REMOVABILITY_UNKNOWN);
 
         /* Bind our State property */
         g_object_bind_property (self, MM_IFACE_MODEM_STATE,
