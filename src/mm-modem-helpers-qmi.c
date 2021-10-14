@@ -1696,14 +1696,25 @@ qmi_mobile_equipment_error_from_verbose_call_end_reason_3gpp (QmiWdsVerboseCallE
 /* QMI/WDA to MM translations */
 
 QmiDataEndpointType
-mm_port_subsys_to_qmi_endpoint_type (MMPortSubsys subsys)
+mm_port_subsys_to_qmi_endpoint_type (MMPortSubsys subsys,
+                                     const gchar *net_driver)
 {
     switch (subsys) {
         case MM_PORT_SUBSYS_USBMISC:
             return QMI_DATA_ENDPOINT_TYPE_HSUSB;
         case MM_PORT_SUBSYS_RPMSG:
-        case MM_PORT_SUBSYS_QRTR:
             return QMI_DATA_ENDPOINT_TYPE_EMBEDDED;
+        case MM_PORT_SUBSYS_QRTR:
+            /* QRTR based targets can have different enpoint types depending
+             * on the transport bus used. Check the driver type to determine
+             * the proper selection.
+             */
+            if (g_strcmp0 (net_driver, "ipa") == 0)
+                return QMI_DATA_ENDPOINT_TYPE_EMBEDDED;
+            if (g_strcmp0 (net_driver, "mhi_net") == 0)
+                return QMI_DATA_ENDPOINT_TYPE_PCIE;
+
+            g_assert_not_reached ();
         /* The WWAN subsystem abstracts the underlying transport bus, and so
          * endpoint type can not be deducted from that. This function should
          * then be revisited, but in practice, only MHI/PCI modem ports are

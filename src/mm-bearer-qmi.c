@@ -2145,12 +2145,13 @@ load_settings_from_bearer (MMBearerQmi         *self,
 
     data_port_driver = mm_kernel_device_get_driver (mm_port_peek_kernel_device (ctx->data));
 
-    /* If no multiplex setting given by the user, assume none; unless in IPA */
+    /* If no multiplex setting given by the user, assume none; unless in IPA or MHI */
     ctx->multiplex = mm_bearer_properties_get_multiplex (properties);
     if (ctx->multiplex == MM_BEARER_MULTIPLEX_SUPPORT_UNKNOWN) {
         if (mm_context_get_test_multiplex_requested ())
             ctx->multiplex = MM_BEARER_MULTIPLEX_SUPPORT_REQUESTED;
-        else if (!g_strcmp0 (data_port_driver, "ipa"))
+        else if (!g_strcmp0 (data_port_driver, "ipa") ||
+                 !g_strcmp0 (data_port_driver, "mhi_net"))
             ctx->multiplex = MM_BEARER_MULTIPLEX_SUPPORT_REQUIRED;
         else
             ctx->multiplex = MM_BEARER_MULTIPLEX_SUPPORT_NONE;
