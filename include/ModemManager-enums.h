@@ -1601,4 +1601,16 @@ typedef enum { /*< underscore_name=mm_bearer_apn_type >*/
     MM_BEARER_APN_TYPE_PRIVATE    = 1 << 7,
 } MMBearerApnType;
 
+/**
+ * MMPacketServiceAction:
+ * @MM_PACKET_SERVICE_ACTION_ATTACH: Attach.
+ * @MM_PACKET_SERVICE_ACTION_DETACH: Detach.
+ *
+ * Packet Service Action.
+ */
+typedef enum { /*< underscore_name=mm_packet_service_action >*/
+    MM_PACKET_SERVICE_ACTION_ATTACH = 0,
+    MM_PACKET_SERVICE_ACTION_DETACH = 1
+} MMPacketServiceAction;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */

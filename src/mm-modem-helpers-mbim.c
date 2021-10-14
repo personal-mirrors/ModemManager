@@ -503,3 +503,11 @@ mm_sms_state_from_mbim_message_status (MbimSmsStatus status)
     return MM_SMS_STATE_UNKNOWN;
 }
 
+guint8
+mm_get_version (MbimDevice *device)
+{
+    guint8 major_version;
+
+    major_version = mbim_device_get_ms_mbimex_version(device, NULL);
+    return major_version;
+}

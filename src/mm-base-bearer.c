@@ -56,14 +56,6 @@ static void log_object_iface_init (MMLogObjectInterface *iface);
 G_DEFINE_TYPE_EXTENDED (MMBaseBearer, mm_base_bearer, MM_GDBUS_TYPE_BEARER_SKELETON, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_LOG_OBJECT, log_object_iface_init))
 
-typedef enum {
-    CONNECTION_FORBIDDEN_REASON_NONE,
-    CONNECTION_FORBIDDEN_REASON_UNREGISTERED,
-    CONNECTION_FORBIDDEN_REASON_ROAMING,
-    CONNECTION_FORBIDDEN_REASON_EMERGENCY_ONLY,
-    CONNECTION_FORBIDDEN_REASON_LAST
-} ConnectionForbiddenReason;
-
 enum {
     PROP_0,
     PROP_PATH,
@@ -75,58 +67,6 @@ enum {
 };
 
 static GParamSpec *properties[PROP_LAST];
-
-struct _MMBaseBearerPrivate {
-    /* The connection to the system bus */
-    GDBusConnection *connection;
-    guint            dbus_id;
-
-    /* The modem which owns this BEARER */
-    MMBaseModem *modem;
-    /* The path where the BEARER object is exported */
-    gchar *path;
-    /* Status of this bearer */
-    MMBearerStatus status;
-    /* Whether we must ignore all disconnection updates if they're
-     * detected by ModemManager itself. */
-    gboolean ignore_disconnection_reports;
-    /* Configuration of the bearer */
-    MMBearerProperties *config;
-
-    /* Cancellable for connect() */
-    GCancellable *connect_cancellable;
-    /* handler id for the disconnect + cancel connect request */
-    gulong disconnect_signal_handler;
-
-    /* Connection status monitoring */
-    guint connection_monitor_id;
-    /* Flag to specify whether connection monitoring is supported or not */
-    gboolean load_connection_status_unsupported;
-
-    /*-- 3GPP specific --*/
-    guint deferred_3gpp_unregistration_id;
-    /* Reason if 3GPP connection is forbidden */
-    ConnectionForbiddenReason reason_3gpp;
-    /* Handler ID for the registration state change signals */
-    guint id_3gpp_registration_change;
-
-    /*-- CDMA specific --*/
-    guint deferred_cdma_unregistration_id;
-    /* Reason if CDMA connection is forbidden */
-    ConnectionForbiddenReason reason_cdma;
-    /* Handler IDs for the registration state change signals */
-    guint id_cdma1x_registration_change;
-    guint id_evdo_registration_change;
-
-    /* The stats object to expose */
-    MMBearerStats *stats;
-    /* Handler id for the stats update timeout */
-    guint stats_update_id;
-    /* Timer to measure the duration of the connection */
-    GTimer *duration_timer;
-    /* Flag to specify whether reloading stats is supported or not */
-    gboolean reload_stats_unsupported;
-};
 
 /*****************************************************************************/
 

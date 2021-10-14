@@ -31,6 +31,16 @@ typedef struct _MMIfaceModemSimple MMIfaceModemSimple;
 
 struct _MMIfaceModemSimple {
     GTypeInterface g_iface;
+    /* Set Packet service */
+    void (*set_packet_service) (MMIfaceModemSimple   *self,
+                                MMPacketServiceAction packetServiceAction,
+                                GAsyncReadyCallback   callback,
+                                gpointer              user_data);
+
+    gboolean (*set_packet_service_finish) (MMIfaceModemSimple *self,
+                                           GAsyncResult       *res,
+                                           GError            **error);
+
 };
 
 GType mm_iface_modem_simple_get_type (void);

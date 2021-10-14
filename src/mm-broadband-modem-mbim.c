@@ -42,6 +42,7 @@
 #include "mm-iface-modem-signal.h"
 #include "mm-iface-modem-sar.h"
 #include "mm-sms-part-3gpp.h"
+#include "mm-iface-modem-simple.h"
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
 # include <libqmi-glib.h>
@@ -56,6 +57,7 @@ static void iface_modem_location_init             (MMIfaceModemLocation         
 static void iface_modem_messaging_init            (MMIfaceModemMessaging          *iface);
 static void iface_modem_signal_init               (MMIfaceModemSignal             *iface);
 static void iface_modem_sar_init                  (MMIfaceModemSar                *iface);
+static void iface_modem_simple_init               (MMIfaceModemSimple             *iface);
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
 static void shared_qmi_init                       (MMSharedQmi                    *iface);
 #endif
@@ -74,6 +76,7 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbim, mm_broadband_modem_mbim, MM_TYPE_B
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SAR, iface_modem_sar_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIMPLE, iface_modem_simple_init)
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
                         G_IMPLEMENT_INTERFACE (MM_TYPE_SHARED_QMI, shared_qmi_init)
 #endif
@@ -3440,20 +3443,81 @@ basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
 }
 
 static void
+bearer_update_interface_speed_stats (MMBaseBearer *self)
+{
+    mm_gdbus_bearer_set_stats (
+        MM_GDBUS_BEARER (self),
+        mm_bearer_stats_get_dictionary (self->priv->stats));
+}
+
+static void
+update_uplink_and_downlink_speed (MMBroadbandModemMbim *self,
+                                  guint64               uplink_speed,
+                                  guint64               downlink_speed)
+{
+    g_autoptr(MMBearerList)  bearer_list = NULL;
+    GList                   *l;
+    MMBaseBearer            *bearer_obj;
+
+    g_object_get (self,
+              MM_IFACE_MODEM_BEARER_LIST, &bearer_list,
+              NULL);
+
+    if (!bearer_list)
+    return;
+
+    l          = bearer_list->priv->bearers;
+    bearer_obj = MM_BASE_BEARER (l->data);
+    mm_bearer_stats_set_uplink_speed (bearer_obj->priv->stats, uplink_speed);
+    mm_bearer_stats_set_downlink_speed (bearer_obj->priv->stats, downlink_speed);
+    bearer_update_interface_speed_stats (bearer_obj);
+}
+
+static void
 basic_connect_notification_packet_service (MMBroadbandModemMbim *self,
-                                           MbimMessage *notification)
+                                           MbimMessage *notification,
+                                           MbimDevice *device)
 {
     MbimPacketServiceState packet_service_state;
     MbimDataClass highest_available_data_class;
+    MbimDataClassV2 highest_available_data_class_v2;
+    guint64 uplink_speed;
+    guint64 downlink_speed;
     gchar *str;
 
-    if (!mbim_message_packet_service_notification_parse (
+    if (MBIM_V3 == mm_get_version(device) &&
+        !mbim_message_ms_basic_connect_v3_packet_service_notification_parse (
+            notification,
+            NULL, /* nw_error */
+            &packet_service_state,
+            &highest_available_data_class_v2,
+            &uplink_speed, /* uplink_speed */
+            &downlink_speed, /* downlink_speed */
+            NULL,
+            NULL,
+            NULL,
+            NULL)) {
+        return;
+    }
+    else if (MBIM_V2 == mm_get_version(device) &&
+        !mbim_message_ms_basic_connect_v2_packet_service_notification_parse (
             notification,
             NULL, /* nw_error */
             &packet_service_state,
             &highest_available_data_class,
-            NULL, /* uplink_speed */
-            NULL, /* downlink_speed */
+            &uplink_speed, /* uplink_speed */
+            &downlink_speed, /* downlink_speed */
+            NULL,
+            NULL)) {
+        return;
+    }
+    else if (!mbim_message_packet_service_notification_parse (
+            notification,
+            NULL, /* nw_error */
+            &packet_service_state,
+            &highest_available_data_class,
+            &uplink_speed, /* uplink_speed */
+            &downlink_speed, /* downlink_speed */
             NULL)) {
         return;
     }
@@ -3469,6 +3533,9 @@ basic_connect_notification_packet_service (MMBroadbandModemMbim *self,
       self->priv->highest_available_data_class = 0;
     }
 
+    update_uplink_and_downlink_speed (self,
+                                      uplink_speed,
+                                      downlink_speed);
     update_access_technologies (self);
 }
 
@@ -3513,7 +3580,8 @@ sms_notification_read_flash_sms (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification (MMBroadbandModemMbim *self,
-                            MbimMessage *notification)
+                            MbimMessage *notification,
+                            MbimDevice *device)
 {
     switch (mbim_message_indicate_status_get_cid (notification)) {
     case MBIM_CID_BASIC_CONNECT_SIGNAL_STATE:
@@ -3534,7 +3602,7 @@ basic_connect_notification (MMBroadbandModemMbim *self,
         break;
     case MBIM_CID_BASIC_CONNECT_PACKET_SERVICE:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PACKET_SERVICE)
-            basic_connect_notification_packet_service (self, notification);
+            basic_connect_notification_packet_service (self, notification, device);
         break;
     case MBIM_CID_BASIC_CONNECT_PROVISIONED_CONTEXTS:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PROVISIONED_CONTEXTS)
@@ -3843,7 +3911,7 @@ device_notification_cb (MbimDevice *device,
                                         mbim_message_indicate_status_get_cid (notification)));
 
     if (service == MBIM_SERVICE_BASIC_CONNECT)
-        basic_connect_notification (self, notification);
+        basic_connect_notification (self, notification, device);
     else if (service == MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS)
         ms_basic_connect_extensions_notification (self, notification);
     else if (service == MBIM_SERVICE_SMS)
@@ -7117,6 +7185,185 @@ set_primary_sim_slot (MMIfaceModem       *self,
 }
 
 /*****************************************************************************/
+/* SET Packet Service  */
+static gboolean
+set_packet_service_finish (MMIfaceModemSimple *self,
+                           GAsyncResult       *res,
+                           GError            **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+packet_service_query_ready (MbimDevice   *device,
+                            GAsyncResult *res,
+                            GTask        *task)
+{
+    MbimMessage *response;
+    MMBroadbandModemMbim *self;
+    GError *error = NULL;
+    guint32 nw_error;
+    MbimPacketServiceState packet_service_state;
+    MbimDataClass highest_available_data_class;
+    MbimDataClassV2 highest_available_data_class_v2;
+    guint64 uplink_speed;
+    guint64 downlink_speed;
+    MbimFrequencyRange frequency_range;
+    MbimDataSubclass data_subclass;
+    MbimTai *tai;
+
+    self = g_task_get_source_object (task);
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+
+        g_autoptr(GError) inner_error = NULL;
+
+        if (MBIM_V3 == mm_get_version(device) &&
+            mbim_message_ms_basic_connect_v3_packet_service_response_parse (
+                response,
+                &nw_error,
+                &packet_service_state,
+                &highest_available_data_class_v2,
+                &uplink_speed,
+                &downlink_speed,
+                &frequency_range,
+                &data_subclass,
+                &tai,
+                &inner_error)) {
+            if (nw_error) {
+                g_clear_error (&error);
+                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
+            } else {
+                g_autofree gchar *str = NULL;
+
+                str = mbim_data_class_v2_build_string_from_mask (highest_available_data_class_v2);
+                mm_obj_dbg (self, "packet service update:");
+                mm_obj_dbg (self, "         state: '%s'", mbim_packet_service_state_get_string (packet_service_state));
+                mm_obj_dbg (self, "    data class: '%s'", str);
+                mm_obj_dbg (self, "        uplink: '%" G_GUINT64_FORMAT "' bps", uplink_speed);
+                mm_obj_dbg (self, "      downlink: '%" G_GUINT64_FORMAT "' bps", downlink_speed);
+                update_uplink_and_downlink_speed (self,
+                                                  uplink_speed,
+                                                  downlink_speed);
+                g_task_return_boolean (task,TRUE);
+            }
+        }
+        else if (MBIM_V2 == mm_get_version(device) &&
+            mbim_message_ms_basic_connect_v2_packet_service_response_parse (
+                response,
+                &nw_error,
+                &packet_service_state,
+                &highest_available_data_class,
+                &uplink_speed,
+                &downlink_speed,
+                &frequency_range,
+                &inner_error)) {
+            if (nw_error) {
+                g_clear_error (&error);
+                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
+            } else {
+                g_autofree gchar *str = NULL;
+
+                str = mbim_data_class_build_string_from_mask (highest_available_data_class);
+                mm_obj_dbg (self, "packet service update:");
+                mm_obj_dbg (self, "         state: '%s'", mbim_packet_service_state_get_string (packet_service_state));
+                mm_obj_dbg (self, "    data class: '%s'", str);
+                mm_obj_dbg (self, "        uplink: '%" G_GUINT64_FORMAT "' bps", uplink_speed);
+                mm_obj_dbg (self, "      downlink: '%" G_GUINT64_FORMAT "' bps", downlink_speed);
+                update_uplink_and_downlink_speed (self,
+                                                  uplink_speed,
+                                                  downlink_speed);
+                g_task_return_boolean (task,TRUE);
+            }
+        }
+        else if (mbim_message_packet_service_response_parse (
+                response,
+                &nw_error,
+                &packet_service_state,
+                &highest_available_data_class,
+                &uplink_speed,
+                &downlink_speed,
+                &inner_error)) {
+            if (nw_error) {
+                g_clear_error (&error);
+                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
+            } else {
+                g_autofree gchar *str = NULL;
+
+                str = mbim_data_class_build_string_from_mask (highest_available_data_class);
+                mm_obj_dbg (self, "packet service update:");
+                mm_obj_dbg (self, "         state: '%s'", mbim_packet_service_state_get_string (packet_service_state));
+                mm_obj_dbg (self, "    data class: '%s'", str);
+                mm_obj_dbg (self, "        uplink: '%" G_GUINT64_FORMAT "' bps", uplink_speed);
+                mm_obj_dbg (self, "      downlink: '%" G_GUINT64_FORMAT "' bps", downlink_speed);
+                update_uplink_and_downlink_speed (self,
+                                                  uplink_speed,
+                                                  downlink_speed);
+                g_task_return_boolean (task,TRUE);
+            }
+        } else {
+            /* Prefer the error from the result to the parsing error */
+            if (!error)
+                error = g_steal_pointer (&inner_error);
+        }
+    }
+
+    if (error) {
+        /* Don't make NoDeviceSupport errors fatal; just try to keep on the
+         * connection sequence even with this error. */
+        if (g_error_matches (error, MBIM_STATUS_ERROR, MBIM_STATUS_ERROR_NO_DEVICE_SUPPORT)) {
+            mm_obj_dbg (self, "device doesn't support packet service attach");
+            g_error_free (error);
+        } else {
+            /* All other errors are fatal */
+            g_task_return_error (task, error);
+        }
+    }
+
+    g_object_unref (task);
+
+    if (response)
+        mbim_message_unref (response);
+}
+
+static void
+set_packet_service (MMIfaceModemSimple   *self,
+                    MMPacketServiceAction packetServiceAction,
+                    GAsyncReadyCallback   callback,
+                    gpointer              user_data)
+{
+    MbimDevice *device;
+    MbimMessage *message;
+    GTask *task;
+    GError *error = NULL;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    message = mbim_message_packet_service_set_new (
+                  packetServiceAction,
+                  &error);
+
+    if (!message) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)packet_service_query_ready,
+                         task);
+    mbim_message_unref (message);
+}
+
+
+/*****************************************************************************/
 
 MMBroadbandModemMbim *
 mm_broadband_modem_mbim_new (const gchar *device,
@@ -7474,6 +7721,13 @@ iface_modem_sar_init (MMIfaceModemSar *iface)
     iface->enable_finish = sar_enable_finish;
     iface->set_power_level = sar_set_power_level;
     iface->set_power_level_finish = sar_set_power_level_finish;
+}
+
+static void
+iface_modem_simple_init (MMIfaceModemSimple *iface)
+{
+    iface->set_packet_service = set_packet_service;
+    iface->set_packet_service_finish = set_packet_service_finish;
 }
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
