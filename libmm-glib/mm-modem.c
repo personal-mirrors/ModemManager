@@ -226,6 +226,67 @@ mm_modem_get_primary_sim_slot (MMModem *self)
 /*****************************************************************************/
 
 /**
+ * mm_modem_get_sim_type:
+ * @self: A #MMModem.
+ *
+ * Gets current SIM details indicating whether it is ESIM or not.
+ *
+ * Returns: A ##MMSimType value.
+ *
+ * Since: 1.19
+ */
+guint
+mm_modem_get_sim_type (MMModem *self)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), MM_SIM_TYPE_UNKNOWN);
+
+    return mm_gdbus_modem_get_sim_type (MM_GDBUS_MODEM (self));
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_modem_get_esim_status:
+ * @self: A #MMModem.
+ *
+ * Gets current ESIM details whether it has a profile or not.
+ *
+ * Returns: A ##MMSimEsimStatus value.
+ *
+ * Since: 1.19
+ */
+guint
+mm_modem_get_esim_status (MMModem *self)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), MM_SIM_ESIM_STATUS_UNKNOWN);
+
+    return mm_gdbus_modem_get_esim_status (MM_GDBUS_MODEM (self));
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_modem_get_sim_removability:
+ * @self: A #MMModem.
+ *
+ * Gets SIM removal details of current SIM.
+ *
+ * Returns: A ##MMSimRemovability value.
+ *
+ * Since: 1.19
+ */
+guint
+mm_modem_get_sim_removability (MMModem *self)
+{
+    g_return_val_if_fail (MM_IS_MODEM (self), MM_SIM_REMOVABILITY_UNKNOWN);
+
+    return mm_gdbus_modem_get_sim_removability (MM_GDBUS_MODEM (self));
+}
+
+
+/*****************************************************************************/
+
+/**
  * mm_modem_get_supported_capabilities:
  * @self: A #MMModem.
  * @capabilities: (out) (array length=n_capabilities): Return location for the

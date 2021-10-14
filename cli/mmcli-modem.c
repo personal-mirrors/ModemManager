@@ -484,6 +484,10 @@ print_modem_info (void)
     mmcli_output_sim_slots (mm_modem_dup_sim_slot_paths (ctx->modem),
                             mm_modem_get_primary_sim_slot (ctx->modem));
 
+    mmcli_output_string           (MMC_F_SIM_SIM_TYPE,              mm_sim_type_get_string (mm_modem_get_sim_type (ctx->modem)));
+    mmcli_output_string           (MMC_F_SIM_ESIM_STATUS,              mm_sim_esim_status_get_string (mm_modem_get_esim_status (ctx->modem)));
+    mmcli_output_string           (MMC_F_SIM_SIM_REMOVABILITY,       mm_sim_removability_get_string (mm_modem_get_sim_removability (ctx->modem)));
+
     bearer_paths = (const gchar **) mm_modem_get_bearer_paths (ctx->modem);
     mmcli_output_string_array (MMC_F_BEARER_PATHS, (bearer_paths && bearer_paths[0]) ? bearer_paths : NULL, TRUE);
 

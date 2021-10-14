@@ -80,6 +80,12 @@ gchar              **mm_modem_dup_sim_slot_paths (MMModem *self);
 
 guint              mm_modem_get_primary_sim_slot (MMModem *self);
 
+guint              mm_modem_get_sim_type (MMModem *self);
+
+guint              mm_modem_get_esim_status (MMModem *self);
+
+guint              mm_modem_get_sim_removability (MMModem *self);
+
 gboolean           mm_modem_peek_supported_capabilities (MMModem *self,
                                                          const MMModemCapability **capabilities,
                                                          guint *n_capabilities);

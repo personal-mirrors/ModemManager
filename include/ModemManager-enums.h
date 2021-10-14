@@ -1601,4 +1601,52 @@ typedef enum { /*< underscore_name=mm_bearer_apn_type >*/
     MM_BEARER_APN_TYPE_PRIVATE    = 1 << 7,
 } MMBearerApnType;
 
+/**
+* MMSimType:
+* @MM_SIM_TYPE_UNKNOWN: SIM type is not known.
+* @MM_SIM_TYPE_PHYSICAL: SIM is a pysical SIM.
+* @MM_SIM_TYPE_ESIM: SIM is a ESIM.
+*
+* SIM type indicating whether ESIM or not
+*
+* Since: 1.19
+*/
+typedef enum { /*< underscore_name=mm_sim_type >*/
+    MM_SIM_TYPE_UNKNOWN  = 0,
+    MM_SIM_TYPE_PHYSICAL = 1,
+    MM_SIM_TYPE_ESIM     = 2,
+} MMSimType;
+
+/**
+* MMSimEsimStatus:
+* @MM_SIM_ESIM_STATUS_UNKNOWN: ESIM status unknown.
+* @MM_SIM_ESIM_STATUS_NO_PROFILES: ESIM with no profiles.
+* @MM_SIM_ESIM_STATUS_WITH_PROFILES : ESIM with profiles.
+*
+* Status of the profiles for ESIM
+*
+* Since: 1.19
+*/
+typedef enum { /*< underscore_name=mm_sim_esim_status >*/
+    MM_SIM_ESIM_STATUS_UNKNOWN       = 0,
+    MM_SIM_ESIM_STATUS_NO_PROFILES   = 1,
+    MM_SIM_ESIM_STATUS_WITH_PROFILES = 2,
+} MMSimEsimStatus;
+
+/**
+* MMSimRemovability:
+* @MM_SIM_REMOVABILITY_UNKNOWN: SIM removability not known.
+* @MM_SIM_REMOVABILITY_REMOVABLE: SIM is a removable SIM.
+* @MM_SIM_REMOVABILITY_NOT_REMOVABLE: SIM is not a removable SIM.
+*
+* Respresents SIM removability of current primary SIM
+*
+* Since: 1.19
+*/
+typedef enum { /*< underscore_name=mm_sim_removability >*/
+    MM_SIM_REMOVABILITY_UNKNOWN       = 0,
+    MM_SIM_REMOVABILITY_REMOVABLE     = 1,
+    MM_SIM_REMOVABILITY_NOT_REMOVABLE = 2,
+} MMSimRemovability;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */

@@ -295,6 +295,40 @@
     -->
     <property name="PrimarySimSlot" type="u" access="read" />
 
+
+    <!--
+        SimType:
+
+        Indicates whether the current primary SIM is a ESIM or a physical SIM,
+        given as
+        <link linkend="MMSimType">MMSimType</link> value.
+
+        Since: 1.19
+    -->
+    <property name="SimType" type="u" access="read" />
+
+    <!--
+        EsimStatus:
+
+        If current SIM is ESIM then this indicates whether there
+        is a profile or not, given as
+        <link linkend="MMSimEsimStatus">MMSimEsimStatus</link> value.
+
+        Since: 1.19
+    -->
+    <property name="EsimStatus" type="u" access="read" />
+
+    <!--
+        SimRemovability:
+
+        Indicates whether the current primary SIM is a removable SIM or and
+        embedded SIM, given as
+        <link linkend="MMSimRemovability">MMSimRemovability</link> value.
+
+        Since: 1.19
+    -->
+    <property name="SimRemovability" type="u" access="read" />
+
     <!--
         Bearers:
 
