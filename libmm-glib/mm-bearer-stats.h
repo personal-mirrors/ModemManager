@@ -66,6 +66,8 @@ guint   mm_bearer_stats_get_failed_attempts (MMBearerStats *self);
 guint   mm_bearer_stats_get_total_duration  (MMBearerStats *self);
 guint64 mm_bearer_stats_get_total_rx_bytes  (MMBearerStats *self);
 guint64 mm_bearer_stats_get_total_tx_bytes  (MMBearerStats *self);
+guint64 mm_bearer_stats_get_uplink_speed    (MMBearerStats *self);
+guint64 mm_bearer_stats_get_downlink_speed  (MMBearerStats *self);
 
 /*****************************************************************************/
 /* ModemManager/libmm-glib/mmcli specific methods */
@@ -86,6 +88,8 @@ void mm_bearer_stats_set_failed_attempts      (MMBearerStats *self, guint   fail
 void mm_bearer_stats_set_total_duration       (MMBearerStats *self, guint   duration);
 void mm_bearer_stats_set_total_rx_bytes       (MMBearerStats *self, guint64 rx_bytes);
 void mm_bearer_stats_set_total_tx_bytes       (MMBearerStats *self, guint64 tx_bytes);
+void mm_bearer_stats_set_uplink_speed         (MMBearerStats *self, guint64 uplink_speed);
+void mm_bearer_stats_set_downlink_speed       (MMBearerStats *self, guint64 downlink_speed);
 
 GVariant *mm_bearer_stats_get_dictionary (MMBearerStats *self);
 
