@@ -39,6 +39,7 @@ static GQuark private_quark;
 
 typedef struct {
     gboolean  alternate_3g_bands;
+    gboolean  ext_4g_bands;
     GArray   *supported_bands;
 } Private;
 
@@ -80,6 +81,7 @@ get_private (MMSharedTelit *self)
     if (!priv) {
         priv = g_slice_new0 (Private);
         initialize_alternate_3g_band (self, priv);
+        /* ext_4g_bands field is initialized inside #BND=? response handler */
         g_object_set_qdata_full (G_OBJECT (self), private_quark, priv, (GDestroyNotify)private_free);
     }
 
@@ -199,6 +201,7 @@ mm_shared_telit_load_supported_bands_ready (MMBaseModem  *self,
                                                   mm_iface_modem_is_3g (MM_IFACE_MODEM (self)),
                                                   mm_iface_modem_is_4g (MM_IFACE_MODEM (self)),
                                                   priv->alternate_3g_bands,
+                                                  &priv->ext_4g_bands,
                                                   self,
                                                   &error);
         if (!bands)
@@ -206,6 +209,8 @@ mm_shared_telit_load_supported_bands_ready (MMBaseModem  *self,
         else {
             /* Store supported bands to be able to build ANY when setting */
             priv->supported_bands = g_array_ref (bands);
+            if (priv->ext_4g_bands)
+                mm_obj_dbg (self, "telit modem using extended 4G band setup");
             g_task_return_pointer (task, bands, (GDestroyNotify)g_array_unref);
         }
     }
@@ -259,6 +264,7 @@ mm_shared_telit_load_current_bands_ready (MMBaseModem  *self,
                                                    mm_iface_modem_is_3g (MM_IFACE_MODEM (self)),
                                                    mm_iface_modem_is_4g (MM_IFACE_MODEM (self)),
                                                    priv->alternate_3g_bands,
+                                                   priv->ext_4g_bands,
                                                    self,
                                                    &error);
         if (!bands)
@@ -340,6 +346,7 @@ mm_shared_telit_modem_set_current_bands (MMIfaceModem        *self,
                                       mm_iface_modem_is_3g (self),
                                       mm_iface_modem_is_4g (self),
                                       priv->alternate_3g_bands,
+                                      priv->ext_4g_bands,
                                       &error);
     if (!cmd) {
         g_task_return_error (task, error);
