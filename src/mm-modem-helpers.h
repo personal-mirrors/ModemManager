@@ -577,4 +577,10 @@ gboolean mm_sim_parse_cpol_test_response (const gchar  *response,
 /* Helper function to decode eid read from esim */
 gchar *mm_decode_eid (const gchar *eid, gsize eid_len);
 
+typedef struct
+{
+    MMModemMode allowed;
+    MMModemMode preferred;
+} MMModemModeInfo;
+
 #endif  /* MM_MODEM_HELPERS_H */
