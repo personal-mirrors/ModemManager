@@ -1160,56 +1160,83 @@ unlock_required_subscriber_ready_state_ready (MbimDevice *device,
                                               GAsyncResult *res,
                                               GTask *task)
 {
-    LoadUnlockRequiredContext *ctx;
-    MMBroadbandModemMbim *self;
-    MbimMessage *response;
-    GError *error = NULL;
-    MbimSubscriberReadyState ready_state = MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED;
+    LoadUnlockRequiredContext       *ctx;
+    MMBroadbandModemMbim            *self;
+    g_autoptr(MbimMessage)          response = NULL;
+    GError                          *error = NULL;
+    MbimSubscriberReadyState        ready_state = MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED;
+    MbimSubscriberReadyStatusFlag   ready_flag = MBIM_SUBSCRIBER_READY_STATUS_FLAG_NONE;
 
     ctx = g_task_get_task_data (task);
     self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_subscriber_ready_status_response_parse (
-            response,
-            &ready_state,
-            NULL, /* subscriber_id */
-            NULL, /* sim_iccid */
-            NULL, /* ready_info */
-            NULL, /* telephone_numbers_count */
-            NULL, /* telephone_numbers */
-            &error)) {
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        /* Call the parse response based on MBIM version */
+        if (MBIM_V3 == mm_get_version(device) ) {
+            if (!(mbim_message_ms_basic_connect_v3_subscriber_ready_status_response_parse (
+                            response,
+                            &ready_state,
+                            &ready_flag,
+                            NULL, /* subscriber_id */
+                            NULL, /* sim_iccid */
+                            NULL, /* ready_info */
+                            NULL, /* telephone_numbers_count */
+                            NULL, /* telephone_numbers */
+                            &error)))
+                goto error_flow;
+        } else {
+            if (!(mbim_message_subscriber_ready_status_response_parse (
+                            response,
+                            &ready_state,
+                            NULL, /* subscriber_id */
+                            NULL, /* sim_iccid */
+                            NULL, /* ready_info */
+                            NULL, /* telephone_numbers_count */
+                            NULL, /* telephone_numbers */
+                            &error))) {
+                goto error_flow;
+            }
+        }
         switch (ready_state) {
-        case MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED:
-        case MBIM_SUBSCRIBER_READY_STATE_INITIALIZED:
-        case MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED:
-            /* Don't set error */
-            break;
-        case MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED:
-            /* This is an error, but we still want to retry.
-             * The MC7710 may use this while the SIM is not ready yet. */
-            break;
-        case MBIM_SUBSCRIBER_READY_STATE_BAD_SIM:
-            error = mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG, self);
-            break;
-        case MBIM_SUBSCRIBER_READY_STATE_FAILURE:
-        case MBIM_SUBSCRIBER_READY_STATE_NOT_ACTIVATED:
-        case MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE:
-        default:
-            error = mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE, self);
-            break;
+            case MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED:
+            case MBIM_SUBSCRIBER_READY_STATE_INITIALIZED:
+            case MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED:
+            case MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE:
+                /* Don't set error */
+                break;
+            case MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED:
+                /* This is an error, but we still want to retry.
+                 * The MC7710 may use this while the SIM is not ready yet. */
+                break;
+            case MBIM_SUBSCRIBER_READY_STATE_BAD_SIM:
+                error = mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_SIM_WRONG, self);
+                break;
+            case MBIM_SUBSCRIBER_READY_STATE_FAILURE:
+            case MBIM_SUBSCRIBER_READY_STATE_NOT_ACTIVATED:
+            default:
+                error = mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE, self);
+                break;
+        }
+        /* Update SIM removal status and ESIM or not details*/
+        if (MBIM_V3 == mm_get_version(device))
+        {
+            mm_iface_modem_update_sim_details (MM_IFACE_MODEM (self),
+                mm_sim_type_from_mbim_subscriber_ready_status_flag (ready_flag),
+                mm_sim_esim_status_from_mbim_subscriber_ready_status_flag (ready_state, ready_flag),
+                mm_sim_removability_from_mbim_subscriber_ready_status_flag (ready_flag));
         }
     }
 
     self->priv->last_ready_state = ready_state;
 
+error_flow:
     /* Fatal errors are reported right away */
     if (error) {
         g_task_return_error (task, error);
         g_object_unref (task);
-        goto out;
+        return;
     }
 
     /* Need to retry? */
@@ -1226,7 +1253,7 @@ unlock_required_subscriber_ready_state_ready (MbimDevice *device,
             g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_RETRY,
                                      "SIM not ready yet (retry)");
         g_object_unref (task);
-        goto out;
+        return;
     }
 
     /* Initialized but locked? */
@@ -1243,14 +1270,11 @@ unlock_required_subscriber_ready_state_ready (MbimDevice *device,
                              (GAsyncReadyCallback)pin_query_ready,
                              task);
         mbim_message_unref (message);
-        goto out;
+        return;
     }
 
     g_assert_not_reached ();
 
-out:
-    if (response)
-        mbim_message_unref (response);
 }
 
 static gboolean
@@ -1418,30 +1442,48 @@ own_numbers_subscriber_ready_state_ready (MbimDevice *device,
                                           GAsyncResult *res,
                                           GTask *task)
 {
-    MbimMessage *response;
-    GError *error = NULL;
-    gchar **telephone_numbers;
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                  *error = NULL;
+    gchar                   **telephone_numbers;
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_subscriber_ready_status_response_parse (
-            response,
-            NULL, /* ready_state */
-            NULL, /* subscriber_id */
-            NULL, /* sim_iccid */
-            NULL, /* ready_info */
-            NULL, /* telephone_numbers_count */
-            &telephone_numbers,
-            &error)) {
+            mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+
+        /* Call the parse response based on MBIM version */
+        if (MBIM_V3 == mm_get_version (device) ) {
+            if (!(mbim_message_ms_basic_connect_v3_subscriber_ready_status_response_parse (
+                            response,
+                            NULL, /* ready_state */
+                            NULL, /* flags */
+                            NULL, /* subscriber_id */
+                            NULL, /* sim_iccid */
+                            NULL, /* ready_info */
+                            NULL, /* telephone_numbers_count */
+                            &telephone_numbers,
+                            &error))) {
+                g_task_return_error (task, error);
+                goto out;
+            }
+        } else {
+            if (!(mbim_message_subscriber_ready_status_response_parse (
+                            response,
+                            NULL, /* ready_state */
+                            NULL, /* subscriber_id */
+                            NULL, /* sim_iccid */
+                            NULL, /* ready_info */
+                            NULL, /* telephone_numbers_count */
+                            &telephone_numbers,
+                            &error))) {
+                g_task_return_error (task, error);
+                goto out;
+            }
+        }
         g_task_return_pointer (task, telephone_numbers, (GDestroyNotify)g_strfreev);
-    } else
-        g_task_return_error (task, error);
+    }
 
+out:
     g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
 }
 
 static void
@@ -3406,21 +3448,49 @@ basic_connect_notification_connect (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
-                                                    MbimMessage *notification)
+                                                    MbimMessage *notification,
+                                                    MbimDevice *device)
 {
-    MbimSubscriberReadyState ready_state;
-    gchar **telephone_numbers;
+    g_autoptr(GError)               error = NULL;
+    MbimSubscriberReadyState        ready_state = MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED;
+    MbimSubscriberReadyStatusFlag   ready_flag = MBIM_SUBSCRIBER_READY_STATUS_FLAG_NONE;
+    gchar                           **telephone_numbers;
 
-    if (!mbim_message_subscriber_ready_status_notification_parse (
-            notification,
-            &ready_state,
-            NULL, /* subscriber_id */
-            NULL, /* sim_iccid */
-            NULL, /* ready_info */
-            NULL, /* telephone_numbers_count */
-            &telephone_numbers,
-            NULL)) {
-        return;
+    if (MBIM_V3 == mm_get_version (device) ) {
+        if (!mbim_message_ms_basic_connect_v3_subscriber_ready_status_notification_parse (
+                notification,
+                &ready_state,
+                &ready_flag,
+                NULL, /* subscriber_id */
+                NULL, /* sim_iccid */
+                NULL, /* ready_info */
+                NULL, /* telephone_numbers_count */
+                &telephone_numbers,
+                &error)) {
+            return;
+        }
+    }
+    else {
+        if (!mbim_message_subscriber_ready_status_notification_parse (
+                notification,
+                &ready_state,
+                NULL, /* subscriber_id */
+                NULL, /* sim_iccid */
+                NULL, /* ready_info */
+                NULL, /* telephone_numbers_count */
+                &telephone_numbers,
+                &error)) {
+            return;
+        }
+    }
+
+    /* Update SIM removal status and ESIM or not details*/
+    if (MBIM_V3 == mm_get_version(device))
+    {
+        mm_iface_modem_update_sim_details (MM_IFACE_MODEM (self),
+            mm_sim_type_from_mbim_subscriber_ready_status_flag (ready_flag),
+            mm_sim_esim_status_from_mbim_subscriber_ready_status_flag (ready_state,ready_flag),
+            mm_sim_removability_from_mbim_subscriber_ready_status_flag (ready_flag));
     }
 
     if (ready_state == MBIM_SUBSCRIBER_READY_STATE_INITIALIZED)
@@ -3513,7 +3583,8 @@ sms_notification_read_flash_sms (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification (MMBroadbandModemMbim *self,
-                            MbimMessage *notification)
+                            MbimMessage *notification,
+                            MbimDevice *device)
 {
     switch (mbim_message_indicate_status_get_cid (notification)) {
     case MBIM_CID_BASIC_CONNECT_SIGNAL_STATE:
@@ -3530,7 +3601,7 @@ basic_connect_notification (MMBroadbandModemMbim *self,
         break;
     case MBIM_CID_BASIC_CONNECT_SUBSCRIBER_READY_STATUS:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO)
-            basic_connect_notification_subscriber_ready_status (self, notification);
+            basic_connect_notification_subscriber_ready_status (self, notification, device);
         break;
     case MBIM_CID_BASIC_CONNECT_PACKET_SERVICE:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PACKET_SERVICE)
@@ -3843,7 +3914,7 @@ device_notification_cb (MbimDevice *device,
                                         mbim_message_indicate_status_get_cid (notification)));
 
     if (service == MBIM_SERVICE_BASIC_CONNECT)
-        basic_connect_notification (self, notification);
+        basic_connect_notification (self, notification, device);
     else if (service == MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS)
         ms_basic_connect_extensions_notification (self, notification);
     else if (service == MBIM_SERVICE_SMS)

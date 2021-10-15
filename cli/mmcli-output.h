@@ -161,6 +161,9 @@ typedef enum {
     MMC_F_SIM_PATH,
     MMC_F_SIM_PRIMARY_SLOT,
     MMC_F_SIM_SLOT_PATHS,
+    MMC_F_SIM_SIM_TYPE,
+    MMC_F_SIM_ESIM_STATUS,
+    MMC_F_SIM_SIM_REMOVABILITY,
     /* Bearer section */
     MMC_F_BEARER_PATHS,
     /* Time section */

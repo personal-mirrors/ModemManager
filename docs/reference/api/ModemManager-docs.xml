@@ -154,4 +154,8 @@
     <title>Index of new symbols in 1.18</title>
     <xi:include href="xml/api-index-1.18.xml"></xi:include>
   </chapter>
+  <chapter id="api-index-1-19" role="1.19">
+    <title>Index of new symbols in 1.19</title>
+    <xi:include href="xml/api-index-1.19.xml"></xi:include>
+  </chapter>
 </book>

@@ -613,4 +613,11 @@ void mm_iface_modem_modify_sim (MMIfaceModem *self,
                                 guint slot_index,
                                 MMBaseSim *new_sim);
 
+void
+mm_iface_modem_update_sim_details (MMIfaceModem  *self,
+                                    MMSimType  sim_type,
+                                    MMSimEsimStatus  esim_staus,
+                                    MMSimRemovability  sim_removal_staus);
+
+
 #endif /* MM_IFACE_MODEM_H */

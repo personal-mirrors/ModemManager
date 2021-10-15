@@ -60,4 +60,27 @@ MbimContextType     mm_bearer_apn_type_to_mbim_context_type        (MMBearerApnT
 
 MMSmsState mm_sms_state_from_mbim_message_status (MbimSmsStatus status);
 
+/*****************************************************************************/
+/* MBIM/Subscriber to MM translations */
+
+MMSimType mm_sim_type_from_mbim_subscriber_ready_status_flag (MbimSubscriberReadyStatusFlag ready_flag);
+
+MMSimEsimStatus mm_sim_esim_status_from_mbim_subscriber_ready_status_flag (
+                                                                MbimSubscriberReadyState ready_state,
+                                                                MbimSubscriberReadyStatusFlag ready_flag);
+
+MMSimRemovability mm_sim_removability_from_mbim_subscriber_ready_status_flag (MbimSubscriberReadyStatusFlag ready_flag);
+
+/*****************************************************************************/
+/* Version helpers and utilities */
+/*****************************************************************************/
+
+guint8
+mm_get_version (MbimDevice *device);
+
+#define MBIM_V1 (0x01) /* Decimal value of Mbim Version 1 */
+#define MBIM_V2 (0x02) /* Decimal value of Mbim Version 2 */
+#define MBIM_V3 (0x03) /* Decimal value of Mbim Version 3 */
+
+
 #endif  /* MM_MODEM_HELPERS_MBIM_H */
