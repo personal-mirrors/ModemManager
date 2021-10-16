@@ -649,6 +649,16 @@ mm_common_get_multiplex_support_from_string (const gchar  *str,
                               error);
 }
 
+MMAccessMediaType
+mm_common_get_media_type_from_string (const gchar  *str,
+                                      GError      **error)
+{
+    return _enum_from_string (MM_TYPE_ACCESS_MDEIA_TYPE,
+                              str,
+                              MM_ACCESS_MEDIA_TYPE_NONE,
+                              error);
+}
+
 MMBearerApnType
 mm_common_get_apn_type_from_string (const gchar  *str,
                                     GError      **error)

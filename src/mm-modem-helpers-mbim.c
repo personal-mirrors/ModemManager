@@ -381,10 +381,12 @@ mm_bearer_apn_type_from_mbim_context_type (MbimContextType context_type)
             return MM_BEARER_APN_TYPE_IMS;
         case MBIM_CONTEXT_TYPE_MMS:
             return MM_BEARER_APN_TYPE_MMS;
+        case MBIM_CONTEXT_TYPE_LOCAL:
+            return MM_BEARER_APN_TYPE_LOCAL;
+        case MBIM_CONTEXT_TYPE_VIDEO_SHARE:
+            return MM_BEARER_APN_TYPE_VIDEO_SHARE;
         case MBIM_CONTEXT_TYPE_INVALID:
         case MBIM_CONTEXT_TYPE_NONE:
-        case MBIM_CONTEXT_TYPE_LOCAL:
-        case MBIM_CONTEXT_TYPE_VIDEO_SHARE:
             /* some types unused right now */
         default:
             return MM_BEARER_APN_TYPE_NONE;
@@ -417,6 +419,10 @@ mm_bearer_apn_type_to_mbim_context_type (MMBearerApnType   apn_type,
         return MBIM_CONTEXT_TYPE_VOICE;
     if (apn_type & MM_BEARER_APN_TYPE_PRIVATE)
         return MBIM_CONTEXT_TYPE_VPN;
+    if (apn_type & MBIM_CONTEXT_TYPE_VIDEO_SHARE)
+        return MM_BEARER_APN_TYPE_VIDEO_SHARE;
+    if (apn_type & MM_BEARER_APN_TYPE_LOCAL)
+        return MBIM_CONTEXT_TYPE_LOCAL;
 
     str = mm_bearer_apn_type_build_string_from_mask (apn_type);
     g_set_error (error,
@@ -503,3 +509,11 @@ mm_sms_state_from_mbim_message_status (MbimSmsStatus status)
     return MM_SMS_STATE_UNKNOWN;
 }
 
+guint8
+mm_get_version (MbimDevice *device)
+{
+    guint8 major_version;
+
+    major_version = mbim_device_get_ms_mbimex_version(device, NULL);
+    return major_version;
+}

@@ -1561,6 +1561,14 @@ typedef enum { /*< underscore_name=mm_bearer_multiplex_support >*/
  * @MM_BEARER_APN_TYPE_VOICE: APN providing access to voice-over-IP services.
  * @MM_BEARER_APN_TYPE_EMERGENCY: APN providing access to emergency services.
  * @MM_BEARER_APN_TYPE_PRIVATE: APN providing access to private networks.
+ * @MM_BEARER_APN_TYPE_VPN: APN providing access to VPN. Since 1.19.
+ * @MM_BEARER_APN_TYPE_VIDEO_SHARE: APN providing access to video sharing service. Since 1.19.
+ * @MM_BEARER_APN_TYPE_PURCHASE: APN providing access to over-the-air activation site. Since 1.19.
+ * @MM_BEARER_APN_TYPE_LOCAL: APN providing access to a local connection. Since 1.19
+ * @MM_BEARER_APN_TYPE_ADMIN: APN providing access for administrative purposes such as device management. Since 1.19
+ * @MM_BEARER_APN_TYPE_APP: APN providing access to certain applications whitelisted by mobile operators. Since 1.19
+ * @MM_BEARER_APN_TYPE_XCAP: APN providing access to XCAP provisioning on IMS services. Since 1.19
+ * @MM_BEARER_APN_TYPE_TETHERING: APN providing access to mobile hotspot tethering. Since 1.19
  *
  * Purpose of the APN used in a given Bearer.
  *
@@ -1590,15 +1598,36 @@ typedef enum { /*< underscore_name=mm_bearer_multiplex_support >*/
  * Since: 1.18
  */
 typedef enum { /*< underscore_name=mm_bearer_apn_type >*/
-    MM_BEARER_APN_TYPE_NONE       = 0,
-    MM_BEARER_APN_TYPE_INITIAL    = 1 << 0,
-    MM_BEARER_APN_TYPE_DEFAULT    = 1 << 1,
-    MM_BEARER_APN_TYPE_IMS        = 1 << 2,
-    MM_BEARER_APN_TYPE_MMS        = 1 << 3,
-    MM_BEARER_APN_TYPE_MANAGEMENT = 1 << 4,
-    MM_BEARER_APN_TYPE_VOICE      = 1 << 5,
-    MM_BEARER_APN_TYPE_EMERGENCY  = 1 << 6,
-    MM_BEARER_APN_TYPE_PRIVATE    = 1 << 7,
+    MM_BEARER_APN_TYPE_NONE        = 0,
+    MM_BEARER_APN_TYPE_INITIAL     = 1 << 0,
+    MM_BEARER_APN_TYPE_DEFAULT     = 1 << 1,
+    MM_BEARER_APN_TYPE_IMS         = 1 << 2,
+    MM_BEARER_APN_TYPE_MMS         = 1 << 3,
+    MM_BEARER_APN_TYPE_MANAGEMENT  = 1 << 4,
+    MM_BEARER_APN_TYPE_VOICE       = 1 << 5,
+    MM_BEARER_APN_TYPE_EMERGENCY   = 1 << 6,
+    MM_BEARER_APN_TYPE_PRIVATE     = 1 << 7,
+    MM_BEARER_APN_TYPE_VPN         = 1 << 9,
+    MM_BEARER_APN_TYPE_VIDEO_SHARE = 1 << 10,
+    MM_BEARER_APN_TYPE_PURCHASE    = 1 << 11,
+    MM_BEARER_APN_TYPE_LOCAL       = 1 << 12,
+    MM_BEARER_APN_TYPE_ADMIN       = 1 << 13,
+    MM_BEARER_APN_TYPE_APP         = 1 << 14,
+    MM_BEARER_APN_TYPE_XCAP        = 1 << 15,
+    MM_BEARER_APN_TYPE_TETHERING   = 1 << 16,
 } MMBearerApnType;
+
+/**
+ * MMAccessMediaType:
+ * @MM_ACCESS_MEDIA_TYPE_NONE: Unknown or unsupported.
+ * @MM_ACCESS_MEDIA_TYPE_3GPP: 3GPP access media.
+ * @MM_ACCESS_MEDIA_TYPE_3GPP_PREFERED: 3GPP access media is preferred.
+ *
+*/
+typedef enum { /*< underscore_name=mm_access_mdeia_type >*/
+    MM_ACCESS_MEDIA_TYPE_NONE          = 0,
+    MM_ACCESS_MEDIA_TYPE_3GPP          = 1,
+    MM_ACCESS_MEDIA_TYPE_3GPP_PREFERED = 2,
+} MMAccessMediaType;
 
 #endif /*  _MODEMMANAGER_ENUMS_H_ */

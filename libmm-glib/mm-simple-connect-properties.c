@@ -520,6 +520,43 @@ mm_simple_connect_properties_get_multiplex (MMSimpleConnectProperties *self)
 /*****************************************************************************/
 
 /**
+ * mm_simple_connect_properties_set_media_preference:
+ * @self: a #MMSimpleConnectProperties.
+ * @media_preference: a #MMAccessMediaType.
+ *
+ * Sets the media preference requested by the user.
+ *
+ * Since: 1.18
+ */
+void
+mm_simple_connect_properties_set_media_preference (MMSimpleConnectProperties *self,
+                                                   MMAccessMediaType  media_preference)
+{
+    g_return_if_fail (MM_IS_SIMPLE_CONNECT_PROPERTIES (self));
+
+    mm_bearer_properties_set_media_preference (self->priv->bearer_properties, media_preference);
+}
+
+/**
+ * mm_simple_connect_properties_get_media_preference:
+ * @self: a #MMSimpleConnectProperties.
+ *
+ * Get the media preference requested by the user.
+ *
+ * Returns: a #MMAccessMediaType.
+ *
+ * Since: 1.18
+ */
+MMAccessMediaType
+mm_simple_connect_properties_get_media_preference (MMSimpleConnectProperties *self)
+{
+    g_return_val_if_fail (MM_IS_SIMPLE_CONNECT_PROPERTIES (self), MM_ACCESS_MEDIA_TYPE_NONE);
+
+    return mm_bearer_properties_get_media_preference (self->priv->bearer_properties);
+}
+/*****************************************************************************/
+
+/**
  * mm_simple_connect_properties_get_bearer_properties: (skip)
  */
 MMBearerProperties *

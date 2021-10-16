@@ -79,6 +79,9 @@ void mm_bearer_properties_set_rm_protocol   (MMBearerProperties *self,
                                              MMModemCdmaRmProtocol protocol);
 void mm_bearer_properties_set_multiplex     (MMBearerProperties       *self,
                                              MMBearerMultiplexSupport  multiplex);
+void mm_bearer_properties_set_media_preference (MMBearerProperties *self,
+                                                MMAccessMediaType  media_preference);
+
 
 const gchar              *mm_bearer_properties_get_apn           (MMBearerProperties *self);
 MMBearerAllowedAuth       mm_bearer_properties_get_allowed_auth  (MMBearerProperties *self);
@@ -90,6 +93,7 @@ gint                      mm_bearer_properties_get_profile_id    (MMBearerProper
 gboolean                  mm_bearer_properties_get_allow_roaming (MMBearerProperties *self);
 MMModemCdmaRmProtocol     mm_bearer_properties_get_rm_protocol   (MMBearerProperties *self);
 MMBearerMultiplexSupport  mm_bearer_properties_get_multiplex     (MMBearerProperties *self);
+MMAccessMediaType         mm_bearer_properties_get_media_preference (MMBearerProperties *self);
 
 /*****************************************************************************/
 /* ModemManager/libmm-glib/mmcli specific methods */
