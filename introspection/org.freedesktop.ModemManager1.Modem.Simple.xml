@@ -180,5 +180,25 @@
       <arg name="properties" type="a{sv}" direction="out" />
     </method>
 
+    <!--
+        SetPacketServiceState:
+        @packet_service_action: Packet service action indicating attach/detach request.
+
+        API is used to instruct devices to perform packet service attach or
+        detach action on current registered network for both GSM-based and
+        CDMA-based MB devices.
+
+        In addition this API also updates
+	<link linkend="gdbus-property-org-freedesktop-ModemManager1-Modem.CurrentModes">CurrentModes</link>
+        , <literal>"downlink-speed"</literal> and <literal>"uplink-speed"</literal> in
+        <link linkend="gdbus-property-org-freedesktop-ModemManager1-Bearer.Stats">Stats</link>
+        property
+
+        Since: 1.19
+    -->
+    <method name="SetPacketServiceState">
+      <arg name="packet_service_action" type="u" direction="in" />
+    </method>
+
   </interface>
 </node>

@@ -350,6 +350,20 @@
               <literal>"u"</literal>). Since 1.14.
             </listitem>
           </varlistentry>
+          <varlistentry><term><literal>"uplink-speed"</literal></term>
+            <listitem>
+              Contains the uplink bit rate,in bits per second, given as an
+              unsigned 64-bit integer value (signature <literal>"t"</literal>).
+              Since 1.19.
+            </listitem>
+          </varlistentry>
+          <varlistentry><term><literal>"downlink-speed"</literal></term>
+            <listitem>
+              Contains the downlink bit rate,in bits per second, given as an
+              unsigned 64-bit integer value (signature <literal>"t"</literal>).
+              Since 1.19.
+            </listitem>
+          </varlistentry>
         </variablelist>
 
         Since: 1.6

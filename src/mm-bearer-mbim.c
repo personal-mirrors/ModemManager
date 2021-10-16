@@ -815,6 +815,7 @@ packet_service_set_ready (MbimDevice *device,
     guint32                 nw_error;
     MbimPacketServiceState  packet_service_state;
     MbimDataClass           highest_available_data_class;
+    MbimDataClassV2         highest_available_data_class_v2;
     guint64                 uplink_speed;
     guint64                 downlink_speed;
 
@@ -827,7 +828,57 @@ packet_service_set_ready (MbimDevice *device,
          error->code == MBIM_STATUS_ERROR_FAILURE)) {
         g_autoptr(GError) inner_error = NULL;
 
-        if (mbim_message_packet_service_response_parse (
+        if (MBIM_V3 == mm_get_version(device) &&
+            mbim_message_ms_basic_connect_v3_packet_service_response_parse (
+                response,
+                &nw_error,
+                &packet_service_state,
+                &highest_available_data_class_v2,
+                &uplink_speed,
+                &downlink_speed,
+                NULL,
+                NULL,
+                NULL,
+                &inner_error)) {
+            if (nw_error) {
+                g_clear_error (&error);
+                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
+            } else {
+                g_autofree gchar *str = NULL;
+
+                str = mbim_data_class_v2_build_string_from_mask (highest_available_data_class_v2);
+                mm_obj_dbg (self, "packet service update:");
+                mm_obj_dbg (self, "         state: '%s'", mbim_packet_service_state_get_string (packet_service_state));
+                mm_obj_dbg (self, "    data class: '%s'", str);
+                mm_obj_dbg (self, "        uplink: '%" G_GUINT64_FORMAT "' bps", uplink_speed);
+                mm_obj_dbg (self, "      downlink: '%" G_GUINT64_FORMAT "' bps", downlink_speed);
+            }
+        }
+        else if (MBIM_V2 == mm_get_version(device) &&
+            mbim_message_ms_basic_connect_v2_packet_service_response_parse (
+                response,
+                &nw_error,
+                &packet_service_state,
+                &highest_available_data_class,
+                &uplink_speed,
+                &downlink_speed,
+                NULL,
+                &inner_error)) {
+            if (nw_error) {
+                g_clear_error (&error);
+                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
+            } else {
+                g_autofree gchar *str = NULL;
+
+                str = mbim_data_class_build_string_from_mask (highest_available_data_class);
+                mm_obj_dbg (self, "packet service update:");
+                mm_obj_dbg (self, "         state: '%s'", mbim_packet_service_state_get_string (packet_service_state));
+                mm_obj_dbg (self, "    data class: '%s'", str);
+                mm_obj_dbg (self, "        uplink: '%" G_GUINT64_FORMAT "' bps", uplink_speed);
+                mm_obj_dbg (self, "      downlink: '%" G_GUINT64_FORMAT "' bps", downlink_speed);
+            }
+        }
+        else if (mbim_message_packet_service_response_parse (
                 response,
                 &nw_error,
                 &packet_service_state,

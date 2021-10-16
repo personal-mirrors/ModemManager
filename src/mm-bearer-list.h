@@ -47,6 +47,14 @@ struct _MMBearerListClass {
     GObjectClass parent;
 };
 
+struct _MMBearerListPrivate {
+    /* List of bearers */
+    GList *bearers;
+    /* Max number of active bearers */
+    guint max_active_bearers;
+    guint max_active_multiplexed_bearers;
+};
+
 GType mm_bearer_list_get_type (void);
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMBearerList, g_object_unref)
 

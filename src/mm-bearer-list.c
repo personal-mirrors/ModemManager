@@ -41,14 +41,6 @@ enum {
 
 static GParamSpec *properties[PROP_LAST];
 
-struct _MMBearerListPrivate {
-    /* List of bearers */
-    GList *bearers;
-    /* Max number of active bearers */
-    guint max_active_bearers;
-    guint max_active_multiplexed_bearers;
-};
-
 /*****************************************************************************/
 
 guint

@@ -60,4 +60,10 @@ MbimContextType     mm_bearer_apn_type_to_mbim_context_type        (MMBearerApnT
 
 MMSmsState mm_sms_state_from_mbim_message_status (MbimSmsStatus status);
 
+guint8 mm_get_version (MbimDevice *device);
+
+#define MBIM_V1 (1) /* Decimal value of Mbim Version 1 in little-endian constant 0x0100 0100*/
+#define MBIM_V2 (2) /* Decimal value of Mbim Version 2 in little-endian constant 0x0200 0100 */
+#define MBIM_V3 (3) /* Decimal value of Mbim Version 3 in little-endian constant 0x0300 0100 */
+
 #endif  /* MM_MODEM_HELPERS_MBIM_H */

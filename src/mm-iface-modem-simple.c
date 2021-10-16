@@ -996,6 +996,94 @@ handle_get_status (MmGdbusModemSimple *skeleton,
 }
 
 /*****************************************************************************/
+/* Set Packet Service */
+
+typedef struct {
+    MMIfaceModemSimple *self;
+    MmGdbusModemSimple *skeleton;
+    GDBusMethodInvocation *invocation;
+    MMPacketServiceAction packetServiceAction;
+} HandlePacketServiceContext;
+
+static void
+handle_set_packet_service_context_free (HandlePacketServiceContext *ctx)
+{
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->skeleton);
+    g_object_unref (ctx->self);
+    g_slice_free (HandlePacketServiceContext,ctx);
+}
+
+static void
+handle_set_packet_service_info_ready(MMIfaceModemSimple *self,
+                                     GAsyncResult *res,
+                                     HandlePacketServiceContext *ctx)
+{
+    GError *error = NULL;
+
+    MM_IFACE_MODEM_SIMPLE_GET_INTERFACE (self)->set_packet_service_finish(self, res, &error);
+
+    if (error)
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+    else
+        mm_gdbus_modem_simple_complete_set_packet_service_state (ctx->skeleton,
+                                                                 ctx->invocation);
+    handle_set_packet_service_context_free (ctx);
+}
+
+static void
+handle_set_packet_service_auth_ready (MMBaseModem               *self,
+                                      GAsyncResult              *res,
+                                      HandlePacketServiceContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_authorize_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_set_packet_service_context_free(ctx);
+        return;
+    }
+
+    if (!MM_IFACE_MODEM_SIMPLE_GET_INTERFACE (ctx->self)->set_packet_service ||
+        !MM_IFACE_MODEM_SIMPLE_GET_INTERFACE (ctx->self)->set_packet_service_finish) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot send packet service V2 query: "
+                                               "operation not supported");
+        handle_set_packet_service_context_free(ctx);
+        return;
+    }
+
+    MM_IFACE_MODEM_SIMPLE_GET_INTERFACE (self)->set_packet_service (ctx->self,
+                                                                    ctx->packetServiceAction,
+                                                                    (GAsyncReadyCallback)handle_set_packet_service_info_ready,
+                                                                    ctx);
+}
+
+static gboolean
+handle_set_packet_service_state (MmGdbusModemSimple    *skeleton,
+                                 GDBusMethodInvocation *invocation,
+                                 guint                  packetServiceAction,
+                                 MMIfaceModemSimple    *self)
+{
+    HandlePacketServiceContext *ctx;
+
+    ctx = g_slice_new (HandlePacketServiceContext);
+    ctx->skeleton = g_object_ref (skeleton);
+    ctx->invocation = g_object_ref (invocation);
+    ctx->self = g_object_ref (self);
+    ctx->packetServiceAction= (MMPacketServiceAction) packetServiceAction;
+
+    mm_base_modem_authorize (MM_BASE_MODEM (self),
+                             invocation,
+                             MM_AUTHORIZATION_DEVICE_CONTROL,
+                             (GAsyncReadyCallback)handle_set_packet_service_auth_ready,
+                             ctx);
+    return TRUE;
+}
+
+/*****************************************************************************/
 
 void
 mm_iface_modem_simple_initialize (MMIfaceModemSimple *self)
@@ -1025,6 +1113,10 @@ mm_iface_modem_simple_initialize (MMIfaceModemSimple *self)
         g_signal_connect (skeleton,
                           "handle-get-status",
                           G_CALLBACK (handle_get_status),
+                          self);
+        g_signal_connect (skeleton,
+                          "handle-set-packet-service-state",
+                          G_CALLBACK (handle_set_packet_service_state),
                           self);
 
         /* Finally, export the new interface */
