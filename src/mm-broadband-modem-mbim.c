@@ -1694,34 +1694,59 @@ modem_load_signal_quality_finish (MMIfaceModem *self,
 }
 
 static void
-signal_state_query_ready (MbimDevice *device,
+signal_state_query_ready (MbimDevice   *device,
                           GAsyncResult *res,
-                          GTask *task)
+                          GTask        *task)
 {
-    MbimMessage *response;
-    GError *error = NULL;
-    guint32 rssi;
+    g_autoptr(MbimMessage)  response = NULL;
+    MMBroadbandModemMbim   *self;
+    GError                 *error = NULL;
+    guint32                 rssi;
+
+    self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
-    if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_signal_state_response_parse (
-            response,
-            &rssi,
-            NULL, /* error_rate */
-            NULL, /* signal_strength_interval */
-            NULL, /* rssi_threshold */
-            NULL, /* error_rate_threshold */
-            &error)) {
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_signal_state_response_parse (
+                response,
+                &rssi,
+                NULL, /* error_rate */
+                NULL, /* signal_strength_interval */
+                NULL, /* rssi_threshold */
+                NULL, /* error_rate_threshold */
+                NULL, /* rsrp_snr_count */
+                NULL, /* rsrp_snr */
+                &error))
+            g_prefix_error (&error, "Failed processing MBIMEx v2.0 signal state response: ");
+        else
+            mm_obj_dbg (self, "proccessed MBIMEx v2.0 signal state response");
+    } else {
+        if (!mbim_message_signal_state_response_parse (
+                response,
+                &rssi,
+                NULL, /* error_rate */
+                NULL, /* signal_strength_interval */
+                NULL, /* rssi_threshold */
+                NULL, /* error_rate_threshold */
+                &error))
+            g_prefix_error (&error, "Failed processing signal state response: ");
+        else
+            mm_obj_dbg (self, "proccessed signal state response");
+    }
+
+    if (error)
+        g_task_return_error (task, error);
+    else
         /* Normalize the quality. 99 means unknown, we default it to 0 */
         g_task_return_int (task, MM_CLAMP_HIGH (rssi == 99 ? 0 : rssi, 31) * 100 / 31);
-    } else
-        g_task_return_error (task, error);
 
     g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
 }
 
 static void
@@ -3222,26 +3247,47 @@ modem_3gpp_set_initial_eps_bearer_settings (MMIfaceModem3gpp    *_self,
 
 static void
 basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
-                                         MbimMessage *notification)
+                                         MbimDevice           *device,
+                                         MbimMessage          *notification)
 {
-    guint32 rssi;
+    g_autoptr(GError) error = NULL;
+    guint32           rssi;
+    guint32           quality;
 
-    if (mbim_message_signal_state_notification_parse (
-            notification,
-            &rssi,
-            NULL, /* error_rate */
-            NULL, /* signal_strength_interval */
-            NULL, /* rssi_threshold */
-            NULL, /* error_rate_threshold */
-            NULL)) {
-        guint32 quality;
-
-        /* Normalize the quality. 99 means unknown, we default it to 0 */
-        quality = MM_CLAMP_HIGH (rssi == 99 ? 0 : rssi, 31) * 100 / 31;
-
-        mm_obj_dbg (self, "signal state indication: %u --> %u%%", rssi, quality);
-        mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_signal_state_notification_parse (
+                notification,
+                &rssi,
+                NULL, /* error_rate */
+                NULL, /* signal_strength_interval */
+                NULL, /* rssi_threshold */
+                NULL, /* error_rate_threshold */
+                NULL, /* rsrp_snr_count */
+                NULL, /* rsrp_snr */
+                &error)) {
+            mm_obj_warn (self, "failed processing MBIMEx v2.0 signal state indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed MBIMEx v2.0 signal state indication");
+    } else {
+        if (!mbim_message_signal_state_notification_parse (
+                notification,
+                &rssi,
+                NULL, /* error_rate */
+                NULL, /* signal_strength_interval */
+                NULL, /* rssi_threshold */
+                NULL, /* error_rate_threshold */
+                &error)) {
+            mm_obj_warn (self, "failed processing signal state indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed signal state indication");
     }
+
+    /* Normalize the quality. 99 means unknown, we default it to 0 */
+    quality = MM_CLAMP_HIGH (rssi == 99 ? 0 : rssi, 31) * 100 / 31;
+    mm_obj_dbg (self, "signal state indication: %u --> %u%%", rssi, quality);
+    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
 }
 
 static void
@@ -3311,31 +3357,57 @@ update_registration_info (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification_register_state (MMBroadbandModemMbim *self,
-                                           MbimMessage *notification)
+                                           MbimDevice           *device,
+                                           MbimMessage          *notification)
 {
-    MbimRegisterState register_state;
-    MbimDataClass available_data_classes;
-    gchar *provider_id;
-    gchar *provider_name;
+    g_autoptr(GError)  error = NULL;
+    MbimRegisterState  register_state;
+    MbimDataClass      available_data_classes;
+    gchar             *provider_id;
+    gchar             *provider_name;
 
-    if (mbim_message_register_state_notification_parse (
-            notification,
-            NULL, /* nw_error */
-            &register_state,
-            NULL, /* register_mode */
-            &available_data_classes,
-            NULL, /* current_cellular_class */
-            &provider_id,
-            &provider_name,
-            NULL, /* roaming_text */
-            NULL, /* registration_flag */
-            NULL)) {
-        update_registration_info (self,
-                                  register_state,
-                                  available_data_classes,
-                                  provider_id,
-                                  provider_name);
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_register_state_notification_parse (
+                notification,
+                NULL, /* nw_error */
+                &register_state,
+                NULL, /* register_mode */
+                &available_data_classes,
+                NULL, /* current_cellular_class */
+                &provider_id,
+                &provider_name,
+                NULL, /* roaming_text */
+                NULL, /* registration_flag */
+                NULL, /* preferred_data_classes */
+                &error)) {
+            mm_obj_warn (self, "failed processing MBIMEx v2.0 register state indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed MBIMEx v2.0 register state indication");
+    } else {
+        if (!mbim_message_register_state_notification_parse (
+                notification,
+                NULL, /* nw_error */
+                &register_state,
+                NULL, /* register_mode */
+                &available_data_classes,
+                NULL, /* current_cellular_class */
+                &provider_id,
+                &provider_name,
+                NULL, /* roaming_text */
+                NULL, /* registration_flag */
+                NULL)) {
+            mm_obj_warn (self, "failed processing register state indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed register state indication");
     }
+
+    update_registration_info (self,
+                              register_state,
+                              available_data_classes,
+                              provider_id,
+                              provider_name);
 }
 
 typedef struct {
@@ -3359,6 +3431,7 @@ bearer_list_report_disconnected_status (MMBaseBearer *bearer,
 
 static void
 basic_connect_notification_connect (MMBroadbandModemMbim *self,
+                                    MbimDevice           *device,
                                     MbimMessage          *notification)
 {
     guint32                  session_id;
@@ -3406,7 +3479,8 @@ basic_connect_notification_connect (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
-                                                    MbimMessage *notification)
+                                                    MbimDevice           *device,
+                                                    MbimMessage          *notification)
 {
     MbimSubscriberReadyState ready_state;
     gchar **telephone_numbers;
@@ -3441,32 +3515,68 @@ basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification_packet_service (MMBroadbandModemMbim *self,
-                                           MbimMessage *notification)
+                                           MbimDevice           *device,
+                                           MbimMessage          *notification)
 {
-    MbimPacketServiceState packet_service_state;
-    MbimDataClass highest_available_data_class;
-    gchar *str;
+    guint32                 nw_error;
+    MbimPacketServiceState  packet_service_state;
+    MbimDataClass           data_class;
+    guint64                 uplink_speed;
+    guint64                 downlink_speed;
+    MbimFrequencyRange      frequency_range = MBIM_FREQUENCY_RANGE_UNKNOWN;
+    g_autofree gchar       *data_class_str = NULL;
+    g_autofree gchar       *frequency_range_str = NULL;
+    const gchar            *nw_error_str;
+    g_autoptr(GError)       error = NULL;
 
-    if (!mbim_message_packet_service_notification_parse (
-            notification,
-            NULL, /* nw_error */
-            &packet_service_state,
-            &highest_available_data_class,
-            NULL, /* uplink_speed */
-            NULL, /* downlink_speed */
-            NULL)) {
-        return;
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_packet_service_notification_parse (
+                notification,
+                &nw_error,
+                &packet_service_state,
+                &data_class, /* current */
+                &uplink_speed,
+                &downlink_speed,
+                &frequency_range,
+                &error)) {
+            mm_obj_warn (self, "failed processing MBIMEx v2.0 packet service indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed MBIMEx v2.0 packet service indication");
+    } else {
+        if (!mbim_message_packet_service_notification_parse (
+                notification,
+                &nw_error,
+                &packet_service_state,
+                &data_class, /* highest_available */
+                &uplink_speed,
+                &downlink_speed,
+                &error)) {
+            mm_obj_warn (self, "failed processing packet service indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed packet service indication");
     }
 
-    str = mbim_data_class_build_string_from_mask (highest_available_data_class);
-    mm_obj_dbg (self, "packet service state: '%s', data class: '%s'",
-                mbim_packet_service_state_get_string (packet_service_state), str);
-    g_free (str);
+    data_class_str = mbim_data_class_build_string_from_mask (data_class);
+    frequency_range_str = mbim_frequency_range_build_string_from_mask (frequency_range);
+    nw_error_str = mbim_nw_error_get_string (nw_error);
+
+    mm_obj_dbg (self, "packet service update:");
+    if (nw_error_str)
+        mm_obj_dbg (self, "        nw error: '%s'", nw_error_str);
+    else
+        mm_obj_dbg (self, "        nw error: '0x%x'", nw_error);
+    mm_obj_dbg (self, "           state: '%s'", mbim_packet_service_state_get_string (packet_service_state));
+    mm_obj_dbg (self, "      data class: '%s'", data_class_str);
+    mm_obj_dbg (self, "          uplink: '%" G_GUINT64_FORMAT "' bps", uplink_speed);
+    mm_obj_dbg (self, "        downlink: '%" G_GUINT64_FORMAT "' bps", downlink_speed);
+    mm_obj_dbg (self, " frequency range: '%s'", frequency_range_str);
 
     if (packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHED) {
-      self->priv->highest_available_data_class = highest_available_data_class;
+        self->priv->highest_available_data_class = data_class;
     } else if (packet_service_state == MBIM_PACKET_SERVICE_STATE_DETACHED) {
-      self->priv->highest_available_data_class = 0;
+        self->priv->highest_available_data_class = 0;
     }
 
     update_access_technologies (self);
@@ -3474,6 +3584,7 @@ basic_connect_notification_packet_service (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification_provisioned_contexts (MMBroadbandModemMbim *self,
+                                                 MbimDevice           *device,
                                                  MbimMessage          *notification)
 {
     /* We don't even attempt to parse the indication, we just need to notify that
@@ -3486,7 +3597,8 @@ static void add_sms_part (MMBroadbandModemMbim *self,
 
 static void
 sms_notification_read_flash_sms (MMBroadbandModemMbim *self,
-                                 MbimMessage *notification)
+                                 MbimDevice           *device,
+                                 MbimMessage          *notification)
 {
     MbimSmsFormat format;
     guint32 messages_count;
@@ -3513,32 +3625,33 @@ sms_notification_read_flash_sms (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification (MMBroadbandModemMbim *self,
-                            MbimMessage *notification)
+                            MbimDevice           *device,
+                            MbimMessage          *notification)
 {
     switch (mbim_message_indicate_status_get_cid (notification)) {
     case MBIM_CID_BASIC_CONNECT_SIGNAL_STATE:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SIGNAL_QUALITY)
-            basic_connect_notification_signal_state (self, notification);
+            basic_connect_notification_signal_state (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_REGISTER_STATE:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_REGISTRATION_UPDATES)
-            basic_connect_notification_register_state (self, notification);
+            basic_connect_notification_register_state (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_CONNECT:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_CONNECT)
-            basic_connect_notification_connect (self, notification);
+            basic_connect_notification_connect (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_SUBSCRIBER_READY_STATUS:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO)
-            basic_connect_notification_subscriber_ready_status (self, notification);
+            basic_connect_notification_subscriber_ready_status (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_PACKET_SERVICE:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PACKET_SERVICE)
-            basic_connect_notification_packet_service (self, notification);
+            basic_connect_notification_packet_service (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_PROVISIONED_CONTEXTS:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PROVISIONED_CONTEXTS)
-            basic_connect_notification_provisioned_contexts (self, notification);
+            basic_connect_notification_provisioned_contexts (self, device, notification);
     default:
         /* Ignore */
         break;
@@ -3614,13 +3727,14 @@ sms_notification_read_stored_sms (MMBroadbandModemMbim *self,
 
 static void
 sms_notification (MMBroadbandModemMbim *self,
-                  MbimMessage *notification)
+                  MbimDevice           *device,
+                  MbimMessage          *notification)
 {
     switch (mbim_message_indicate_status_get_cid (notification)) {
     case MBIM_CID_SMS_READ:
         /* New flash/alert message? */
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SMS_READ)
-            sms_notification_read_flash_sms (self, notification);
+            sms_notification_read_flash_sms (self, device, notification);
         break;
 
     case MBIM_CID_SMS_MESSAGE_STORE_STATUS: {
@@ -3648,7 +3762,8 @@ sms_notification (MMBroadbandModemMbim *self,
 
 static void
 ms_basic_connect_extensions_notification_pco (MMBroadbandModemMbim *self,
-                                              MbimMessage *notification)
+                                              MbimDevice           *device,
+                                              MbimMessage          *notification)
 {
     MbimPcoValue *pco_value;
     GError *error = NULL;
@@ -3690,7 +3805,8 @@ ms_basic_connect_extensions_notification_pco (MMBroadbandModemMbim *self,
 
 static void
 ms_basic_connect_extensions_notification_lte_attach_info (MMBroadbandModemMbim *self,
-                                                          MbimMessage *notification)
+                                                          MbimDevice           *device,
+                                                          MbimMessage          *notification)
 {
     g_autoptr(GError)              error = NULL;
     g_autoptr(MMBearerProperties)  properties = NULL;
@@ -3760,6 +3876,7 @@ update_sim_from_slot_status (MMBroadbandModemMbim *self,
 
 static void
 ms_basic_connect_extensions_notification_slot_info_status (MMBroadbandModemMbim *self,
+                                                           MbimDevice           *device,
                                                            MbimMessage          *notification)
 {
     g_autoptr(GError) error = NULL;
@@ -3789,20 +3906,21 @@ ms_basic_connect_extensions_notification_slot_info_status (MMBroadbandModemMbim 
 
 static void
 ms_basic_connect_extensions_notification (MMBroadbandModemMbim *self,
-                                          MbimMessage *notification)
+                                          MbimDevice           *device,
+                                          MbimMessage          *notification)
 {
     switch (mbim_message_indicate_status_get_cid (notification)) {
     case MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_PCO:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PCO)
-            ms_basic_connect_extensions_notification_pco (self, notification);
+            ms_basic_connect_extensions_notification_pco (self, device, notification);
         break;
     case MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_LTE_ATTACH_INFO:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_LTE_ATTACH_INFO)
-            ms_basic_connect_extensions_notification_lte_attach_info (self, notification);
+            ms_basic_connect_extensions_notification_lte_attach_info (self, device, notification);
         break;
     case MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_SLOT_INFO_STATUS:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS)
-            ms_basic_connect_extensions_notification_slot_info_status (self, notification);
+            ms_basic_connect_extensions_notification_slot_info_status (self, device, notification);
         break;
     default:
         /* Ignore */
@@ -3816,6 +3934,7 @@ process_ussd_notification (MMBroadbandModemMbim *self,
 
 static void
 ussd_notification (MMBroadbandModemMbim *self,
+                   MbimDevice           *device,
                    MbimMessage          *notification)
 {
     if (mbim_message_indicate_status_get_cid (notification) != MBIM_CID_USSD) {
@@ -3843,13 +3962,13 @@ device_notification_cb (MbimDevice *device,
                                         mbim_message_indicate_status_get_cid (notification)));
 
     if (service == MBIM_SERVICE_BASIC_CONNECT)
-        basic_connect_notification (self, notification);
+        basic_connect_notification (self, device, notification);
     else if (service == MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS)
-        ms_basic_connect_extensions_notification (self, notification);
+        ms_basic_connect_extensions_notification (self, device, notification);
     else if (service == MBIM_SERVICE_SMS)
-        sms_notification (self, notification);
+        sms_notification (self, device, notification);
     else if (service == MBIM_SERVICE_USSD)
-        ussd_notification (self, notification);
+        ussd_notification (self, device, notification);
 }
 
 static void
@@ -4439,12 +4558,12 @@ atds_location_query_ready (MbimDevice   *device,
                            GAsyncResult *res,
                            GTask        *task)
 {
-    MMBroadbandModemMbim *self;
-    MbimMessage          *response;
-    GError               *error = NULL;
-    guint32               lac;
-    guint32               tac;
-    guint32               cid;
+    g_autoptr(MbimMessage)  response = NULL;
+    MMBroadbandModemMbim   *self;
+    GError                 *error = NULL;
+    guint32                 lac;
+    guint32                 tac;
+    guint32                 cid;
 
     self = g_task_get_source_object (task);
 
@@ -4458,9 +4577,6 @@ atds_location_query_ready (MbimDevice   *device,
         g_task_return_boolean (task, TRUE);
     }
     g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
 }
 
 static void
@@ -4468,35 +4584,64 @@ register_state_query_ready (MbimDevice   *device,
                             GAsyncResult *res,
                             GTask        *task)
 {
-    MMBroadbandModemMbim *self;
-    MbimMessage          *response;
-    GError               *error = NULL;
-    MbimRegisterState     register_state;
-    MbimDataClass         available_data_classes;
-    gchar                *provider_id;
-    gchar                *provider_name;
-
-    response = mbim_device_command_finish (device, res, &error);
-    if (!response ||
-        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
-        !mbim_message_register_state_response_parse (
-            response,
-            NULL, /* nw_error */
-            &register_state,
-            NULL, /* register_mode */
-            &available_data_classes,
-            NULL, /* current_cellular_class */
-            &provider_id,
-            &provider_name,
-            NULL, /* roaming_text */
-            NULL, /* registration_flag */
-            &error)) {
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        goto out;
-    }
+    g_autoptr(MbimMessage)  response = NULL;
+    MMBroadbandModemMbim   *self;
+    GError                 *error = NULL;
+    MbimRegisterState       register_state;
+    MbimDataClass           available_data_classes;
+    gchar                  *provider_id;
+    gchar                  *provider_name;
 
     self = g_task_get_source_object (task);
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_register_state_response_parse (
+                response,
+                NULL, /* nw_error */
+                &register_state,
+                NULL, /* register_mode */
+                &available_data_classes,
+                NULL, /* current_cellular_class */
+                &provider_id,
+                &provider_name,
+                NULL, /* roaming_text */
+                NULL, /* registration_flag */
+                NULL, /* preferred_data_classes */
+                &error))
+            g_prefix_error (&error, "Failed processing MBIMEx v2.0 register state response: ");
+        else
+            mm_obj_dbg (self, "proccessed MBIMEx v2.0 register state response");
+    } else {
+        if (!mbim_message_register_state_response_parse (
+                response,
+                NULL, /* nw_error */
+                &register_state,
+                NULL, /* register_mode */
+                &available_data_classes,
+                NULL, /* current_cellular_class */
+                &provider_id,
+                &provider_name,
+                NULL, /* roaming_text */
+                NULL, /* registration_flag */
+                &error))
+            g_prefix_error (&error, "Failed processing register state response: ");
+        else
+            mm_obj_dbg (self, "proccessed register state response");
+    }
+
+    if (error) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
     update_registration_info (self,
                               register_state,
                               available_data_classes,
@@ -4504,26 +4649,20 @@ register_state_query_ready (MbimDevice   *device,
                               provider_name);
 
     if (self->priv->is_atds_location_supported) {
-        MbimMessage *message;
+        g_autoptr(MbimMessage) message = NULL;
 
         message = mbim_message_atds_location_query_new (NULL);
-
         mbim_device_command (device,
                              message,
                              10,
                              NULL,
                              (GAsyncReadyCallback)atds_location_query_ready,
                              task);
-        mbim_message_unref (message);
-        goto out;
+        return;
     }
 
     g_task_return_boolean (task, TRUE);
     g_object_unref (task);
-
- out:
-    if (response)
-        mbim_message_unref (response);
 }
 
 static void
@@ -4535,9 +4674,9 @@ modem_3gpp_run_registration_checks (MMIfaceModem3gpp    *self,
                                     GAsyncReadyCallback  callback,
                                     gpointer             user_data)
 {
-    MbimDevice  *device;
-    MbimMessage *message;
-    GTask       *task;
+    g_autoptr(MbimMessage)  message = NULL;
+    MbimDevice             *device;
+    GTask                  *task;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
@@ -4551,7 +4690,6 @@ modem_3gpp_run_registration_checks (MMIfaceModem3gpp    *self,
                          NULL,
                          (GAsyncReadyCallback)register_state_query_ready,
                          task);
-    mbim_message_unref (message);
 }
 
 /*****************************************************************************/
