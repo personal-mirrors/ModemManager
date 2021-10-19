@@ -123,6 +123,80 @@ mm_modem_3gpp_registration_state_from_mbim_register_state (MbimRegisterState sta
 
 /*****************************************************************************/
 
+MMModemMode
+mm_modem_mode_from_mbim_data_class (MbimDataClass data_class)
+{
+    MMModemMode mask = MM_MODEM_MODE_NONE;
+
+    /* 3GPP... */
+    if (data_class & (MBIM_DATA_CLASS_GPRS |
+                      MBIM_DATA_CLASS_EDGE))
+        mask |= MM_MODEM_MODE_2G;
+    if (data_class & (MBIM_DATA_CLASS_UMTS  |
+                      MBIM_DATA_CLASS_HSDPA |
+                      MBIM_DATA_CLASS_HSUPA))
+        mask |= MM_MODEM_MODE_3G;
+    if (data_class & MBIM_DATA_CLASS_LTE)
+        mask |= MM_MODEM_MODE_4G;
+    if (data_class & (MBIM_DATA_CLASS_5G_NSA |
+                      MBIM_DATA_CLASS_5G_SA))
+        mask |= MM_MODEM_MODE_5G;
+
+    /* 3GPP2... */
+    if (data_class & MBIM_DATA_CLASS_1XRTT)
+        mask |= MM_MODEM_MODE_2G;
+    if (data_class & (MBIM_DATA_CLASS_1XEVDO |
+                      MBIM_DATA_CLASS_1XEVDO_REVA |
+                      MBIM_DATA_CLASS_1XEVDV |
+                      MBIM_DATA_CLASS_3XRTT |
+                      MBIM_DATA_CLASS_1XEVDO_REVB))
+        mask |= MM_MODEM_MODE_3G;
+    if (data_class & MBIM_DATA_CLASS_UMB)
+        mask |= MM_MODEM_MODE_4G;
+
+    return mask;
+}
+
+MbimDataClass
+mm_mbim_data_class_from_modem_mode (MMModemMode modem_mode,
+                                    gboolean    is_3gpp,
+                                    gboolean    is_cdma)
+{
+    MbimDataClass mask = 0;
+
+    /* 3GPP... */
+    if (is_3gpp) {
+        if (modem_mode & MM_MODEM_MODE_2G)
+            mask |= (MBIM_DATA_CLASS_GPRS |
+                     MBIM_DATA_CLASS_EDGE);
+        if (modem_mode & MM_MODEM_MODE_3G)
+            mask |= (MBIM_DATA_CLASS_UMTS |
+                     MBIM_DATA_CLASS_HSDPA |
+                     MBIM_DATA_CLASS_HSUPA);
+        if (modem_mode & MM_MODEM_MODE_4G)
+            mask |= MBIM_DATA_CLASS_LTE;
+        if (modem_mode & MM_MODEM_MODE_5G)
+            mask |= (MBIM_DATA_CLASS_5G_NSA |
+                     MBIM_DATA_CLASS_5G_SA);
+    }
+
+    /* 3GPP2... */
+    if (is_cdma) {
+        if (modem_mode & MM_MODEM_MODE_2G)
+            mask |= MBIM_DATA_CLASS_1XRTT;
+        if (modem_mode & MM_MODEM_MODE_3G)
+            mask |= (MBIM_DATA_CLASS_1XEVDO |
+                     MBIM_DATA_CLASS_1XEVDO_REVA |
+                     MBIM_DATA_CLASS_1XEVDV |
+                     MBIM_DATA_CLASS_3XRTT |
+                     MBIM_DATA_CLASS_1XEVDO_REVB);
+        if (modem_mode & MM_MODEM_MODE_4G)
+            mask |= MBIM_DATA_CLASS_UMB;
+    }
+
+    return mask;
+}
+
 MMModemAccessTechnology
 mm_modem_access_technology_from_mbim_data_class (MbimDataClass data_class)
 {
@@ -543,4 +617,3 @@ mm_signal_quality_from_mbim_signal_state (guint                 rssi,
 
     return quality;
 }
-
