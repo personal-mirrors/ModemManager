@@ -302,8 +302,6 @@ void mm_iface_modem_3gpp_update_pco_list            (MMIfaceModem3gpp *self,
 void mm_iface_modem_3gpp_update_initial_eps_bearer  (MMIfaceModem3gpp *self,
                                                      MMBearerProperties *properties);
 void mm_iface_modem_3gpp_reload_initial_eps_bearer  (MMIfaceModem3gpp *self);
-void mm_iface_modem_3gpp_update_profiles            (MMIfaceModem3gpp *self,
-                                                     const GList *profiles);
 
 /* Run all registration checks */
 void mm_iface_modem_3gpp_run_registration_checks (MMIfaceModem3gpp *self,
