@@ -3553,14 +3553,22 @@ basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
     g_autoptr(GError)               error = NULL;
     g_autoptr(MbimRsrpSnrInfoArray) rsrp_snr = NULL;
     guint32                         rsrp_snr_count = 0;
-    guint32                         rssi;
+    guint32                         coded_rssi;
+    guint32                         coded_error_rate;
     guint32                         quality;
+    MbimDataClass                   data_class;
+    g_autoptr(MMSignal)             cdma = NULL;
+    g_autoptr(MMSignal)             evdo = NULL;
+    g_autoptr(MMSignal)             gsm = NULL;
+    g_autoptr(MMSignal)             umts = NULL;
+    g_autoptr(MMSignal)             lte = NULL;
+    g_autoptr(MMSignal)             nr5g = NULL;
 
     if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
         if (!mbim_message_ms_basic_connect_v2_signal_state_notification_parse (
                 notification,
-                &rssi,
-                NULL, /* error_rate */
+                &coded_rssi,
+                &coded_error_rate,
                 NULL, /* signal_strength_interval */
                 NULL, /* rssi_threshold */
                 NULL, /* error_rate_threshold */
@@ -3574,8 +3582,8 @@ basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
     } else {
         if (!mbim_message_signal_state_notification_parse (
                 notification,
-                &rssi,
-                NULL, /* error_rate */
+                &coded_rssi,
+                &coded_error_rate,
                 NULL, /* signal_strength_interval */
                 NULL, /* rssi_threshold */
                 NULL, /* error_rate_threshold */
@@ -3586,8 +3594,17 @@ basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
         mm_obj_dbg (self, "proccessed signal state indication");
     }
 
-    quality = mm_signal_quality_from_mbim_signal_state (rssi, rsrp_snr, rsrp_snr_count, self);
+    quality = mm_signal_quality_from_mbim_signal_state (coded_rssi, rsrp_snr, rsrp_snr_count, self);
     mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
+
+    /* Best guess of current data class */
+    data_class = self->priv->highest_available_data_class;
+    if (data_class == 0)
+        data_class = self->priv->available_data_classes;
+
+    if (mm_signal_from_mbim_signal_state (data_class, coded_rssi, coded_error_rate, rsrp_snr, rsrp_snr_count,
+                                          self, &cdma, &evdo, &gsm, &umts, &lte, &nr5g))
+        mm_iface_modem_signal_update (MM_IFACE_MODEM_SIGNAL (self), cdma, evdo, gsm, umts, lte, nr5g);
 }
 
 static void
@@ -5427,6 +5444,91 @@ modem_signal_load_values (MMIfaceModemSignal  *self,
                                             NULL,
                                             (GAsyncReadyCallback)parent_signal_load_values_ready,
                                             task);
+}
+
+/*****************************************************************************/
+/* Setup threshold values (Signal interface) */
+
+static gboolean
+modem_signal_setup_thresholds_finish (MMIfaceModemSignal  *self,
+                                      GAsyncResult        *res,
+                                      GError             **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+signal_state_set_thresholds_ready (MbimDevice   *device,
+                                   GAsyncResult *res,
+                                   GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                  *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        mbim_message_signal_state_response_parse (
+            response,
+            NULL, /* rssi */
+            NULL, /* error_rate */
+            NULL, /* signal_strength_interval */
+            NULL, /* rssi_threshold */
+            NULL, /* error_rate_threshold */
+            &error))
+        g_task_return_boolean (task, TRUE);
+    else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+}
+
+static void
+modem_signal_setup_thresholds (MMIfaceModemSignal  *self,
+                               guint                rssi_threshold,
+                               gboolean             error_rate_threshold,
+                               GAsyncReadyCallback  callback,
+                               gpointer             user_data)
+{
+    g_autoptr(MbimMessage)  message = NULL;
+    MbimDevice             *device;
+    GTask                  *task;
+    guint                   coded_rssi_threshold = 0;
+    guint                   coded_error_rate_threshold = 0;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* the input RSSI threshold difference is given in dBm, and in the MBIM
+     * protocol we use a linear scale of coded values that correspond to 2dBm
+     * per code point. */
+    if (rssi_threshold) {
+        coded_rssi_threshold = rssi_threshold / 2;
+        if (!coded_rssi_threshold)
+            coded_rssi_threshold = 1; /* minimum value when enabled */
+    }
+
+    /* the input error rate threshold is given as a boolean to enable or
+     * disable, and in the MBIM protocol we have a non-linear scale of
+     * coded values. We just select the minimum coded value, so that we
+     * get all reports, i.e. every time it changes the coded value */
+    if (error_rate_threshold)
+        coded_error_rate_threshold = 1; /* minimum value when enabled */
+
+    message = (mbim_message_signal_state_set_new (
+                   0, /* signal strength interval set to default always */
+                   coded_rssi_threshold,
+                   coded_error_rate_threshold,
+                   NULL));
+
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)signal_state_set_thresholds_ready,
+                         task);
 }
 
 /*****************************************************************************/
@@ -7900,6 +8002,8 @@ iface_modem_signal_init (MMIfaceModemSignal *iface)
     iface->check_support_finish = modem_signal_check_support_finish;
     iface->load_values = modem_signal_load_values;
     iface->load_values_finish = modem_signal_load_values_finish;
+    iface->setup_thresholds = modem_signal_setup_thresholds;
+    iface->setup_thresholds_finish = modem_signal_setup_thresholds_finish;
 }
 
 static void
