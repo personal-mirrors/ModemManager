@@ -355,6 +355,52 @@ mm_modem_3gpp_get_pco (MMModem3gpp *self)
     return pco_list;
 }
 
+/*****************************************************************************
+/**
+ * mm_modem_3gpp_get_5gnr_reg:
+ * @self: A #MMModem3gpp.
+ *
+ * Get the 5GNR registration paremeters mico codd and ladn info
+ *
+ * objects, or #NULL if @error is set. The returned value should be freed with
+ * g_list_free_full() using g_object_unref() as #GDestroyNotify function.
+ *
+ * Since: 1.19
+ */
+
+void
+mm_modem_3gpp_get_5gnr_reg (MMModem3gpp *self,
+                            MMMicoMode  *mico_mode,
+                            MMLadnInfo  *ladn_info)
+{
+    GVariant     *dictionary;
+    GVariantIter  iter;
+    gchar        *key;
+    GVariant     *value;
+    GError       *inner_error = NULL;
+
+    dictionary = mm_gdbus_modem3gpp_get_intial5g_nr_settings (MM_GDBUS_MODEM3GPP (self));
+    g_return_if_fail (g_variant_is_of_type (dictionary, G_VARIANT_TYPE ("a{sv}")));
+
+    g_variant_iter_init (&iter, dictionary);
+    while ( g_variant_iter_next (&iter, "{sv}", &key, &value))
+    {
+       if (g_str_equal (key, "mico_mode"))
+           *mico_mode = (MMMicoMode)g_variant_get_uint32 (value);
+       else if (g_str_equal (key, "ladn_info"))
+           *ladn_info = (MMLadnInfo)g_variant_get_uint32 (value);
+       else
+       {
+            /* Set inner error, will stop the loop */
+            inner_error = g_error_new (MM_CORE_ERROR,
+                                       MM_CORE_ERROR_INVALID_ARGS,
+                                       "Invalid Registration params dictionary, unexpected key '%s'",
+                                       key);
+       }
+       g_free (key);
+       g_variant_unref (value);
+    }
+}
 /*****************************************************************************/
 
 /**
@@ -1155,6 +1201,100 @@ mm_modem_3gpp_set_initial_eps_bearer_settings_sync (MMModem3gpp         *self,
                                                                            error);
     g_variant_unref (dictionary);
     return result;
+}
+
+/**************************************************************************/
+/**
+ * mm_modem_3gpp_se_5gnr_registration_settings_finish:
+ * @self: A #MMModem3gpp.
+ * @res: The #GAsyncResult obtained from the #GAsyncReadyCallback passed to
+ *  mm_modem_3gpp_set_5gnr_registration_settings().
+ * @error: registration error for error or %NULL.
+ *
+ * Finishes an operation started with
+ * mm_modem_3gpp_set_5gnr_registration_settings().
+ *
+ * Returns: %TRUE if the operation was successful, %FALSE if @error is set.
+ *
+ * Since: 1.19
+ */
+
+gboolean
+mm_modem_3gpp_se_5gnr_registration_settings_finish (MMModem3gpp   *self,
+                                                    GAsyncResult  *res,
+                                                    GError       **error)
+{
+ return  mm_gdbus_modem3gpp_call_set5g_nr_registration_settings_finish (MM_GDBUS_MODEM3GPP (self),
+                                                                        res,
+                                                                        error);
+}
+
+/**
+ * mm_modem_3gpp_set_5gnr_registration_settings:
+ * @self: A #MMModem3gpp.
+ * @config: A #MMMSetRegParamsInfo the 5G properties to use.
+ * @cancellable: (allow-none): A #GCancellable or %NULL.
+ * @callback: A #GAsyncReadyCallback to call when the request is satisfied or
+ *  %NULL.
+ * @user_data: User data to pass to @callback.
+ *
+ * Asynchronously configures the settings for the initial 5Gnr.
+ *
+ * When the operation is finished, @callback will be invoked in the
+ * <link linkend="g-main-context-push-thread-default">thread-default main loop</link>
+ * of the thread you are calling this method from. You can then call
+ * mm_modem_3gpp_se_5gnr_registration_settings_finish to get the result of
+ * the operation.
+ *
+ * Since: 1.19
+ */
+
+void 
+mm_modem_3gpp_set_5gnr_registration_settings (MMModem3gpp         *self,
+                                              GVariant            *config,
+                                              GCancellable        *cancellable,
+                                              GAsyncReadyCallback  callback,
+                                              gpointer             user_data)
+{
+  
+    mm_gdbus_modem3gpp_call_set5g_nr_registration_settings (MM_GDBUS_MODEM3GPP (self),
+                                                            config,
+                                                            cancellable,
+                                                            callback,
+                                                            user_data);
+}
+
+/**
+ * mm_modem_3gpp_set_5gnr_registration_settings_sync:
+ * @self: A #MMModem3gpp.
+ * @config: A #MMMSetRegParamsInfo 5G properties to use.
+ * @cancellable: (allow-none): A #GCancellable or %NULL.
+ * @error: Return location for error or %NULL.
+ *
+ * Synchronously configures the settings for the initial 5Gnr.
+ *
+ * The calling thread is blocked until a reply is received. See
+ * mm_modem_3gpp_set_5gnr_registration_settings for the asynchronous
+ * version of this method.
+ *
+ * Returns: %TRUE if the operation was successful, %FALSE if @error is set.
+ *
+ * Since: 1.19
+ */
+
+gboolean
+mm_modem_3gpp_set_5gnr_registration_settings_sync (MMModem3gpp   *self,
+                                                   GVariant      *config,
+                                                   GCancellable  *cancellable,
+                                                   GError       **error)
+{
+    gboolean result;
+
+    result = mm_gdbus_modem3gpp_call_set5g_nr_registration_settings_sync (MM_GDBUS_MODEM3GPP (self),
+                                                                          config,
+                                                                          cancellable,
+                                                                          error);
+   return result;
 }
 
 /*****************************************************************************/

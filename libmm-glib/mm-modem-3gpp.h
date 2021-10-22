@@ -45,6 +45,7 @@ G_BEGIN_DECLS
 typedef struct _MMModem3gpp MMModem3gpp;
 typedef struct _MMModem3gppClass MMModem3gppClass;
 typedef struct _MMModem3gppPrivate MMModem3gppPrivate;
+typedef struct _MMMSetRegParamsInfo MMMSetRegParamsInfo;
 
 /**
  * MMModem3gpp:
@@ -61,6 +62,11 @@ struct _MMModem3gpp {
 struct _MMModem3gppClass {
     /*< private >*/
     MmGdbusModem3gppProxyClass parent;
+};
+
+struct _MMMSetRegParamsInfo {
+    MMMicoMode mico_mode;
+    MMLadnInfo ladn_info;
 };
 
 GType mm_modem_3gpp_get_type (void);
@@ -186,6 +192,22 @@ gboolean mm_modem_3gpp_disable_facility_lock_sync   (MMModem3gpp          *self,
                                                      const gchar          *control_key,
                                                      GCancellable         *cancellable,
                                                      GError              **error);
+
+gboolean mm_modem_3gpp_se_5gnr_registration_settings_finish (MMModem3gpp          *self,
+                                                             GAsyncResult         *res,
+                                                             GError              **error);
+void  mm_modem_3gpp_set_5gnr_registration_settings          (MMModem3gpp          *self,
+                                                             GVariant             *config,
+                                                             GCancellable         *cancellable,
+                                                             GAsyncReadyCallback   callback,
+                                                             gpointer              user_data);
+gboolean mm_modem_3gpp_set_5gnr_registration_settings_sync  (MMModem3gpp          *self,
+                                                             GVariant             *config,
+                                                             GCancellable         *cancellable,
+                                                             GError              **error);
+void mm_modem_3gpp_get_5gnr_reg (MMModem3gpp *self,
+                                 MMMicoMode  *mico_mode,
+                                 MMLadnInfo  *ladn_info);
 
 G_END_DECLS
 

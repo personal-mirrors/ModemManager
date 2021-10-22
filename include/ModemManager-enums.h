@@ -1600,5 +1600,42 @@ typedef enum { /*< underscore_name=mm_bearer_apn_type >*/
     MM_BEARER_APN_TYPE_EMERGENCY  = 1 << 6,
     MM_BEARER_APN_TYPE_PRIVATE    = 1 << 7,
 } MMBearerApnType;
+/*****************************************************************************/
+/* Registration Params' enums */
+/**
+ * MMMicoMode:
+ * MM_MICO_MODE_UNKNOWN  :unknown
+ * @MM_MICO_MODE_DISABLED: Mico Mode Disabled.
+ * @MM_MICO_MODE_ENABLED: Mico Mode Enabled.
+ * @MM_MICO_MODE_UNSUPPORTED: Mico Mode Enabled.
+ * @MM_MICO_MODE_DEFAULT: Mico Mode Default.
+ *
+ * Mico Mode State.
+ *
+ * Since: 1.19
+ */
+typedef enum { /*< underscore_name=mm_mico_mode >*/
+    MM_MICO_MODE_UNKNOWN     = 0,
+    MM_MICO_MODE_DISABLED    = 1,
+    MM_MICO_MODE_ENABLED     = 2,
+    MM_MICO_MODE_UNSUPPORTED = 3,
+    MM_MICO_MODE_DEFAULT     = 4,
+} MMMicoMode;
+
+/**
+ * MMLadnInfo:
+ * MM_LADN_INFO_UNKNOWN :unknown
+ * @MM_LADN_INFO_NOT_NEEDED: Information Not Needed.
+ * @MM_LADN_INFO_REQUESTED: Information Requested.
+ *
+ * Default Ladn Info.
+ * 
+ * Since: 1.19
+ */
+typedef enum { /*< underscore_name=mm_ladn_info >*/
+    MM_LADN_INFO_UNKNOWN     = 0,
+    MM_LADN_INFO_NOT_NEEDED  = 1,
+    MM_LADN_INFO_REQUESTED   = 2,
+} MMLadnInfo;
 
 #endif /*  _MODEMMANAGER_ENUMS_H_ */

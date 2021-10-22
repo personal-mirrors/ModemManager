@@ -46,6 +46,7 @@ static SectionInfo section_infos[] = {
     [MMC_S_MODEM_3GPP_SCAN]            = { "3GPP scan"            },
     [MMC_S_MODEM_3GPP_USSD]            = { "3GPP USSD"            },
     [MMC_S_MODEM_3GPP_PROFILE_MANAGER] = { "3GPP profile manager" },
+    [MMC_S_MODEM_3GPP_5GNR]            = { "3GPP 5GNR"            },
     [MMC_S_MODEM_CDMA]                 = { "CDMA"                 },
     [MMC_S_MODEM_SIM]                  = { "SIM"                  },
     [MMC_S_MODEM_BEARER]               = { "Bearer"               },
@@ -144,6 +145,9 @@ static FieldInfo field_infos[] = {
     [MMC_F_3GPP_USSD_NETWORK_NOTIFICATION]         = { "modem.3gpp.ussd.network-notification",            "network notification",     MMC_S_MODEM_3GPP_USSD,            },
     [MMC_F_3GPP_PROFILE_MANAGER_LIST]              = { "modem.3gpp.profile-manager.list",                 "list",                     MMC_S_MODEM_3GPP_PROFILE_MANAGER, },
     [MMC_F_3GPP_PROFILE_MANAGER_SET]               = { "modem.3gpp.profile-manager.set",                  "set",                      MMC_S_MODEM_3GPP_PROFILE_MANAGER, },
+    [MMC_F_3GPP_5GNR_MICO_MODE]                    = { "modem.3gpp.5gnr.mico-mode",                        "mico mode",               MMC_S_MODEM_3GPP_5GNR,            },
+    [MMC_F_3GPP_5GNR_LADN_INFO]                    = { "modem.3gpp.5gnr.ladn-info",                        "ladn info",               MMC_S_MODEM_3GPP_5GNR,            },
+
     [MMC_F_CDMA_MEID]                              = { "modem.cdma.meid",                                 "meid",                     MMC_S_MODEM_CDMA,                 },
     [MMC_F_CDMA_ESN]                               = { "modem.cdma.esn",                                  "esn",                      MMC_S_MODEM_CDMA,                 },
     [MMC_F_CDMA_SID]                               = { "modem.cdma.sid",                                  "sid",                      MMC_S_MODEM_CDMA,                 },
