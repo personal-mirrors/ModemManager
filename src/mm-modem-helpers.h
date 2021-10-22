@@ -477,6 +477,15 @@ MM3gppProfile *mm_3gpp_profile_list_find_by_profile_id (GList   *profile_list,
                                                         GError **error);
 
 /*****************************************************************************/
+/* 5g Registration params  */
+/*****************************************************************************/
+typedef struct
+{
+    MMMicoMode mico_mode;
+    MMLadnInfo ladn_info;
+}MMSetRegParamsInfo;
+
+/*****************************************************************************/
 /* CDMA specific helpers and utilities */
 /*****************************************************************************/
 

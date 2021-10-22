@@ -7623,6 +7623,115 @@ set_primary_sim_slot_mbim (GTask *task)
     mbim_message_unref (message);
 }
 
+/***********************************************************************************************/
+/* 5G  */
+
+static MMSetRegParamsInfo *
+modem_3gpp_set_5gnr_registration_settings_finish (MMIfaceModem3gpp *self,
+                                                  GAsyncResult     *res,
+                                                  GError          **error)
+{
+    return g_task_propagate_pointer (G_TASK (res), error);
+}
+
+static void
+set_5gnr_registration_settings_query_ready (MbimDevice   *device,
+                                            GAsyncResult *res,
+                                            GTask        *task)
+{
+    MbimMessage   *response;
+    GError        *error = NULL;
+    MbimMicoMode   mico_mode;
+    MbimLadnInfo   ladn_info;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        mbim_message_ms_basic_connect_extensions_v3_registration_parameters_response_parse (response,
+                                                                                           &mico_mode,
+                                                                                            NULL,
+                                                                                           &ladn_info,
+                                                                                            NULL,
+                                                                                            NULL,
+                                                                                            NULL,
+                                                                                           &error)) {
+
+        /* Store results */
+        MMSetRegParamsInfo *reg_params_info = mm_get_reg_params_from_mbim_rsp (mico_mode,
+                                                                               ladn_info);
+        g_task_return_pointer (task, reg_params_info, (GDestroyNotify)g_free);
+    } else if (g_error_matches (error, MBIM_STATUS_ERROR, MBIM_STATUS_ERROR_OPERATION_NOT_ALLOWED)) {
+        g_clear_error (&error);
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED, "operation not allowed");
+    } else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+
+    if (response)
+        mbim_message_unref (response);
+}
+
+static void
+modem_3gpp_set_5gnr_registration_settings (MMIfaceModem3gpp    *self,
+                                           MMSetRegParamsInfo  *reg_params_req,
+                                           GAsyncReadyCallback  callback,
+                                           gpointer             user_data)
+{
+    MbimDevice           *device;
+    MbimMessage          *message;
+    GTask                *task;
+    GError               *error = NULL;
+    MbimMicoMode          mico_mode;
+    MbimLadnInfo          ladn_info;
+
+    if (!peek_device (self, &device, callback, user_data)){
+        mm_obj_dbg (self,"%s peek MBIM port failed",__func__);
+        return;
+    }
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    if( MBIM_V3 != mm_get_version (device)){
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_WRONG_STATE, "operation not allowed when mbim version is not V3");
+        g_object_unref (task);
+        mm_obj_dbg (self," %s : Command not supported in current MBIM version",__func__);
+        return;
+    }
+    mico_mode      = mm_mico_mode_to_mbim_mico_mode (reg_params_req->mico_mode, &error);
+    ladn_info      = mm_ladn_info_to_mbim_ladn_info (reg_params_req->ladn_info, &error);
+
+    if (error) {
+      g_task_return_error (task, error);
+      g_object_unref (task);
+      mm_obj_dbg (self, "%s Invalid param values passed",__func__);
+      return;
+    }
+
+    message = (mbim_message_ms_basic_connect_extensions_v3_registration_parameters_set_new (mico_mode,
+                                                                                            MBIM_DRX_CYCLE_NOT_SPECIFIED,
+                                                                                            ladn_info,
+                                                                                            MBIM_DEFAULT_PDU_ACTIVATION_HINT_UNLIKELY,
+                                                                                            TRUE,
+                                                                                            NULL,
+                                                                                            &error));
+    if (!message) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        mm_obj_dbg (self, " %s : Mbim message creation failed",__func__);
+        return;
+    }
+
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)set_5gnr_registration_settings_query_ready,
+                         task);
+    mbim_message_unref (message);
+}
+
+/***********************************************************************************************/
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
 static void
 shared_qmi_set_primary_sim_slot_ready (MMIfaceModem *self,
@@ -7871,6 +7980,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->run_registration_checks_finish = modem_3gpp_run_registration_checks_finish;
     iface->register_in_network = modem_3gpp_register_in_network;
     iface->register_in_network_finish = modem_3gpp_register_in_network_finish;
+    iface->set_5gnr_registration_settings = modem_3gpp_set_5gnr_registration_settings;
+    iface->set_5gnr_registration_settings_finish = modem_3gpp_set_5gnr_registration_settings_finish;
     iface->scan_networks = modem_3gpp_scan_networks;
     iface->scan_networks_finish = modem_3gpp_scan_networks_finish;
     iface->disable_facility_lock = modem_3gpp_disable_facility_lock;

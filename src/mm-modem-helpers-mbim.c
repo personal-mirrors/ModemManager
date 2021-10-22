@@ -851,3 +851,114 @@ mm_signal_from_mbim_signal_state (MbimDataClass          data_class,
 
     return TRUE;
 }
+/*******************************************************************************/
+MMMicoMode
+mm_mico_mode_from_mbim_type (MbimMicoMode caps,
+                             GError     **error)
+{
+    switch(caps) {
+    case MBIM_MICO_MODE_DISABLED:
+       return MM_MICO_MODE_DISABLED;
+    case MBIM_MICO_MODE_ENABLED:
+       return MM_MICO_MODE_ENABLED;
+    case MBIM_MICO_MODE_UNSUPPORTED:
+       return MM_MICO_MODE_UNSUPPORTED;
+    case MBIM_MICO_MODE_DEFAULT:
+       return MM_MICO_MODE_DEFAULT;
+    default:
+       {
+           g_set_error (error,
+                        MM_CORE_ERROR,
+                        MM_CORE_ERROR_INVALID_ARGS,
+                        "Invalid param recieved ");
+       }
+       break;
+    }
+    return MM_MICO_MODE_UNKNOWN;
+}
+
+MMLadnInfo
+mm_ladn_ind_from_mbim_type (MbimLadnInfo caps,
+                            GError     **error)
+{
+    switch(caps) {
+    case MBIM_LADN_INFO_NOT_NEEDED:
+       return MM_LADN_INFO_NOT_NEEDED;
+    case MBIM_LADN_INFO_REQUESTED:
+       return MM_LADN_INFO_REQUESTED;
+    default:
+       {
+           g_set_error (error,
+                        MM_CORE_ERROR,
+                        MM_CORE_ERROR_INVALID_ARGS,
+                        "Invalid param recieved ");
+       }
+       break;
+    }
+    return MM_LADN_INFO_UNKNOWN;
+}
+
+MMSetRegParamsInfo *
+mm_get_reg_params_from_mbim_rsp (MbimMicoMode mico_mode,
+                                 MbimLadnInfo ladn_info)
+{
+    MMSetRegParamsInfo *info = g_new0 (MMSetRegParamsInfo, 1);
+    GError *error = NULL;
+
+    info->mico_mode = mm_mico_mode_from_mbim_type (mico_mode, &error);
+    info->ladn_info = mm_ladn_ind_from_mbim_type  (ladn_info, &error);
+    return info;
+}
+
+MbimMicoMode
+mm_mico_mode_to_mbim_mico_mode (MMMicoMode  mico_mode,
+                                GError    **error)
+{
+    switch(mico_mode){
+    case MM_MICO_MODE_DISABLED:
+       return MBIM_MICO_MODE_DISABLED;
+    case MM_MICO_MODE_ENABLED:
+       return MBIM_MICO_MODE_ENABLED;
+    case MM_MICO_MODE_UNSUPPORTED:
+       return MBIM_MICO_MODE_UNSUPPORTED;
+    case MM_MICO_MODE_DEFAULT:
+    case MM_MICO_MODE_UNKNOWN:
+    default:
+        {
+            g_set_error (error,
+                         MM_CORE_ERROR,
+                         MM_CORE_ERROR_INVALID_ARGS,
+                         "Invalid param recieved ");
+        }
+    }
+    return MBIM_MICO_MODE_DEFAULT;
+}
+
+MbimLadnInfo
+mm_ladn_info_to_mbim_ladn_info (MMLadnInfo ladn_info,
+                                GError   **error)
+{
+    switch(ladn_info){
+    case MM_LADN_INFO_NOT_NEEDED:
+       return MBIM_LADN_INFO_NOT_NEEDED;
+    case MM_LADN_INFO_REQUESTED:
+    case MM_LADN_INFO_UNKNOWN:
+    default:
+       {
+          g_set_error (error,
+                       MM_CORE_ERROR,
+                       MM_CORE_ERROR_INVALID_ARGS,
+                       "Invalid param recieved ");
+       }
+    }
+    return MBIM_LADN_INFO_NOT_NEEDED;
+}
+
+/* MBIM version related parameters */
+guint8
+mm_get_version (MbimDevice *device)
+{
+    guint8 minor_version;
+    minor_version = mbim_device_get_ms_mbimex_version (device, NULL);
+    return minor_version;
+}

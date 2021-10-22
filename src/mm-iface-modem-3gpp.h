@@ -245,6 +245,16 @@ struct _MMIfaceModem3gpp {
     gboolean (* disable_facility_lock_finish) (MMIfaceModem3gpp  *self,
                                                GAsyncResult      *res,
                                                GError           **error);
+    /* Set Registeration params*/
+    void (*set_5gnr_registration_settings) (MMIfaceModem3gpp     *self,
+                                            MMSetRegParamsInfo   *regParamsReq,
+                                            GAsyncReadyCallback   callback,
+                                            gpointer              user_data);
+
+    MMSetRegParamsInfo * (*set_5gnr_registration_settings_finish) (MMIfaceModem3gpp  *self,
+                                                                   GAsyncResult      *res,
+                                                                   GError           **error);
+
 };
 
 GType mm_iface_modem_3gpp_get_type (void);

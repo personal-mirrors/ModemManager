@@ -355,7 +355,7 @@ mm_modem_3gpp_get_pco (MMModem3gpp *self)
     return pco_list;
 }
 
-/*****************************************************************************
+/****************************************************************************/
 /**
  * mm_modem_3gpp_get_5gnr_reg:
  * @self: A #MMModem3gpp.
@@ -377,7 +377,6 @@ mm_modem_3gpp_get_5gnr_reg (MMModem3gpp *self,
     GVariantIter  iter;
     gchar        *key;
     GVariant     *value;
-    GError       *inner_error = NULL;
 
     dictionary = mm_gdbus_modem3gpp_get_intial5g_nr_settings (MM_GDBUS_MODEM3GPP (self));
     g_return_if_fail (g_variant_is_of_type (dictionary, G_VARIANT_TYPE ("a{sv}")));
@@ -387,16 +386,8 @@ mm_modem_3gpp_get_5gnr_reg (MMModem3gpp *self,
     {
        if (g_str_equal (key, "mico_mode"))
            *mico_mode = (MMMicoMode)g_variant_get_uint32 (value);
-       else if (g_str_equal (key, "ladn_info"))
+       if (g_str_equal (key, "ladn_info"))
            *ladn_info = (MMLadnInfo)g_variant_get_uint32 (value);
-       else
-       {
-            /* Set inner error, will stop the loop */
-            inner_error = g_error_new (MM_CORE_ERROR,
-                                       MM_CORE_ERROR_INVALID_ARGS,
-                                       "Invalid Registration params dictionary, unexpected key '%s'",
-                                       key);
-       }
        g_free (key);
        g_variant_unref (value);
     }
