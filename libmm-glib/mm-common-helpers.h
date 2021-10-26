@@ -83,6 +83,14 @@ MMBearerMultiplexSupport      mm_common_get_multiplex_support_from_string       
                                                                                    GError      **error);
 MMBearerApnType               mm_common_get_apn_type_from_string                  (const gchar  *str,
                                                                                    GError      **error);
+MMBearerState                 mm_common_get_enabled_from_string                   (const gchar  *str,
+                                                                                   GError      **error);
+MMBearerRoamControl           mm_common_get_roaming_control_from_string           (const gchar  *str,
+                                                                                   GError      **error);
+MMBearerMediaType             mm_common_get_media_type_from_string                (const gchar  *str,
+                                                                                   GError      **error);
+MMBearerSource                mm_common_get_source_from_string                    (const gchar  *str,
+                                                                                   GError      **error);
 MMModem3gppFacility           mm_common_get_3gpp_facility_from_string             (const gchar  *str,
                                                                                    GError      **error);
 

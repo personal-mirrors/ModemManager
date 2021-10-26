@@ -30,26 +30,34 @@
 
 G_DEFINE_TYPE (MM3gppProfile, mm_3gpp_profile, G_TYPE_OBJECT)
 
-#define PROPERTY_ID           "profile-id"
-#define PROPERTY_NAME         "profile-name"
-#define PROPERTY_APN          "apn"
-#define PROPERTY_ALLOWED_AUTH "allowed-auth"
-#define PROPERTY_USER         "user"
-#define PROPERTY_PASSWORD     "password"
-#define PROPERTY_IP_TYPE      "ip-type"
-#define PROPERTY_APN_TYPE     "apn-type"
+#define PROPERTY_ID              "profile-id"
+#define PROPERTY_NAME            "profile-name"
+#define PROPERTY_APN             "apn"
+#define PROPERTY_ALLOWED_AUTH    "allowed-auth"
+#define PROPERTY_USER            "user"
+#define PROPERTY_PASSWORD        "password"
+#define PROPERTY_IP_TYPE         "ip-type"
+#define PROPERTY_APN_TYPE        "apn-type"
+#define PROPERTY_ENABLED         "enabled"
+#define PROPERTY_ROAMING_CONTROL "roaming-control"
+#define PROPERTY_MEDIA_TYPE      "media-type"
+#define PROPERTY_SOURCE          "source"
 
 struct _MM3gppProfilePrivate {
-    gint              profile_id;
-    gchar            *profile_name;
-    gchar            *apn;
-    MMBearerIpFamily  ip_type;
-    MMBearerApnType   apn_type;
+    gint                profile_id;
+    gchar              *profile_name;
+    gchar              *apn;
+    MMBearerIpFamily    ip_type;
+    MMBearerApnType     apn_type;
+    MMBearerState       enabled;
+    MMBearerRoamControl roaming_control;
+    MMBearerMediaType   media_type;
+    MMBearerSource      source;
 
     /* Optional authentication settings */
-    MMBearerAllowedAuth  allowed_auth;
-    gchar               *user;
-    gchar               *password;
+    MMBearerAllowedAuth allowed_auth;
+    gchar              *user;
+    gchar              *password;
 };
 
 /*****************************************************************************/
@@ -424,6 +432,158 @@ mm_3gpp_profile_get_apn_type (MM3gppProfile *self)
 /*****************************************************************************/
 
 /**
+ * mm_3gpp_profile_set_enabled:
+ * @self: a #MM3gppProfile.
+ * @enabled: a mask of #MMBearerState values.
+ *
+ * Sets the status of the context to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_3gpp_profile_set_enabled (MM3gppProfile   *self,
+                             MMBearerState    enabled)
+{
+    g_return_if_fail (MM_IS_3GPP_PROFILE (self));
+
+    self->priv->enabled = enabled;
+}
+
+/**
+ * mm_3gpp_profile_get_enabled:
+ * @self: a #MM3gppProfile.
+ *
+ * Gets the status of the context to use.
+ *
+ * Returns: a mask of #MMBearerState values.
+ *
+ * Since: 1.18
+ */
+MMBearerState
+mm_3gpp_profile_get_enabled (MM3gppProfile *self)
+{
+    g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), MM_3GPP_PROFILE_ENABLED_UNKNOWN);
+
+    return self->priv->enabled;
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_3gpp_profile_set_roaming_control:
+ * @self: a #MM3gppProfile.
+ * @roaming_control: a mask of #MMBearerRoamControl values.
+ *
+ * Sets the roaming control types to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_3gpp_profile_set_roaming_control (MM3gppProfile       *self,
+                                     MMBearerRoamControl  roaming_control)
+{
+    g_return_if_fail (MM_IS_3GPP_PROFILE (self));
+
+    self->priv->roaming_control = roaming_control;
+}
+
+/**
+ * mm_3gpp_profile_get_roaming_control:
+ * @self: a #MM3gppProfile.
+ *
+ * Gets the roaming control to use.
+ *
+ * Returns: a mask of #MMBearerRoamControl values.
+ *
+ * Since: 1.18
+ */
+MMBearerRoamControl
+mm_3gpp_profile_get_roaming_control (MM3gppProfile *self)
+{
+    g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), MM_3GPP_PROFILE_ROAMING_CONTROL_UNKNOWN);
+
+    return self->priv->roaming_control;
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_3gpp_profile_set_media_type:
+ * @self: a #MM3gppProfile.
+ * @media_type: a mask of #MMBearerMediaType values.
+ *
+ * Sets the media types to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_3gpp_profile_set_media_type (MM3gppProfile    *self,
+                                MMBearerMediaType media_type)
+{
+    g_return_if_fail (MM_IS_3GPP_PROFILE (self));
+
+    self->priv->media_type = media_type;
+}
+
+/**
+ * mm_3gpp_profile_get_media_type:
+ * @self: a #MM3gppProfile.
+ *
+ * Gets the media types to use.
+ *
+ * Returns: a mask of #MMBearerMediaType values.
+ *
+ * Since: 1.18
+ */
+MMBearerMediaType
+mm_3gpp_profile_get_media_type (MM3gppProfile *self)
+{
+    g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), MM_3GPP_PROFILE_MEDIA_TYPE_UNKNOWN);
+
+    return self->priv->media_type;
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_3gpp_profile_set_source:
+ * @self: a #MM3gppProfile.
+ * @source: a mask of #MMBearerSource values.
+ *
+ * Sets the Source of context creation to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_3gpp_profile_set_source (MM3gppProfile *self,
+                            MMBearerSource source)
+{
+    g_return_if_fail (MM_IS_3GPP_PROFILE (self));
+
+    self->priv->source = source;
+}
+
+/**
+ * mm_3gpp_profile_get_source:
+ * @self: a #MM3gppProfile.
+ *
+ * Gets the Source of context creation to use.
+ *
+ * Returns: a mask of #MMBearerSource values.
+ *
+ * Since: 1.18
+ */
+MMBearerSource
+mm_3gpp_profile_get_source (MM3gppProfile *self)
+{
+    g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), MM_3GPP_PROFILE_SOURCE_UNKNOWN);
+
+    return self->priv->source;
+}
+
+/*****************************************************************************/
+
+/**
  * mm_3gpp_profile_get_dictionary: (skip)
  */
 GVariant *
@@ -486,6 +646,30 @@ mm_3gpp_profile_get_dictionary (MM3gppProfile *self)
                                PROPERTY_APN_TYPE,
                                g_variant_new_uint32 (self->priv->apn_type));
 
+    if (self->priv->enabled != MM_3GPP_PROFILE_ENABLED_UNKNOWN)
+        g_variant_builder_add (&builder,
+                               "{sv}",
+                               PROPERTY_ENABLED,
+                               g_variant_new_uint32 (self->priv->enabled));
+
+    if (self->priv->roaming_control != MM_3GPP_PROFILE_ROAMING_CONTROL_UNKNOWN)
+        g_variant_builder_add (&builder,
+                               "{sv}",
+                               PROPERTY_ROAMING_CONTROL,
+                               g_variant_new_uint32 (self->priv->roaming_control));
+
+    if (self->priv->media_type != MM_3GPP_PROFILE_MEDIA_TYPE_UNKNOWN)
+        g_variant_builder_add (&builder,
+                               "{sv}",
+                               PROPERTY_MEDIA_TYPE,
+                               g_variant_new_uint32 (self->priv->media_type));
+
+    if (self->priv->source != MM_3GPP_PROFILE_SOURCE_UNKNOWN)
+        g_variant_builder_add (&builder,
+                               "{sv}",
+                               PROPERTY_SOURCE,
+                               g_variant_new_uint32 (self->priv->source));
+
     return g_variant_ref_sink (g_variant_builder_end (&builder));
 }
 
@@ -546,6 +730,46 @@ mm_3gpp_profile_consume_string (MM3gppProfile  *self,
             return FALSE;
         }
         mm_3gpp_profile_set_apn_type (self, apn_type);
+    } else if (g_str_equal (key, PROPERTY_ENABLED)) {
+        GError          *inner_error = NULL;
+        MMBearerState    enabled;
+
+        enabled = mm_common_get_enabled_from_string (value, &inner_error);
+        if (inner_error) {
+            g_propagate_error (error, inner_error);
+            return FALSE;
+        }
+        mm_3gpp_profile_set_enabled (self, enabled);
+    } else if (g_str_equal (key, PROPERTY_ROAMING_CONTROL)) {
+        GError          *inner_error = NULL;
+        MMBearerRoamControl  roaming_control;
+
+        roaming_control = mm_common_get_roaming_control_from_string (value, &inner_error);
+        if (inner_error) {
+            g_propagate_error (error, inner_error);
+            return FALSE;
+        }
+        mm_3gpp_profile_set_roaming_control (self, roaming_control);
+    } else if (g_str_equal (key, PROPERTY_MEDIA_TYPE)) {
+        GError           *inner_error = NULL;
+        MMBearerMediaType media_type;
+
+        media_type = mm_common_get_media_type_from_string (value, &inner_error);
+        if (inner_error) {
+            g_propagate_error (error, inner_error);
+            return FALSE;
+        }
+        mm_3gpp_profile_set_media_type (self, media_type);
+    } else if (g_str_equal (key, PROPERTY_SOURCE)) {
+        GError          *inner_error = NULL;
+        MMBearerSource    source;
+
+        source = mm_common_get_source_from_string (value, &inner_error);
+        if (inner_error) {
+            g_propagate_error (error, inner_error);
+            return FALSE;
+        }
+        mm_3gpp_profile_set_source (self, source);
     } else {
         g_set_error (error,
                      MM_CORE_ERROR,
@@ -640,6 +864,22 @@ mm_3gpp_profile_consume_variant (MM3gppProfile  *self,
             g_variant_get_uint32 (value));
     else if (g_str_equal (key, PROPERTY_APN_TYPE))
         mm_3gpp_profile_set_apn_type (
+            self,
+            g_variant_get_uint32 (value));
+    else if (g_str_equal (key, PROPERTY_ENABLED))
+        mm_3gpp_profile_set_enabled (
+            self,
+            g_variant_get_uint32 (value));
+    else if (g_str_equal (key, PROPERTY_ROAMING_CONTROL))
+        mm_3gpp_profile_set_roaming_control (
+            self,
+            g_variant_get_uint32 (value));
+    else if (g_str_equal (key, PROPERTY_MEDIA_TYPE))
+        mm_3gpp_profile_set_media_type (
+            self,
+            g_variant_get_uint32 (value));
+    else if (g_str_equal (key, PROPERTY_SOURCE))
+        mm_3gpp_profile_set_source (
             self,
             g_variant_get_uint32 (value));
     else {

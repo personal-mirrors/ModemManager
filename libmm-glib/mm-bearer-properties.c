@@ -328,6 +328,158 @@ mm_bearer_properties_get_apn_type (MMBearerProperties *self)
 /*****************************************************************************/
 
 /**
+ * mm_bearer_properties_set_enabled:
+ * @self: a #MMBearerProperties.
+ * @enabled: a mask of #MMBearerState values.
+ *
+ * Sets the context state to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_bearer_properties_set_enabled (MMBearerProperties *self,
+                                  MMBearerState       enabled)
+{
+    g_return_if_fail (MM_IS_BEARER_PROPERTIES (self));
+
+    mm_3gpp_profile_set_enabled (self->priv->profile, enabled);
+}
+
+/**
+ * mm_bearer_properties_get_enabled:
+ * @self: a #MMBearerProperties.
+ *
+ * Gets the status of context to use.
+ *
+ * Returns: a mask of #MMBearerState values.
+ *
+ * Since: 1.18
+ */
+MMBearerState
+mm_bearer_properties_get_enabled (MMBearerProperties *self)
+{
+    g_return_val_if_fail (MM_IS_BEARER_PROPERTIES (self), MM_3GPP_PROFILE_ENABLED_UNKNOWN);
+
+    return mm_3gpp_profile_get_enabled (self->priv->profile);
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_bearer_properties_set_roaming_control:
+ * @self: a #MMBearerProperties.
+ * @roaming_control: a mask of #MMBearerRoamControl values.
+ *
+ * Sets the roaming control to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_bearer_properties_set_roaming_control (MMBearerProperties *self,
+                                          MMBearerRoamControl  roaming_control)
+{
+    g_return_if_fail (MM_IS_BEARER_PROPERTIES (self));
+
+    mm_3gpp_profile_set_roaming_control (self->priv->profile, roaming_control);
+}
+
+/**
+ * mm_bearer_properties_get_roaming_control:
+ * @self: a #MMBearerProperties.
+ *
+ * Gets the roaming control to use.
+ *
+ * Returns: a mask of #MMBearerRoamControl values.
+ *
+ * Since: 1.18
+ */
+MMBearerRoamControl
+mm_bearer_properties_get_roaming_control (MMBearerProperties *self)
+{
+    g_return_val_if_fail (MM_IS_BEARER_PROPERTIES (self), MM_3GPP_PROFILE_ROAMING_CONTROL_UNKNOWN);
+
+    return mm_3gpp_profile_get_roaming_control (self->priv->profile);
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_bearer_properties_set_media_type:
+ * @self: a #MMBearerProperties.
+ * @media_type: a mask of #MMBearerMediaType values.
+ *
+ * Sets the media types to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_bearer_properties_set_media_type (MMBearerProperties *self,
+                                     MMBearerMediaType media_type)
+{
+    g_return_if_fail (MM_IS_BEARER_PROPERTIES (self));
+
+    mm_3gpp_profile_set_media_type (self->priv->profile, media_type);
+}
+
+/**
+ * mm_bearer_properties_get_media_type:
+ * @self: a #MMBearerProperties.
+ *
+ * Gets the media types to use.
+ *
+ * Returns: a mask of #MMBearerMediaType values.
+ *
+ * Since: 1.18
+ */
+MMBearerMediaType
+mm_bearer_properties_get_media_type (MMBearerProperties *self)
+{
+    g_return_val_if_fail (MM_IS_BEARER_PROPERTIES (self), MM_3GPP_PROFILE_MEDIA_TYPE_UNKNOWN);
+
+    return mm_3gpp_profile_get_media_type (self->priv->profile);
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_bearer_properties_set_source:
+ * @self: a #MMBearerProperties.
+ * @source: a mask of #MMBearerSource values.
+ *
+ * Sets the source of context creation to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_bearer_properties_set_source (MMBearerProperties *self,
+                                 MMBearerSource    source)
+{
+    g_return_if_fail (MM_IS_BEARER_PROPERTIES (self));
+
+    mm_3gpp_profile_set_source (self->priv->profile, source);
+}
+
+/**
+ * mm_bearer_properties_get_source:
+ * @self: a #MMBearerProperties.
+ *
+ * Gets the source of context creation to use.
+ *
+ * Returns: a mask of #MMBearerSource values.
+ *
+ * Since: 1.18
+ */
+MMBearerSource
+mm_bearer_properties_get_source (MMBearerProperties *self)
+{
+    g_return_val_if_fail (MM_IS_BEARER_PROPERTIES (self), MM_3GPP_PROFILE_SOURCE_UNKNOWN);
+
+    return mm_3gpp_profile_get_source (self->priv->profile);
+}
+
+/*****************************************************************************/
+
+/**
  * mm_bearer_properties_set_profile_id:
  * @self: a #MMBearerProperties.
  * @profile_id: a profile id.

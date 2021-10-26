@@ -228,6 +228,10 @@ static FieldInfo field_infos[] = {
     [MMC_F_BEARER_STATUS_PROFILE_ID]               = { "bearer.status.profile-id",                        "profile id",               MMC_S_BEARER_STATUS,              },
     [MMC_F_BEARER_PROPERTIES_APN]                  = { "bearer.properties.apn",                           "apn",                      MMC_S_BEARER_PROPERTIES,          },
     [MMC_F_BEARER_PROPERTIES_APN_TYPE]             = { "bearer.properties.apn-type",                      "apn type",                 MMC_S_BEARER_PROPERTIES,          },
+    [MMC_F_BEARER_PROPERTIES_ENABLED]              = { "bearer.properties.enabled",                       "enabled",                  MMC_S_BEARER_PROPERTIES,          },
+    [MMC_F_BEARER_PROPERTIES_ROAMING_CONTROL]      = { "bearer.properties.roaming-control",               "roaming control",          MMC_S_BEARER_PROPERTIES,          },
+    [MMC_F_BEARER_PROPERTIES_MEDIA_TYPE]           = { "bearer.properties.media-type",                    "media type",               MMC_S_BEARER_PROPERTIES,          },
+    [MMC_F_BEARER_PROPERTIES_SOURCE]               = { "bearer.properties.source",                        "source",                   MMC_S_BEARER_PROPERTIES,          },
     [MMC_F_BEARER_PROPERTIES_ROAMING]              = { "bearer.properties.roaming",                       "roaming",                  MMC_S_BEARER_PROPERTIES,          },
     [MMC_F_BEARER_PROPERTIES_IP_TYPE]              = { "bearer.properties.ip-type",                       "ip type",                  MMC_S_BEARER_PROPERTIES,          },
     [MMC_F_BEARER_PROPERTIES_ALLOWED_AUTH]         = { "bearer.properties.allowed-auth",                  "allowed-auth",             MMC_S_BEARER_PROPERTIES,          },
@@ -920,6 +924,10 @@ build_profile_human (GPtrArray     *array,
     MMBearerAllowedAuth  allowed_auth;
     MMBearerIpFamily     ip_type;
     MMBearerApnType      apn_type;
+    MMBearerState        enabled;
+    MMBearerRoamControl  roaming_control;
+    MMBearerMediaType    media_type;
+    MMBearerSource       source;
 
     g_ptr_array_add (array, g_strdup_printf ("profile-id: %u", mm_3gpp_profile_get_profile_id (profile)));
 
@@ -958,6 +966,38 @@ build_profile_human (GPtrArray     *array,
         apn_type_str = mm_bearer_apn_type_build_string_from_mask (apn_type);
         g_ptr_array_add (array, g_strdup_printf ("    apn-type: %s", apn_type_str));
     }
+
+    enabled = mm_3gpp_profile_get_enabled (profile);
+    if ((gint)enabled != MM_3GPP_PROFILE_ENABLED_UNKNOWN) {
+        const gchar *enabled_str = NULL;
+
+        enabled_str = mm_bearer_state_get_string (enabled);
+        g_ptr_array_add (array, g_strdup_printf ("    enabled: %s", enabled_str));
+    }
+
+    roaming_control = mm_3gpp_profile_get_roaming_control (profile);
+    if ((gint)roaming_control != MM_3GPP_PROFILE_ROAMING_CONTROL_UNKNOWN) {
+        const gchar *roaming_control_str = NULL;
+
+        roaming_control_str = mm_bearer_roam_control_get_string (roaming_control);
+        g_ptr_array_add (array, g_strdup_printf ("    roaming-control: %s", roaming_control_str));
+    }
+
+    media_type = mm_3gpp_profile_get_media_type (profile);
+    if ((gint)media_type != MM_3GPP_PROFILE_MEDIA_TYPE_UNKNOWN) {
+        const gchar *media_type_str = NULL;
+
+        media_type_str = mm_bearer_media_type_get_string (media_type);
+        g_ptr_array_add (array, g_strdup_printf ("    media-type: %s", media_type_str));
+    }
+
+    source = mm_3gpp_profile_get_source (profile);
+    if ((gint)source != MM_3GPP_PROFILE_SOURCE_UNKNOWN) {
+        const gchar *source_str = NULL;
+
+        source_str = mm_bearer_source_get_string (source);
+        g_ptr_array_add (array, g_strdup_printf ("    source: %s", source_str));
+    }
 }
 
 static void
@@ -969,6 +1009,10 @@ build_profile_keyvalue (GPtrArray     *array,
     MMBearerAllowedAuth  allowed_auth;
     MMBearerIpFamily     ip_type;
     MMBearerApnType      apn_type;
+    MMBearerState        enabled;
+    MMBearerRoamControl  roaming_control;
+    MMBearerMediaType    media_type;
+    MMBearerSource       source;
 
     str = g_string_new ("");
     g_string_append_printf (str, "profile-id: %u", mm_3gpp_profile_get_profile_id (profile));
@@ -1009,6 +1053,37 @@ build_profile_keyvalue (GPtrArray     *array,
         g_string_append_printf (str, ", apn-type: %s", apn_type_str);
     }
 
+    enabled = mm_3gpp_profile_get_enabled (profile);
+    if ((gint)enabled != MM_3GPP_PROFILE_ENABLED_UNKNOWN) {
+         const gchar *enabled_str = NULL;
+
+        enabled_str = mm_bearer_state_get_string (enabled);
+        g_string_append_printf (str, ", enabled: %s", enabled_str);
+    }
+
+    roaming_control = mm_3gpp_profile_get_roaming_control (profile);
+    if ((gint)roaming_control != MM_3GPP_PROFILE_ROAMING_CONTROL_UNKNOWN) {
+        const gchar *roaming_control_str = NULL;
+
+        roaming_control_str = mm_bearer_roam_control_get_string (roaming_control);
+        g_string_append_printf (str, ", roaming-control: %s", roaming_control_str);
+    }
+
+    media_type = mm_3gpp_profile_get_media_type (profile);
+    if ((gint)media_type != MM_3GPP_PROFILE_MEDIA_TYPE_UNKNOWN) {
+        const gchar *media_type_str = NULL;
+
+        media_type_str = mm_bearer_media_type_get_string (media_type);
+        g_string_append_printf (str, ", media-type: %s", media_type_str);
+    }
+
+    source = mm_3gpp_profile_get_source (profile);
+    if ((gint)source != MM_3GPP_PROFILE_SOURCE_UNKNOWN) {
+        const gchar *source_str = NULL;
+
+        source_str = mm_bearer_source_get_string (source);
+        g_string_append_printf (str, ", source: %s", source_str);
+    }
     g_ptr_array_add (array, g_string_free (str, FALSE));
 }
 
