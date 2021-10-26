@@ -636,6 +636,198 @@ mm_signal_snr_from_coded_value (guint     coded_value,
 
 /*****************************************************************************/
 
+MMBearerState
+mm_bearer_state_from_mbim_context_state (MbimContextState state)
+{
+    switch (state) {
+    case MBIM_CONTEXT_STATE_DISABLED:
+        return MM_BEARER_STATE_DISABLED;
+    case MBIM_CONTEXT_STATE_ENABLED:
+        return MM_BEARER_STATE_ENABLED;
+    default:
+        return MM_BEARER_STATE_DISABLED;
+    }
+}
+
+MbimContextState
+mm_bearer_state_to_mbim_context_state (MMBearerState state,
+                                       GError      **error)
+{
+    const gchar *str;
+
+    switch (state) {
+    case MM_BEARER_STATE_DISABLED:
+        return MBIM_CONTEXT_STATE_DISABLED;
+    case MM_BEARER_STATE_ENABLED:
+        return MBIM_CONTEXT_STATE_ENABLED;
+    default:
+        break;
+    }
+
+    str = mm_bearer_state_get_string (state);
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_UNSUPPORTED,
+                 "Setting context state as: '%s'",
+                 str);
+    return MBIM_CONTEXT_STATE_DISABLED;
+}
+
+/*****************************************************************************/
+
+MMBearerRoamControl
+mm_bearer_roam_control_from_mbim_context_roaming_control (MbimContextRoamingControl roaming)
+{
+    switch (roaming) {
+    case MBIM_CONTEXT_ROAMING_CONTROL_HOME_ONLY:
+        return MM_BEARER_ROAM_CONTROL_HOME_ONLY;
+    case MBIM_CONTEXT_ROAMING_CONTROL_PARTNER_ONLY:
+        return MM_BEARER_ROAM_CONTROL_PARTNER_ONLY;
+    case MBIM_CONTEXT_ROAMING_CONTROL_NON_PARTNER_ONLY:
+        return MM_BEARER_ROAM_CONTROL_NON_PARTNER_ONLY;
+    case MBIM_CONTEXT_ROAMING_CONTROL_HOME_AND_PARTNER:
+        return MM_BEARER_ROAM_CONTROL_HOME_AND_PARTNER;
+    case MBIM_CONTEXT_ROAMING_CONTROL_HOME_AND_NON_PARTNER:
+        return MM_BEARER_ROAM_CONTROL_HOME_AND_NON_PARTNER;
+    case MBIM_CONTEXT_ROAMING_CONTROL_PARTNER_AND_NON_PARTNER:
+        return MM_BEARER_ROAM_CONTROL_PARTNER_AND_NON_PARTNER;
+    case MBIM_CONTEXT_ROAMING_CONTROL_ALLOW_ALL:
+        return MM_BEARER_ROAM_CONTROL_ALLOW_ALL;
+    default:
+        return MM_BEARER_ROAM_CONTROL_HOME_ONLY;
+    }
+}
+
+MbimContextRoamingControl
+mm_bearer_roam_control_to_mbim_context_roaming_control (MMBearerRoamControl roaming,
+                                                     GError         **error)
+{
+    const gchar *str;
+
+    switch (roaming) {
+    case MM_BEARER_ROAM_CONTROL_HOME_ONLY:
+        return MBIM_CONTEXT_ROAMING_CONTROL_HOME_ONLY;
+    case MM_BEARER_ROAM_CONTROL_PARTNER_ONLY:
+        return MBIM_CONTEXT_ROAMING_CONTROL_PARTNER_ONLY;
+    case MM_BEARER_ROAM_CONTROL_NON_PARTNER_ONLY:
+        return MBIM_CONTEXT_ROAMING_CONTROL_NON_PARTNER_ONLY;
+    case MM_BEARER_ROAM_CONTROL_HOME_AND_PARTNER:
+        return MBIM_CONTEXT_ROAMING_CONTROL_HOME_AND_PARTNER;
+    case MM_BEARER_ROAM_CONTROL_HOME_AND_NON_PARTNER:
+        return MBIM_CONTEXT_ROAMING_CONTROL_HOME_AND_NON_PARTNER;
+    case MM_BEARER_ROAM_CONTROL_PARTNER_AND_NON_PARTNER:
+        return MBIM_CONTEXT_ROAMING_CONTROL_PARTNER_AND_NON_PARTNER;
+    case MM_BEARER_ROAM_CONTROL_ALLOW_ALL:
+        return MBIM_CONTEXT_ROAMING_CONTROL_ALLOW_ALL;
+    default:
+        break;
+    }
+
+    str = mm_bearer_roam_control_get_string (roaming);
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_UNSUPPORTED,
+                 "Setting roaming control as : '%s'",
+                 str);
+    return MBIM_CONTEXT_ROAMING_CONTROL_HOME_ONLY;
+}
+
+/*****************************************************************************/
+
+MMBearerMediaType
+mm_bearer_media_type_from_mbim_context_media_type (MbimContextMediaType media_type)
+{
+    switch (media_type) {
+    case MBIM_CONTEXT_MEDIA_TYPE_CELLULAR_ONLY:
+        return MM_BEARER_MEDIA_TYPE_CELLULAR_ONLY;
+    case MBIM_CONTEXT_MEDIA_TYPE_WIFI_ONLY:
+        return MM_BEARER_MEDIA_TYPE_WIFI_ONLY;
+    case MBIM_CONTEXT_MEDIA_TYPE_ALL:
+        return MM_BEARER_MEDIA_TYPE_ALL;
+    default:
+        return MM_BEARER_MEDIA_TYPE_CELLULAR_ONLY;
+    }
+}
+
+MbimContextMediaType
+mm_bearer_media_type_to_mbim_context_media_type (MMBearerMediaType media_type,
+                                                 GError         **error)
+{
+    const gchar *str;
+
+    switch (media_type) {
+    case MM_BEARER_MEDIA_TYPE_CELLULAR_ONLY:
+        return MBIM_CONTEXT_MEDIA_TYPE_CELLULAR_ONLY;
+    case MM_BEARER_MEDIA_TYPE_WIFI_ONLY:
+        return MBIM_CONTEXT_MEDIA_TYPE_WIFI_ONLY;
+    case MM_BEARER_MEDIA_TYPE_ALL:
+        return MBIM_CONTEXT_MEDIA_TYPE_ALL;
+    default:
+        break;
+    }
+
+    str = mm_bearer_media_type_get_string (media_type);
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_UNSUPPORTED,
+                 "Setting media-type as : '%s'",
+                 str);
+    return MBIM_CONTEXT_MEDIA_TYPE_CELLULAR_ONLY;
+}
+
+/*****************************************************************************/
+
+MMBearerSource
+mm_bearer_source_from_mbim_context_source (MbimContextSource source)
+{
+    switch (source) {
+    case MBIM_CONTEXT_SOURCE_ADMIN:
+        return MM_BEARER_SOURCE_ADMIN;
+    case MBIM_CONTEXT_SOURCE_USER:
+        return MM_BEARER_SOURCE_USER;
+    case MBIM_CONTEXT_SOURCE_OPERATOR:
+        return MM_BEARER_SOURCE_OPERATOR;
+    case MBIM_CONTEXT_SOURCE_MODEM:
+        return MM_BEARER_SOURCE_MODEM;
+    case MBIM_CONTEXT_SOURCE_DEVICE:
+        return MM_BEARER_SOURCE_DEVICE;
+    default:
+        return MM_BEARER_SOURCE_ADMIN;
+    }
+}
+
+MbimContextSource
+mm_bearer_source_to_mbim_context_source (MMBearerSource source,
+                                         GError       **error)
+{
+    const gchar *str;
+
+    switch (source) {
+    case MM_BEARER_SOURCE_ADMIN:
+        return MBIM_CONTEXT_SOURCE_ADMIN;
+    case MM_BEARER_SOURCE_USER:
+        return MBIM_CONTEXT_SOURCE_USER;
+    case MM_BEARER_SOURCE_OPERATOR:
+        return MBIM_CONTEXT_SOURCE_OPERATOR;
+    case MM_BEARER_SOURCE_MODEM:
+        return MBIM_CONTEXT_SOURCE_MODEM;
+    case MM_BEARER_SOURCE_DEVICE:
+        return MBIM_CONTEXT_SOURCE_DEVICE;
+    default:
+        break;
+    }
+
+    str = mm_bearer_source_get_string (source);
+    g_set_error (error,
+                 MM_CORE_ERROR,
+                 MM_CORE_ERROR_UNSUPPORTED,
+                 "Setting source as : '%s'",
+                 str);
+    return MBIM_CONTEXT_SOURCE_ADMIN;
+}
+
+/*****************************************************************************/
+
 MMSmsState
 mm_sms_state_from_mbim_message_status (MbimSmsStatus status)
 {
@@ -850,4 +1042,13 @@ mm_signal_from_mbim_signal_state (MbimDataClass          data_class,
     }
 
     return TRUE;
+}
+
+guint8
+mm_get_version (MbimDevice *device)
+{
+    guint8 major_version;
+
+    major_version = mbim_device_get_ms_mbimex_version(device, NULL);
+    return major_version;
 }
