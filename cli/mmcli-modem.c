@@ -402,6 +402,10 @@ print_modem_info (void)
         gchar       *initial_eps_bearer_ip_family_str = NULL;
         const gchar *initial_eps_bearer_user = NULL;
         const gchar *initial_eps_bearer_password = NULL;
+        MMMicoMode   mico_mode;
+        MMLadnInfo   ladn_info;
+        const gchar *mico_mode_str;
+        const gchar *ladn_info_str;
 
         if (ctx->modem_3gpp) {
             imei = mm_modem_3gpp_get_imei (ctx->modem_3gpp);
@@ -425,6 +429,9 @@ print_modem_info (void)
                 }
             }
         }
+        mm_modem_3gpp_get_5gnr_reg (ctx->modem_3gpp, &mico_mode, &ladn_info);
+        mico_mode_str = mm_mico_mode_get_string (mico_mode);
+        ladn_info_str = mm_ladn_info_get_string (ladn_info);
 
         mmcli_output_string      (MMC_F_3GPP_IMEI,          imei);
         mmcli_output_string_list (MMC_F_3GPP_ENABLED_LOCKS, facility_locks);
@@ -437,6 +444,8 @@ print_modem_info (void)
         mmcli_output_string_take (MMC_F_3GPP_EPS_BEARER_SETTINGS_IP_TYPE,  initial_eps_bearer_ip_family_str);
         mmcli_output_string      (MMC_F_3GPP_EPS_BEARER_SETTINGS_USER,     initial_eps_bearer_user);
         mmcli_output_string      (MMC_F_3GPP_EPS_BEARER_SETTINGS_PASSWORD, initial_eps_bearer_password);
+        mmcli_output_string      (MMC_F_3GPP_5GNR_MICO_MODE,   mico_mode_str);
+        mmcli_output_string      (MMC_F_3GPP_5GNR_LADN_INFO,   ladn_info_str);
         mmcli_output_pco_list    (pco_list);
 
         g_free (facility_locks);

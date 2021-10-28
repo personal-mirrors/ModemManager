@@ -45,6 +45,12 @@ typedef struct {
 } Context;
 static Context *ctx;
 
+typedef struct {
+    MMMicoMode mico_mode;
+    MMLadnInfo ladn_info;
+    GError    *error;
+} ParseKeyValueContext;
+
 /* Options */
 static gboolean  scan_flag;
 static gboolean  register_home_flag;
@@ -52,6 +58,7 @@ static gchar    *register_in_operator_str;
 static gchar    *set_eps_ue_mode_operation_str;
 static gchar    *set_initial_eps_bearer_settings_str;
 static gchar    *disable_facility_lock_str;
+static gchar    *set_5gnr_registration_settings_str;
 
 static GOptionEntry entries[] = {
     { "3gpp-scan", 0, 0, G_OPTION_ARG_NONE, &scan_flag,
@@ -78,6 +85,11 @@ static GOptionEntry entries[] = {
       "Disable facility personalization",
       "[facility,key]"
     },
+    { "3gpp-set-5gnr-registration-settings", 0, 0, G_OPTION_ARG_STRING, &set_5gnr_registration_settings_str,
+      "Set 5gnr registration settings",
+      "[\"key=value,...\"]"
+    },
+
     { NULL }
 };
 
@@ -110,6 +122,7 @@ mmcli_modem_3gpp_options_enabled (void)
                  !!register_in_operator_str +
                  !!set_eps_ue_mode_operation_str +
                  !!set_initial_eps_bearer_settings_str +
+                 !!set_5gnr_registration_settings_str +
                  !!disable_facility_lock_str);
 
     if (n_actions > 1) {
@@ -253,6 +266,33 @@ set_initial_eps_bearer_settings_ready (MMModem3gpp  *modem,
 }
 
 static void
+set_5gnr_registration_settings_process_reply (gboolean      result,
+                                              const GError *error)
+{
+    if (!result) {
+        g_printerr ("error: couldn't set 5gnr_registration_setting: '%s'\n",
+                    error ? error->message : "unknown error");
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("Successfully set 5gnr registration setting\n");
+
+}
+
+static void
+set_set_5gnr_registration_settings_ready (MMModem3gpp  *modem,
+                                          GAsyncResult *res)
+{
+    gboolean result;
+    GError   *error = NULL;
+
+    result = mm_modem_3gpp_se_5gnr_registration_settings_finish (modem, res, &error);
+    set_5gnr_registration_settings_process_reply (result, error);
+
+    mmcli_async_operation_done ();
+}
+
+static void
 set_eps_ue_mode_operation_process_reply (gboolean      result,
                                          const GError *error)
 {
@@ -338,6 +378,68 @@ disable_facility_lock_ready (MMModem3gpp  *modem_3gpp,
     disable_facility_lock_process_reply (operation_result, error);
 
     mmcli_async_operation_done ();
+}
+
+static gboolean
+key_value_foreach (const gchar          *key,
+                   const gchar          *value,
+                   ParseKeyValueContext *parse_ctx)
+{
+
+    if (g_str_equal (key, "mico_mode")) {
+     
+       if (!mm_get_uint_from_str (value, &parse_ctx->mico_mode)) {
+           g_set_error (&parse_ctx->error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                        "invalid mico mode value given: %s", value);
+           return FALSE;
+
+       }
+    }
+    else if (g_str_equal (key, "ladn_info")) {
+       if (!mm_get_uint_from_str (value, &parse_ctx->ladn_info)) {
+            g_set_error (&parse_ctx->error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                         "invalid ladn info value given: %s", value);
+            return FALSE;
+       }
+    } else {
+        g_set_error (&parse_ctx->error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_UNSUPPORTED,
+                     "Invalid properties string, unsupported key '%s'",
+                     key);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static GVariant *
+mm_get_set_5gnr_registration_setting_from_str (const gchar *str)
+{
+    ParseKeyValueContext parse_ctx;
+    GVariantBuilder      builder;
+    parse_ctx.error    = NULL;
+
+    mm_common_parse_key_value_string (str,
+                                     &parse_ctx.error,
+                                     (MMParseKeyValueForeachFn)key_value_foreach,
+                                     &parse_ctx);
+    /* If error, destroy the object */
+    if (parse_ctx.error) {
+	    return NULL;
+    }
+
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{sv}"));
+
+    g_variant_builder_add (&builder,
+                          "{sv}",
+                          "mico_mode",
+                           g_variant_new_uint32 (parse_ctx.mico_mode));
+
+    g_variant_builder_add (&builder,
+                          "{sv}",
+                          "ladn_info",
+                          g_variant_new_uint32 (parse_ctx.ladn_info));
+    return g_variant_ref_sink (g_variant_builder_end (&builder));
 }
 
 static void
@@ -432,9 +534,27 @@ get_modem_ready (GObject      *source,
                                                        NULL);
         g_object_unref (config);
         return;
-
     }
 
+    /* Request to set  5Gnr registration params? */
+    if( set_5gnr_registration_settings_str){
+        GVariant    *reg_config;
+
+        reg_config = mm_get_set_5gnr_registration_setting_from_str (set_5gnr_registration_settings_str);
+
+        if (!reg_config) {
+            g_printerr ("Error parsing 5G nr registration parms\n");
+            exit (EXIT_FAILURE);
+        }
+        g_debug ("Asynchronously setting initial set5Gnr Registartion Setting....");
+        mm_modem_3gpp_set_5gnr_registration_settings (ctx->modem_3gpp,
+                                                      reg_config,
+                                                      ctx->cancellable,
+                                                     (GAsyncReadyCallback)set_set_5gnr_registration_settings_ready,
+                                                      NULL);
+        g_variant_unref (reg_config);
+        return;
+    }
     g_warn_if_reached ();
 }
 
@@ -549,6 +669,28 @@ mmcli_modem_3gpp_run_synchronous (GDBusConnection *connection)
                                                                      &error);
         set_initial_eps_bearer_settings_process_reply (result, error);
         g_object_unref (config);
+        return;
+    }
+
+    /* Request to set 5gnr registrration settings */
+    if (set_5gnr_registration_settings_str){
+        gboolean  result;
+        GVariant *reg_config;
+
+        reg_config = mm_get_set_5gnr_registration_setting_from_str (set_5gnr_registration_settings_str);
+
+        if (!reg_config) {
+            g_printerr ("Error parsing properties string: '%s'\n", error->message);
+            exit (EXIT_FAILURE);
+        }
+
+        g_debug ("Synchronously set 5gnr registration settings...");
+        result = mm_modem_3gpp_set_5gnr_registration_settings_sync (ctx->modem_3gpp,
+                                                                    reg_config,
+                                                                    NULL,
+                                                                   &error);
+        set_5gnr_registration_settings_process_reply (result, error);
+        g_variant_unref (reg_config);
         return;
     }
 

@@ -23,6 +23,7 @@
 #include <libmm-glib.h>
 
 #include <libmbim-glib.h>
+#include "mm-modem-helpers.h"
 
 /*****************************************************************************/
 /* MBIM/BasicConnect to MM translations */
@@ -105,5 +106,22 @@ gboolean mm_signal_from_mbim_signal_state (MbimDataClass          data_class,
                                            MMSignal             **out_umts,
                                            MMSignal             **out_lte,
                                            MMSignal             **out_nr5g);
+/* 5Gnr translations */
+MMMicoMode mm_mico_mode_from_mbim_type              (MbimMicoMode  caps,
+                                                     GError      **error);
+MMLadnInfo mm_ladn_ind_from_mbim_type               (MbimLadnInfo  caps,
+                                                     GError      **error);
+MMSetRegParamsInfo *mm_get_reg_params_from_mbim_rsp (MbimMicoMode  mico_mode,
+                                                     MbimLadnInfo  ladn_info);
+MbimMicoMode mm_mico_mode_to_mbim_mico_mode         (MMMicoMode    mico_mode,
+                                                     GError      **error);
+MbimLadnInfo mm_ladn_info_to_mbim_ladn_info         (MMLadnInfo    ladn_info,
+                                                     GError      **error);
+
+#define MBIM_V1 (1) /* Decimal value of Mbim Version 1 in little-endian constant 0x0100 0100*/
+#define MBIM_V2 (2) /* Decimal value of Mbim Version 2 in little-endian constant 0x0200 0100 */
+#define MBIM_V3 (3) /* Decimal value of Mbim Version 3 in little-endian constant 0x0300 0100 */
+
+guint8 mm_get_version (MbimDevice *device);
 
 #endif  /* MM_MODEM_HELPERS_MBIM_H */

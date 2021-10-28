@@ -2825,6 +2825,211 @@ load_imei_ready (MMIfaceModem3gpp *self,
     ctx->step++;
     interface_initialization_step (task);
 }
+/*****************************************************************************/
+/* Set 5G Registration State */
+
+typedef struct {
+    MMIfaceModem3gpp       *self;
+    MmGdbusModem3gpp       *skeleton;
+    GDBusMethodInvocation  *invocation;
+    GVariant               *setregparamsReqDict;
+    MMSetRegParamsInfo     *setregparamsReq;
+} HandleSetRegParamsContext;
+
+static void
+handle_set_5gnr_registration_settings_context_free (HandleSetRegParamsContext *ctx)
+{
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->skeleton);
+    g_object_unref (ctx->self);
+    g_variant_unref (ctx->setregparamsReqDict);
+    g_free (ctx->setregparamsReq);
+    g_slice_free ( HandleSetRegParamsContext,ctx);
+}
+
+static GVariant *
+reg_params_rsp_list_build_result (MMSetRegParamsInfo *set_reg_params_rsp_info)
+{
+    GVariantBuilder builder;
+
+    if(!set_reg_params_rsp_info)
+    {
+        return NULL;
+    }
+    g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{sv}"));
+
+    g_variant_builder_add (&builder, "{sv}",
+                           "mico_mode", g_variant_new_uint32 (set_reg_params_rsp_info->mico_mode));
+
+    g_variant_builder_add (&builder, "{sv}",
+                           "ladn_info", g_variant_new_uint32 (set_reg_params_rsp_info->ladn_info));
+
+    return g_variant_ref_sink (g_variant_builder_end (&builder));
+}
+
+static MMSetRegParamsInfo*
+handle_set_reg_params_new_from_dict (GVariant *dictionary,
+                                     GError  **error)
+{
+    GError              *inner_error = NULL;
+    GVariantIter         iter;
+    gchar               *key;
+    GVariant            *value;
+    MMSetRegParamsInfo  *reg_params_req =  g_new0 (MMSetRegParamsInfo, 1);
+
+    if (!reg_params_req)
+        return NULL;
+
+    if (!g_variant_is_of_type (dictionary, G_VARIANT_TYPE ("a{sv}"))) {
+        g_set_error (error,
+                     MM_CORE_ERROR,
+                     MM_CORE_ERROR_INVALID_ARGS,
+                     "Cannot create Registration params Request from dictionary: "
+                     "invalid variant type received");
+        g_free (reg_params_req);
+        return NULL;
+    }
+
+    g_variant_iter_init (&iter, dictionary);
+    while ( !inner_error && g_variant_iter_next (&iter, "{sv}", &key, &value))
+    {
+        if (g_str_equal (key, "mico_mode"))
+            reg_params_req->mico_mode = (MMMicoMode)g_variant_get_uint32 (value);
+        else if (g_str_equal (key, "ladn_info"))
+            reg_params_req->ladn_info = (MMLadnInfo)g_variant_get_uint32 (value);
+        else
+        {
+            /* Set inner error, will stop the loop */
+            inner_error = g_error_new (MM_CORE_ERROR,
+                                       MM_CORE_ERROR_INVALID_ARGS,
+                                       "Invalid Regitration params dictionary, unexpected key '%s'",
+                                       key);
+        }
+
+        g_free (key);
+        g_variant_unref (value);
+    }
+    /* If error, destroy the object */
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        g_free (reg_params_req);
+        reg_params_req = NULL;
+    }
+    return reg_params_req;
+}
+
+static void
+handle_set_5gnr_registration_settings_info_ready (MMIfaceModem3gpp         *self,
+                                                  GAsyncResult             *res,
+                                                 HandleSetRegParamsContext *ctx)
+{
+    GError             *error = NULL;
+    MMSetRegParamsInfo *set_reg_params_info;
+
+    set_reg_params_info = MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->set_5gnr_registration_settings_finish (self, res, &error);
+
+    if (error || !set_reg_params_info)
+    {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        mm_obj_dbg (self," %s Error in retreiving response parameters",__func__);
+    }
+    else
+    {
+        GVariant *dict_array;
+
+        dict_array = reg_params_rsp_list_build_result (set_reg_params_info);
+        mm_gdbus_modem3gpp_set_intial5g_nr_settings (ctx->skeleton, dict_array);
+        mm_gdbus_modem3gpp_complete_set5g_nr_registration_settings (ctx->skeleton, ctx->invocation);
+        g_variant_unref (dict_array);
+    }
+    handle_set_5gnr_registration_settings_context_free (ctx);
+}
+
+static void
+handle_set_5gnr_registration_settings_auth_ready (MMBaseModem                *self,
+                                                  GAsyncResult               *res,
+                                                  HandleSetRegParamsContext  *ctx)
+{
+    GError              *error = NULL;
+    GVariant            *old_dictionary;
+    MMSetRegParamsInfo  *old_config=NULL;
+
+    if (!mm_base_modem_authorize_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_set_5gnr_registration_settings_context_free (ctx);
+
+        mm_obj_dbg (self, ": %s Modem Authorize failure",__func__);
+        return;
+    }
+
+    if (!MM_IFACE_MODEM_3GPP_GET_INTERFACE (ctx->self)->set_5gnr_registration_settings ||
+        !MM_IFACE_MODEM_3GPP_GET_INTERFACE (ctx->self)->set_5gnr_registration_settings_finish) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot set registartion params : "
+                                               "operation not supported");
+        handle_set_5gnr_registration_settings_context_free (ctx);
+        mm_obj_dbg (self," %s Handler function not implemented",__func__);
+        return;
+    }
+
+    ctx->setregparamsReq = handle_set_reg_params_new_from_dict (ctx->setregparamsReqDict, &error);
+    if (error || !ctx->setregparamsReq) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_set_5gnr_registration_settings_context_free (ctx);
+        mm_obj_dbg (self," %s Obtaining Register Params Req from Dictionary failed",__func__);
+        return;
+    }
+    old_dictionary   = mm_gdbus_modem3gpp_get_intial5g_nr_settings (ctx->skeleton);
+
+    if (old_dictionary)
+        old_config = handle_set_reg_params_new_from_dict (old_dictionary, NULL);
+    if (!old_config) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_INVALID_ARGS,
+                                               "Cannot retrive preset registartion params : "
+                                               "operation failed");
+    return;
+    }
+    if (old_config->mico_mode == ctx->setregparamsReq->mico_mode &&
+        old_config->ladn_info == ctx->setregparamsReq->ladn_info){
+        mm_obj_dbg (self, "Skipping Set5gNrRegistrationSettings configuration. Same configuration provided");
+        mm_gdbus_modem3gpp_complete_set5g_nr_registration_settings (ctx->skeleton,
+                                                                    ctx->invocation);
+        handle_set_5gnr_registration_settings_context_free (ctx);
+    }
+    else {
+
+       MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->set_5gnr_registration_settings (ctx->self,
+                                          ctx->setregparamsReq,
+                                         (GAsyncReadyCallback)handle_set_5gnr_registration_settings_info_ready,
+                                          ctx);
+    }
+}
+
+static gboolean
+handle_set_5gnr_registration_settings (MmGdbusModem3gpp       *skeleton,
+                                       GDBusMethodInvocation  *invocation,
+                                       GVariant               *setRegparamsReqDict,
+                                       MMIfaceModem3gpp       *self)
+{
+    HandleSetRegParamsContext *ctx;
+
+    ctx = g_slice_new (HandleSetRegParamsContext);
+    ctx->skeleton = g_object_ref (skeleton);
+    ctx->invocation = g_object_ref (invocation);
+    ctx->self = g_object_ref (self);
+    ctx->setregparamsReqDict = g_variant_ref (setRegparamsReqDict);
+
+    mm_base_modem_authorize (MM_BASE_MODEM (self),
+                             invocation,
+                             MM_AUTHORIZATION_DEVICE_CONTROL,
+                             (GAsyncReadyCallback)handle_set_5gnr_registration_settings_auth_ready,
+                             ctx);
+    return TRUE;
+}
 
 static void
 interface_initialization_step (GTask *task)
@@ -2942,6 +3147,10 @@ interface_initialization_step (GTask *task)
         g_signal_connect (ctx->skeleton,
                           "handle-disable-facility-lock",
                           G_CALLBACK (handle_disable_facility_lock),
+                          self);
+        g_signal_connect (ctx->skeleton,
+                          "handle-set5g-nr-registration-settings",
+                          G_CALLBACK (handle_set_5gnr_registration_settings),
                           self);
 
         /* Finally, export the new interface */

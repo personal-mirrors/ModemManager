@@ -125,6 +125,22 @@
     </method>
 
     <!--
+        Set5gNrRegistrationSettings:
+        @properties: List of properties to use when requesting the 5G attach procedure.
+
+        Updates the default settings to be used in the initial default bearer when registering to the 5G network.
+
+        The allowed properties in this method are all the ones specified in the
+        <link linkend="gdbus-property-org-freedesktop-ModemManager1-Modem-Modem3gpp.Intial5gNrSettings"> Intial5gNrSettings</link>;
+        i.e.: <literal>"mico-mode"</literal> and <literal>"ladn-info"</literal>.
+
+        Since: 1.19
+    -->
+    <method name="Set5gNrRegistrationSettings">
+      <arg name="properties" type="a{sv}" direction="in" />
+    </method>
+
+    <!--
         Imei:
 
         The <ulink url="http://en.wikipedia.org/wiki/Imei">IMEI</ulink> of the device.
@@ -294,6 +310,42 @@
         Since: 1.10
     -->
     <property name="InitialEpsBearerSettings" type="a{sv}" access="read" />
+
+    <!--
+        Intial5gNrSettings:
+
+        List of properties requested by the device for the initial EPS bearer during
+        5G network attach procedure.
+
+        This is a read-only property, updating these settings should be done using the
+        <link linkend="gdbus-method-org-freedesktop-ModemManager1-Modem-Modem3gpp.Set5gNrRegistrationSettings">Set5gNrRegistrationSettings()</link>
+        method.
+
+        <variablelist>
+        <varlistentry><term>"mico-mode"</term>
+          <listitem>
+            <para>
+              A value representing Mobile Initiated Connection mode
+              requested by the host, given as a
+              <link linkend="MMMicoMode">MMMicoMode</link> value.
+              Since 1.19.
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"ladn-info"</term>
+          <listitem>
+            <para>
+              A value representing the LADN information requested
+              by the host, given as a
+              <link linkend="MMLadnInd">MMLadnInd</link> value.
+              Since 1.19.
+            </para>
+          </listitem>
+        </varlistentry>
+        </variablelist>
+        Since: 1.19
+    -->
+    <property name="Intial5gNrSettings" type="a{sv}" access="read" />
 
   </interface>
 </node>
