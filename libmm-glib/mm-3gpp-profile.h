@@ -32,7 +32,11 @@ G_BEGIN_DECLS
  * creates a new #MM3gppProfile, to indicate that the real profile id should
  * be assigned by the device.
  */
-#define MM_3GPP_PROFILE_ID_UNKNOWN -1
+#define MM_3GPP_PROFILE_ID_UNKNOWN              -1
+#define MM_3GPP_PROFILE_ENABLED_UNKNOWN         -1
+#define MM_3GPP_PROFILE_ROAMING_CONTROL_UNKNOWN -1
+#define MM_3GPP_PROFILE_MEDIA_TYPE_UNKNOWN      -1
+#define MM_3GPP_PROFILE_SOURCE_UNKNOWN          -1
 
 #define MM_TYPE_3GPP_PROFILE            (mm_3gpp_profile_get_type ())
 #define MM_3GPP_PROFILE(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_3GPP_PROFILE, MM3gppProfile))
@@ -67,31 +71,43 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (MM3gppProfile, g_object_unref)
 
 MM3gppProfile *mm_3gpp_profile_new (void);
 
-void mm_3gpp_profile_set_profile_id   (MM3gppProfile       *self,
-                                       gint                 profile_id);
-void mm_3gpp_profile_set_profile_name (MM3gppProfile       *self,
-                                       const gchar         *profile_name);
-void mm_3gpp_profile_set_apn          (MM3gppProfile       *self,
-                                       const gchar         *apn);
-void mm_3gpp_profile_set_allowed_auth (MM3gppProfile       *self,
-                                       MMBearerAllowedAuth  allowed_auth);
-void mm_3gpp_profile_set_user         (MM3gppProfile       *self,
-                                       const gchar         *user);
-void mm_3gpp_profile_set_password     (MM3gppProfile       *self,
-                                       const gchar         *password);
-void mm_3gpp_profile_set_ip_type      (MM3gppProfile       *self,
-                                       MMBearerIpFamily     ip_type);
-void mm_3gpp_profile_set_apn_type     (MM3gppProfile       *self,
-                                       MMBearerApnType      apn_type);
+void mm_3gpp_profile_set_profile_id        (MM3gppProfile       *self,
+                                            gint                 profile_id);
+void mm_3gpp_profile_set_profile_name      (MM3gppProfile       *self,
+                                            const gchar         *profile_name);
+void mm_3gpp_profile_set_apn               (MM3gppProfile       *self,
+                                            const gchar         *apn);
+void mm_3gpp_profile_set_allowed_auth      (MM3gppProfile       *self,
+                                            MMBearerAllowedAuth  allowed_auth);
+void mm_3gpp_profile_set_user              (MM3gppProfile       *self,
+                                            const gchar         *user);
+void mm_3gpp_profile_set_password          (MM3gppProfile       *self,
+                                            const gchar         *password);
+void mm_3gpp_profile_set_ip_type           (MM3gppProfile       *self,
+                                            MMBearerIpFamily     ip_type);
+void mm_3gpp_profile_set_apn_type          (MM3gppProfile       *self,
+                                            MMBearerApnType      apn_type);
+void mm_3gpp_profile_set_enabled           (MM3gppProfile       *self,
+                                            MMBearerState        enabled);
+void mm_3gpp_profile_set_roaming_control   (MM3gppProfile       *self,
+                                            MMBearerRoamControl  roaming_control);
+void mm_3gpp_profile_set_media_type        (MM3gppProfile       *self,
+                                            MMBearerMediaType    media_type);
+void mm_3gpp_profile_set_source            (MM3gppProfile       *self,
+                                            MMBearerSource       source);
 
-gint                 mm_3gpp_profile_get_profile_id   (MM3gppProfile *self);
-const gchar         *mm_3gpp_profile_get_profile_name (MM3gppProfile *self);
-const gchar         *mm_3gpp_profile_get_apn          (MM3gppProfile *self);
-MMBearerAllowedAuth  mm_3gpp_profile_get_allowed_auth (MM3gppProfile *self);
-const gchar         *mm_3gpp_profile_get_user         (MM3gppProfile *self);
-const gchar         *mm_3gpp_profile_get_password     (MM3gppProfile *self);
-MMBearerIpFamily     mm_3gpp_profile_get_ip_type      (MM3gppProfile *self);
-MMBearerApnType      mm_3gpp_profile_get_apn_type     (MM3gppProfile *self);
+gint                 mm_3gpp_profile_get_profile_id        (MM3gppProfile *self);
+const gchar         *mm_3gpp_profile_get_profile_name      (MM3gppProfile *self);
+const gchar         *mm_3gpp_profile_get_apn               (MM3gppProfile *self);
+MMBearerAllowedAuth  mm_3gpp_profile_get_allowed_auth      (MM3gppProfile *self);
+const gchar         *mm_3gpp_profile_get_user              (MM3gppProfile *self);
+const gchar         *mm_3gpp_profile_get_password          (MM3gppProfile *self);
+MMBearerIpFamily     mm_3gpp_profile_get_ip_type           (MM3gppProfile *self);
+MMBearerApnType      mm_3gpp_profile_get_apn_type          (MM3gppProfile *self);
+MMBearerState        mm_3gpp_profile_get_enabled           (MM3gppProfile *self);
+MMBearerRoamControl  mm_3gpp_profile_get_roaming_control   (MM3gppProfile *self);
+MMBearerMediaType    mm_3gpp_profile_get_media_type        (MM3gppProfile *self);
+MMBearerSource       mm_3gpp_profile_get_source            (MM3gppProfile *self);
 
 /*****************************************************************************/
 /* ModemManager/libmm-glib/mmcli specific methods */

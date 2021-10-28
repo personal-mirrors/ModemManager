@@ -5723,6 +5723,31 @@ provisioned_context_element_to_3gpp_profile (MbimProvisionedContextElement *elem
     return profile;
 }
 
+static MM3gppProfile *
+provisioned_context_element_to_3gpp_profile_v2 (MbimProvisionedContextElementV2 *element)
+{
+    MM3gppProfile   *profile;
+    MMBearerApnType  apn_type;
+
+    apn_type = mm_bearer_apn_type_from_mbim_context_type (mbim_uuid_to_context_type (&element->context_type));
+    if (apn_type == MM_BEARER_APN_TYPE_NONE)
+        return NULL;
+
+    profile = mm_3gpp_profile_new ();
+    mm_3gpp_profile_set_profile_id        (profile, element->context_id);
+    mm_3gpp_profile_set_apn               (profile, element->access_string);
+    mm_3gpp_profile_set_apn_type          (profile, apn_type);
+    mm_3gpp_profile_set_user              (profile, element->user_name);
+    mm_3gpp_profile_set_password          (profile, element->password);
+    mm_3gpp_profile_set_allowed_auth      (profile, (mm_bearer_allowed_auth_from_mbim_auth_protocol (element->auth_protocol)));
+    mm_3gpp_profile_set_enabled           (profile, mm_bearer_state_from_mbim_context_state (element->state));
+    mm_3gpp_profile_set_roaming_control   (profile, mm_bearer_roam_control_from_mbim_context_roaming_control (element->roaming));
+    mm_3gpp_profile_set_media_type        (profile, mm_bearer_media_type_from_mbim_context_media_type (element->media_type));
+    mm_3gpp_profile_set_source            (profile, mm_bearer_source_from_mbim_context_source (element->source)) ;
+    /* compression unused, and ip-type not provided */
+    return profile;
+}
+
 static void
 profile_manager_provisioned_contexts_query_ready (MbimDevice   *device,
                                                   GAsyncResult *res,
@@ -5733,6 +5758,7 @@ profile_manager_provisioned_contexts_query_ready (MbimDevice   *device,
     guint32                 provisioned_contexts_count = 0;
     g_autoptr(MbimMessage)  response = NULL;
     g_autoptr(MbimProvisionedContextElementArray) provisioned_contexts = NULL;
+    g_autoptr(MbimProvisionedContextElementV2Array) provisioned_contexts_v2 = NULL;
 
     ctx = g_slice_new0 (ListProfilesContext);
     g_task_set_task_data (task, ctx, (GDestroyNotify) list_profiles_context_free);
@@ -5741,21 +5767,38 @@ profile_manager_provisioned_contexts_query_ready (MbimDevice   *device,
     if (response &&
         mbim_message_response_get_result (response,
                                           MBIM_MESSAGE_TYPE_COMMAND_DONE,
-                                          &error) &&
-        mbim_message_provisioned_contexts_response_parse (response,
-                                                          &provisioned_contexts_count,
-                                                          &provisioned_contexts,
-                                                          &error)) {
-        guint i;
+                                          &error)) {
+        if (MBIM_V2 == mm_get_version(device) &&
+            mbim_message_ms_basic_connect_extensions_provisioned_contexts_response_parse (response,
+                                                                                          &provisioned_contexts_count,
+                                                                                          &provisioned_contexts_v2,
+                                                                                          &error)) {
+            guint i;
 
-        for (i = 0; i < provisioned_contexts_count; i++) {
-            MM3gppProfile *profile;
+            for (i = 0; i < provisioned_contexts_count; i++) {
+                MM3gppProfile *profile;
 
-            profile = provisioned_context_element_to_3gpp_profile (provisioned_contexts[i]);
-            if (profile)
-                ctx->profiles = g_list_append (ctx->profiles, profile);
+                profile = provisioned_context_element_to_3gpp_profile_v2 (provisioned_contexts_v2[i]);
+                if (profile)
+                    ctx->profiles = g_list_append (ctx->profiles, profile);
+            }
+            g_task_return_boolean (task, TRUE);
         }
-        g_task_return_boolean (task, TRUE);
+        else if (mbim_message_provisioned_contexts_response_parse (response,
+                                                                   &provisioned_contexts_count,
+                                                                   &provisioned_contexts,
+                                                                   &error)) {
+            guint i;
+
+            for (i = 0; i < provisioned_contexts_count; i++) {
+                MM3gppProfile *profile;
+
+                profile = provisioned_context_element_to_3gpp_profile (provisioned_contexts[i]);
+                if (profile)
+                    ctx->profiles = g_list_append (ctx->profiles, profile);
+            }
+            g_task_return_boolean (task, TRUE);
+        }
     } else
         g_task_return_error (task, error);
     g_object_unref (task);
@@ -5776,7 +5819,10 @@ modem_3gpp_profile_manager_list_profiles (MMIfaceModem3gppProfileManager  *self,
     task = g_task_new (self, NULL, callback, user_data);
 
     mm_obj_dbg (self, "querying provisioned contexts...");
-    message = mbim_message_provisioned_contexts_query_new (NULL);
+    if (MBIM_V2 == mm_get_version(device))
+        message = mbim_message_ms_basic_connect_extensions_provisioned_contexts_query_new (NULL);
+    else
+        message = mbim_message_provisioned_contexts_query_new (NULL);
 
     mbim_device_command (device,
                          message,
@@ -5822,20 +5868,25 @@ modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager *self,
                                           GAsyncReadyCallback             callback,
                                           gpointer                        user_data)
 {
-    MbimDevice             *device;
-    GTask                  *task;
-    GError                 *error = NULL;
-    gint                    profile_id;
-    MMBearerApnType         apn_type;
-    MMBearerAllowedAuth     allowed_auth;
-    MbimAuthProtocol        auth_protocol = MBIM_AUTH_PROTOCOL_NONE;
-    MbimContextType         context_type;
-    const MbimUuid         *context_type_uuid;
-    const gchar            *apn;
-    const gchar            *user;
-    const gchar            *password;
-    g_autofree gchar       *apn_type_str = NULL;
-    g_autoptr(MbimMessage)  message = NULL;
+    MbimDevice               *device;
+    GTask                    *task;
+    GError                   *error = NULL;
+    gint                      profile_id;
+    MMBearerApnType           apn_type;
+    MMBearerAllowedAuth       allowed_auth;
+    MbimAuthProtocol          auth_protocol = MBIM_AUTH_PROTOCOL_NONE;
+    MbimContextType           context_type;
+    MbimContextIpType         ip_type;
+    MbimContextState          state;
+    MbimContextRoamingControl roaming;
+    MbimContextMediaType      media_type;
+    MbimContextSource         source;
+    const MbimUuid           *context_type_uuid;
+    const gchar              *apn;
+    const gchar              *user;
+    const gchar              *password;
+    g_autofree gchar         *apn_type_str = NULL;
+    g_autoptr(MbimMessage)    message = NULL;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
@@ -5872,18 +5923,39 @@ modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager *self,
         }
     }
 
+    ip_type    = mm_bearer_ip_family_to_mbim_context_ip_type (mm_3gpp_profile_get_ip_type (profile), &error);
+    state      = mm_bearer_state_to_mbim_context_state (mm_3gpp_profile_get_enabled (profile), &error);
+    roaming    = mm_bearer_roam_control_to_mbim_context_roaming_control (mm_3gpp_profile_get_roaming_control (profile), &error);
+    media_type = mm_bearer_media_type_to_mbim_context_media_type (mm_3gpp_profile_get_media_type (profile), &error);
+    source     = mm_bearer_source_to_mbim_context_source (mm_3gpp_profile_get_source (profile), &error);
+
     mm_obj_dbg (self, "storing profile '%d': apn '%s', apn type '%s'",
                 profile_id, apn, apn_type_str);
 
-    message = mbim_message_provisioned_contexts_set_new (profile_id,
-                                                         context_type_uuid,
-                                                         apn ? apn : "",
-                                                         user ? user : "",
-                                                         password ? password : "",
-                                                         MBIM_COMPRESSION_NONE,
-                                                         auth_protocol,
-                                                         "", /* provider id */
-                                                         &error);
+    if (MBIM_V2 == mm_get_version(device))
+        message = mbim_message_ms_basic_connect_extensions_provisioned_contexts_set_new (MBIM_CONTEXT_OPERATION_DEFAULT,
+                                                                                         context_type_uuid,
+                                                                                         ip_type,
+                                                                                         state,
+                                                                                         roaming,
+                                                                                         media_type,
+                                                                                         source,
+                                                                                         apn ? apn : "",
+                                                                                         user ? user : "",
+                                                                                         password ? password : "",
+                                                                                         MBIM_COMPRESSION_NONE,
+                                                                                         auth_protocol,
+                                                                                         &error);
+    else
+        message = mbim_message_provisioned_contexts_set_new (profile_id,
+                                                             context_type_uuid,
+                                                             apn ? apn : "",
+                                                             user ? user : "",
+                                                             password ? password : "",
+                                                             MBIM_COMPRESSION_NONE,
+                                                             auth_protocol,
+                                                             "", /* provider id */
+                                                             &error);
     if (error) {
         g_task_return_error (task, error);
         g_object_unref (task);
@@ -5947,15 +6019,30 @@ modem_3gpp_profile_manager_delete_profile (MMIfaceModem3gppProfileManager *self,
 
     mm_obj_dbg (self, "deleting profile '%d'", profile_id);
 
-    message = mbim_message_provisioned_contexts_set_new (profile_id,
-                                                         mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_NONE),
-                                                         "", /* access string */
-                                                         "", /* user */
-                                                         "", /* pass */
-                                                         MBIM_COMPRESSION_NONE,
-                                                         MBIM_AUTH_PROTOCOL_NONE,
-                                                         "", /* provider id */
-                                                         &error);
+    if (MBIM_V2 == mm_get_version(device))
+        message = mbim_message_ms_basic_connect_extensions_provisioned_contexts_set_new (MBIM_CONTEXT_OPERATION_DELETE,
+                                                                                         mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_NONE),
+                                                                                         MBIM_CONTEXT_IP_TYPE_DEFAULT,
+                                                                                         MBIM_CONTEXT_STATE_DISABLED,
+                                                                                         MBIM_CONTEXT_ROAMING_CONTROL_HOME_ONLY,
+                                                                                         MBIM_CONTEXT_MEDIA_TYPE_CELLULAR_ONLY,
+                                                                                         MBIM_CONTEXT_SOURCE_ADMIN,
+                                                                                         "",
+                                                                                         "",
+                                                                                         "",
+                                                                                         MBIM_COMPRESSION_NONE,
+                                                                                         MBIM_AUTH_PROTOCOL_NONE,
+                                                                                         &error);
+    else
+        message = mbim_message_provisioned_contexts_set_new (profile_id,
+                                                             mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_NONE),
+                                                             "", /* access string */
+                                                             "", /* user */
+                                                             "", /* pass */
+                                                             MBIM_COMPRESSION_NONE,
+                                                             MBIM_AUTH_PROTOCOL_NONE,
+                                                             "", /* provider id */
+                                                             &error);
     if (error) {
         g_task_return_error (task, error);
         g_object_unref (task);

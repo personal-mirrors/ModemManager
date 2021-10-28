@@ -24,6 +24,7 @@
 #include "mm-enums-types.h"
 #include "mm-errors-types.h"
 #include "mm-common-helpers.h"
+#include "mm-3gpp-profile.h"
 
 #if (!GLIB_CHECK_VERSION (2, 58, 0))
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GEnumClass, g_type_class_unref)
@@ -657,6 +658,46 @@ mm_common_get_apn_type_from_string (const gchar  *str,
                                str,
                                MM_BEARER_APN_TYPE_NONE,
                                error);
+}
+
+MMBearerState
+mm_common_get_enabled_from_string (const gchar  *str,
+                                   GError      **error)
+{
+    return _enum_from_string (MM_TYPE_BEARER_STATE,
+                              str,
+                              MM_3GPP_PROFILE_ENABLED_UNKNOWN,
+                              error);
+}
+
+MMBearerRoamControl
+mm_common_get_roaming_control_from_string (const gchar  *str,
+                                             GError      **error)
+{
+    return _enum_from_string (MM_TYPE_BEARER_ROAM_CONTROL,
+                              str,
+                              MM_3GPP_PROFILE_ROAMING_CONTROL_UNKNOWN,
+                              error);
+}
+
+MMBearerMediaType
+mm_common_get_media_type_from_string (const gchar  *str,
+                                      GError      **error)
+{
+    return _enum_from_string (MM_TYPE_BEARER_MEDIA_TYPE,
+                              str,
+                              MM_3GPP_PROFILE_MEDIA_TYPE_UNKNOWN,
+                              error);
+}
+
+MMBearerSource
+mm_common_get_source_from_string (const gchar  *str,
+                                  GError      **error)
+{
+    return _enum_from_string (MM_TYPE_BEARER_SOURCE,
+                              str,
+                              MM_3GPP_PROFILE_SOURCE_UNKNOWN,
+                              error);
 }
 
 MMModem3gppFacility

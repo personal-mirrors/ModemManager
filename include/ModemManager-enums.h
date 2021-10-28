@@ -1601,4 +1601,79 @@ typedef enum { /*< underscore_name=mm_bearer_apn_type >*/
     MM_BEARER_APN_TYPE_PRIVATE    = 1 << 7,
 } MMBearerApnType;
 
+/**
+ * MMBearerState:
+ * @MM_BEARER_STATE_DISABLED: Disabled.
+ * @MM_BEARER_STATE_ENABLED: Enabled.
+ *
+ * Status of the context, specifying whether it's enabled or disabled.
+ *
+ * Since: 1.28
+ */
+typedef enum { /*< underscore_name=mm_bearer_state >*/
+    MM_BEARER_STATE_DISABLED =  0,
+    MM_BEARER_STATE_ENABLED  =  1,
+} MMBearerState;
+
+/**
+ * MMBearerRoamControl:
+ * @MM_BEARER_ROAM_CONTROL_HOME_ONLY: Context allowed to be used in home network.
+ * @MM_BEARER_ROAM_CONTROL_PARTNER_ONLY: Context allowed to be used in partner network.
+ * @MM_BEARER_ROAM_CONTROL_NON_PARTNER_ONLY: Context allowed to be used in non-partner network.
+ * @MM_BEARER_ROAM_CONTROL_HOME_AND_PARTNER: Context allowed to be used in home and partner networks.
+ * @MM_BEARER_ROAM_CONTROL_HOME_AND_NON_PARTNER: Context allowed to be used in home and non-partner networks.
+ * @MM_BEARER_ROAM_CONTROL_PARTNER_AND_NON_PARTNER: Context allowed to be used in partner and non-partner networks.
+ * @MM_BEARER_ROAM_CONTROL_ALLOW_ALL: Context allowed to be used in any roaming condition.
+ *
+ * Type of roaming control.
+ *
+ * Since: 1.28
+ */
+typedef enum { /*< underscore_name=mm_bearer_roam_control >*/
+    MM_BEARER_ROAM_CONTROL_HOME_ONLY               = 0,
+    MM_BEARER_ROAM_CONTROL_PARTNER_ONLY            = 1,
+    MM_BEARER_ROAM_CONTROL_NON_PARTNER_ONLY        = 2,
+    MM_BEARER_ROAM_CONTROL_HOME_AND_PARTNER        = 3,
+    MM_BEARER_ROAM_CONTROL_HOME_AND_NON_PARTNER    = 4,
+    MM_BEARER_ROAM_CONTROL_PARTNER_AND_NON_PARTNER = 5,
+    MM_BEARER_ROAM_CONTROL_ALLOW_ALL               = 6
+} MMBearerRoamControl;
+
+/**
+ * MMBearerMediaType:
+ * @MM_BEARER_MEDIA_TYPE_CELLULAR_ONLY: Context allowed to be used only wen registered over cellular.
+ * @MM_BEARER_MEDIA_TYPE_WIFI_ONLY: Context allowed to be used only when registered over Wi-Fi.
+ * @MM_BEARER_MEDIA_TYPE_ALL: Context allowed to be used when registered either over cellular or Wi-Fi.
+ *
+ * Media type, specifying whether the modem is used for cellular or
+ * iWLAN (Wi-Fi offload).
+ *
+ * Since: 1.28
+ */
+typedef enum { /*< underscore_name=mm_bearer_media_type >*/
+    MM_BEARER_MEDIA_TYPE_CELLULAR_ONLY = 0,
+    MM_BEARER_MEDIA_TYPE_WIFI_ONLY     = 1,
+    MM_BEARER_MEDIA_TYPE_ALL           = 2
+} MMBearerMediaType;
+
+/**
+ * MMContextSource:
+ * @MM_BEARER_SOURCE_ADMIN: Context created by enterprise IT.
+ * @MM_BEARER_SOURCE_USER: Context created by user.
+ * @MM_BEARER_SOURCE_OPERATOR: Context created by operator.
+ * @MM_BEARER_SOURCE_MODEM: Context created by modem manufacturer.
+ * @MM_BEARER_SOURCE_DEVICE: Context created by OS APN database.
+ *
+ * Source of context creation.
+ *
+ * Since: 1.18
+ */
+typedef enum { /*< underscore_name=mm_bearer_source >*/
+    MM_BEARER_SOURCE_ADMIN    = 0,
+    MM_BEARER_SOURCE_USER     = 1,
+    MM_BEARER_SOURCE_OPERATOR = 2,
+    MM_BEARER_SOURCE_MODEM    = 3,
+    MM_BEARER_SOURCE_DEVICE   = 4
+} MMBearerSource;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */

@@ -52,17 +52,29 @@ MbimPinType mbim_pin_type_from_mm_modem_3gpp_facility (MMModem3gppFacility facil
 GError *mm_mobile_equipment_error_from_mbim_nw_error (MbimNwError nw_error,
                                                       gpointer    log_object);
 
-MMBearerAllowedAuth mm_bearer_allowed_auth_from_mbim_auth_protocol (MbimAuthProtocol      auth_protocol);
-MbimAuthProtocol    mm_bearer_allowed_auth_to_mbim_auth_protocol   (MMBearerAllowedAuth   bearer_auth,
-                                                                    gpointer              log_object,
-                                                                    GError              **error);
-MMBearerIpFamily    mm_bearer_ip_family_from_mbim_context_ip_type  (MbimContextIpType     ip_type);
-MbimContextIpType   mm_bearer_ip_family_to_mbim_context_ip_type    (MMBearerIpFamily      ip_family,
-                                                                    GError              **error);
-MMBearerApnType     mm_bearer_apn_type_from_mbim_context_type      (MbimContextType       context_type);
-MbimContextType     mm_bearer_apn_type_to_mbim_context_type        (MMBearerApnType       apn_type,
-                                                                    gpointer              log_object,
-                                                                    GError              **error);
+MMBearerAllowedAuth       mm_bearer_allowed_auth_from_mbim_auth_protocol           (MbimAuthProtocol      auth_protocol);
+MbimAuthProtocol          mm_bearer_allowed_auth_to_mbim_auth_protocol             (MMBearerAllowedAuth   bearer_auth,
+                                                                                    gpointer              log_object,
+                                                                                    GError              **error);
+MMBearerIpFamily          mm_bearer_ip_family_from_mbim_context_ip_type            (MbimContextIpType     ip_type);
+MbimContextIpType         mm_bearer_ip_family_to_mbim_context_ip_type              (MMBearerIpFamily      ip_family,
+                                                                                    GError              **error);
+MMBearerState             mm_bearer_state_from_mbim_context_state                  (MbimContextState state);
+MbimContextState          mm_bearer_state_to_mbim_context_state                    (MMBearerState state,
+                                                                                    GError      **error);
+MMBearerRoamControl       mm_bearer_roam_control_from_mbim_context_roaming_control (MbimContextRoamingControl roaming);
+MbimContextRoamingControl mm_bearer_roam_control_to_mbim_context_roaming_control   (MMBearerRoamControl roaming,
+                                                                                    GError         **error);
+MMBearerMediaType         mm_bearer_media_type_from_mbim_context_media_type        (MbimContextMediaType media_type);
+MbimContextMediaType      mm_bearer_media_type_to_mbim_context_media_type          (MMBearerMediaType media_type,
+                                                                                    GError         **error);
+MMBearerSource            mm_bearer_source_from_mbim_context_source                (MbimContextSource source);
+MbimContextSource         mm_bearer_source_to_mbim_context_source                  (MMBearerSource source,
+                                                                                    GError       **error);
+MMBearerApnType           mm_bearer_apn_type_from_mbim_context_type                (MbimContextType       context_type);
+MbimContextType           mm_bearer_apn_type_to_mbim_context_type                  (MMBearerApnType       apn_type,
+                                                                                    gpointer              log_object,
+                                                                                    GError              **error);
 
 gboolean mm_signal_error_rate_percentage_from_coded_value (guint      coded_value,
                                                            gdouble   *out_percentage,
@@ -105,5 +117,11 @@ gboolean mm_signal_from_mbim_signal_state (MbimDataClass          data_class,
                                            MMSignal             **out_umts,
                                            MMSignal             **out_lte,
                                            MMSignal             **out_nr5g);
+
+guint8 mm_get_version (MbimDevice *device);
+
+#define MBIM_V1 (1) /* Decimal value of Mbim Version 1 in little-endian constant 0x0100 0100*/
+#define MBIM_V2 (2) /* Decimal value of Mbim Version 2 in little-endian constant 0x0200 0100 */
+#define MBIM_V3 (3) /* Decimal value of Mbim Version 3 in little-endian constant 0x0300 0100 */
 
 #endif  /* MM_MODEM_HELPERS_MBIM_H */

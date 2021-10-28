@@ -470,6 +470,34 @@
               to identify the profiles. Since 1.20.
             </para></listitem>
           </varlistentry>
+          <varlistentry><term><literal>"enabled"</literal></term>
+            <listitem>
+              The State to use, given as a
+              <link linkend="MMBearerState">MMBearerState</link>
+              value (signature <literal>"u"</literal>).
+            </listitem>
+          </varlistentry>
+          <varlistentry><term><literal>"roaming-control"</literal></term>
+            <listitem>
+              The roaming condition to use, given as a
+              <link linkend="MMBearerRoamControl">MMBearerRoamControl</link>
+              value (signature <literal>"u"</literal>).
+            </listitem>
+          </varlistentry>
+          <varlistentry><term><literal>"media-type"</literal></term>
+            <listitem>
+              The media_type to use, given as a
+              <link linkend="MMBearerMediaType">MMBearerMediaType</link>
+              value (signature <literal>"u"</literal>).
+            </listitem>
+          </varlistentry>
+          <varlistentry><term><literal>"source"</literal></term>
+            <listitem>
+              The source to use, given as a
+              <link linkend="MMBearerSource">MMBearerSource</link>
+              value (signature <literal>"u"</literal>).
+            </listitem>
+          </varlistentry>
         </variablelist>
 
         The following settings apply to 3GPP2 (CDMA/EVDO) devices:

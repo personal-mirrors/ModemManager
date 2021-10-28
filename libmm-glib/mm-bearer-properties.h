@@ -59,40 +59,52 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMBearerProperties, g_object_unref)
 
 MMBearerProperties *mm_bearer_properties_new (void);
 
-void mm_bearer_properties_set_apn           (MMBearerProperties *self,
-                                             const gchar *apn);
-void mm_bearer_properties_set_allowed_auth  (MMBearerProperties *self,
-                                             MMBearerAllowedAuth allowed_auth);
-void mm_bearer_properties_set_user          (MMBearerProperties *self,
-                                             const gchar *user);
-void mm_bearer_properties_set_password      (MMBearerProperties *self,
-                                             const gchar *password);
-void mm_bearer_properties_set_ip_type       (MMBearerProperties *self,
-                                             MMBearerIpFamily ip_type);
-void mm_bearer_properties_set_apn_type      (MMBearerProperties *self,
-                                             MMBearerApnType apn_type);
-void mm_bearer_properties_set_profile_id    (MMBearerProperties *self,
-                                             gint profile_id);
-void mm_bearer_properties_set_profile_name  (MMBearerProperties *self,
-                                             const gchar *profile_name);
-void mm_bearer_properties_set_allow_roaming (MMBearerProperties *self,
-                                             gboolean allow_roaming);
-void mm_bearer_properties_set_rm_protocol   (MMBearerProperties *self,
-                                             MMModemCdmaRmProtocol protocol);
-void mm_bearer_properties_set_multiplex     (MMBearerProperties       *self,
-                                             MMBearerMultiplexSupport  multiplex);
+void mm_bearer_properties_set_apn               (MMBearerProperties *self,
+                                                 const gchar *apn);
+void mm_bearer_properties_set_allowed_auth      (MMBearerProperties *self,
+                                                 MMBearerAllowedAuth allowed_auth);
+void mm_bearer_properties_set_user              (MMBearerProperties *self,
+                                                 const gchar *user);
+void mm_bearer_properties_set_password          (MMBearerProperties *self,
+                                                 const gchar *password);
+void mm_bearer_properties_set_ip_type           (MMBearerProperties *self,
+                                                 MMBearerIpFamily ip_type);
+void mm_bearer_properties_set_apn_type          (MMBearerProperties *self,
+                                                 MMBearerApnType apn_type);
+void mm_bearer_properties_set_profile_id        (MMBearerProperties *self,
+                                                 gint profile_id);
+void mm_bearer_properties_set_profile_name      (MMBearerProperties *self,
+                                                 const gchar *profile_name);
+void mm_bearer_properties_set_allow_roaming     (MMBearerProperties *self,
+                                                 gboolean allow_roaming);
+void mm_bearer_properties_set_rm_protocol       (MMBearerProperties *self,
+                                                 MMModemCdmaRmProtocol protocol);
+void mm_bearer_properties_set_multiplex         (MMBearerProperties *self,
+                                                 MMBearerMultiplexSupport multiplex);
+void mm_bearer_properties_set_enabled           (MMBearerProperties *self,
+                                                 MMBearerState enabled);
+void mm_bearer_properties_set_roaming_control   (MMBearerProperties *self,
+                                                 MMBearerRoamControl roaming_control);
+void mm_bearer_properties_set_media_type        (MMBearerProperties *self,
+                                                 MMBearerMediaType media_type);
+void mm_bearer_properties_set_source            (MMBearerProperties *self,
+                                                 MMBearerSource source);
 
-const gchar              *mm_bearer_properties_get_apn           (MMBearerProperties *self);
-MMBearerAllowedAuth       mm_bearer_properties_get_allowed_auth  (MMBearerProperties *self);
-const gchar              *mm_bearer_properties_get_user          (MMBearerProperties *self);
-const gchar              *mm_bearer_properties_get_password      (MMBearerProperties *self);
-MMBearerIpFamily          mm_bearer_properties_get_ip_type       (MMBearerProperties *self);
-MMBearerApnType           mm_bearer_properties_get_apn_type      (MMBearerProperties *self);
-gint                      mm_bearer_properties_get_profile_id    (MMBearerProperties *self);
-const gchar              *mm_bearer_properties_get_profile_name  (MMBearerProperties *self);
-gboolean                  mm_bearer_properties_get_allow_roaming (MMBearerProperties *self);
-MMModemCdmaRmProtocol     mm_bearer_properties_get_rm_protocol   (MMBearerProperties *self);
-MMBearerMultiplexSupport  mm_bearer_properties_get_multiplex     (MMBearerProperties *self);
+const gchar              *mm_bearer_properties_get_apn               (MMBearerProperties *self);
+MMBearerAllowedAuth       mm_bearer_properties_get_allowed_auth      (MMBearerProperties *self);
+const gchar              *mm_bearer_properties_get_user              (MMBearerProperties *self);
+const gchar              *mm_bearer_properties_get_password          (MMBearerProperties *self);
+MMBearerIpFamily          mm_bearer_properties_get_ip_type           (MMBearerProperties *self);
+MMBearerApnType           mm_bearer_properties_get_apn_type          (MMBearerProperties *self);
+gint                      mm_bearer_properties_get_profile_id        (MMBearerProperties *self);
+const gchar              *mm_bearer_properties_get_profile_name      (MMBearerProperties *self);
+gboolean                  mm_bearer_properties_get_allow_roaming     (MMBearerProperties *self);
+MMModemCdmaRmProtocol     mm_bearer_properties_get_rm_protocol       (MMBearerProperties *self);
+MMBearerMultiplexSupport  mm_bearer_properties_get_multiplex         (MMBearerProperties *self);
+MMBearerState             mm_bearer_properties_get_enabled           (MMBearerProperties *self);
+MMBearerRoamControl       mm_bearer_properties_get_roaming_control   (MMBearerProperties *self);
+MMBearerMediaType         mm_bearer_properties_get_media_type        (MMBearerProperties *self);
+MMBearerSource            mm_bearer_properties_get_source            (MMBearerProperties *self);
 
 /*****************************************************************************/
 /* ModemManager/libmm-glib/mmcli specific methods */
