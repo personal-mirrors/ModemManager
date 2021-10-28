@@ -52,6 +52,7 @@
 #include "mm-plugin.h"
 #include "mm-filter.h"
 #include "mm-log-object.h"
+#include "mm-base-modem.h"
 
 static void initable_iface_init   (GInitableIface       *iface);
 static void log_object_iface_init (MMLogObjectInterface *iface);
@@ -473,6 +474,17 @@ handle_uevent (MMBaseManager *self,
                const gchar   *action,
                GUdevDevice   *device)
 {
+    const gchar *subsystem;
+    const gchar *name;
+
+    subsystem = g_udev_device_get_subsystem (device);
+    name      = g_udev_device_get_name      (device);
+
+    /* Valid udev devices must have subsystem and name set; if they don't have
+     * both things, we silently ignore them. */
+    if (!subsystem || !name)
+        return;
+
     if (g_str_equal (action, "add") || g_str_equal (action, "move") || g_str_equal (action, "change")) {
         g_autoptr(MMKernelDevice) kernel_device = NULL;
 
@@ -482,7 +494,7 @@ handle_uevent (MMBaseManager *self,
     }
 
     if (g_str_equal (action, "remove")) {
-        device_removed (self, g_udev_device_get_subsystem (device), g_udev_device_get_name (device));
+        device_removed (self, subsystem, name);
         return;
     }
 }
@@ -496,11 +508,20 @@ typedef struct {
 static gboolean
 start_device_added_idle (StartDeviceAdded *ctx)
 {
-    MMKernelDevice *kernel_device;
+    const gchar *subsystem;
+    const gchar *name;
 
-    kernel_device = mm_kernel_device_udev_new (ctx->self->priv->udev, ctx->device);
-    device_added (ctx->self, kernel_device, FALSE, ctx->manual_scan);
-    g_object_unref (kernel_device);
+    subsystem = g_udev_device_get_subsystem (ctx->device);
+    name      = g_udev_device_get_name      (ctx->device);
+
+    /* Valid udev devices must have subsystem and name set; if they don't have
+     * both things, we silently ignore them. */
+    if (subsystem && name) {
+        g_autoptr(MMKernelDevice) kernel_device = NULL;
+
+        kernel_device = mm_kernel_device_udev_new (ctx->self->priv->udev, ctx->device);
+        device_added (ctx->self, kernel_device, FALSE, ctx->manual_scan);
+    }
 
     g_object_unref (ctx->self);
     g_object_unref (ctx->device);
@@ -554,7 +575,7 @@ process_initial_kernel_events (MMBaseManager *self)
         return;
 
     if (!g_file_get_contents (self->priv->initial_kernel_events, &contents, NULL, &error)) {
-        g_warning ("Couldn't load initial kernel events: %s", error->message);
+        mm_obj_warn (self, "couldn't load initial kernel events: %s", error->message);
         g_error_free (error);
         return;
     }
@@ -575,13 +596,13 @@ process_initial_kernel_events (MMBaseManager *self)
 
             properties = mm_kernel_event_properties_new_from_string (line, &error);
             if (!properties) {
-                g_warning ("Couldn't parse line '%s' as initial kernel event %s", line, error->message);
+                mm_obj_warn (self, "couldn't parse line '%s' as initial kernel event %s", line, error->message);
                 g_clear_error (&error);
             } else if (!handle_kernel_event (self, properties, &error)) {
-                g_warning ("Couldn't process line '%s' as initial kernel event %s", line, error->message);
+                mm_obj_warn (self, "couldn't process line '%s' as initial kernel event %s", line, error->message);
                 g_clear_error (&error);
             } else
-                g_debug ("Processed initial kernel event:' %s'", line);
+                mm_obj_dbg (self, "processed initial kernel event:' %s'", line);
             g_clear_object (&properties);
         }
 
@@ -704,6 +725,50 @@ mm_base_manager_num_modems (MMBaseManager *self)
 }
 
 /*****************************************************************************/
+/* Quick resume synchronization */
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+static void
+base_modem_sync_ready (MMBaseModem  *self,
+                       GAsyncResult *res,
+                       gpointer      user_data)
+{
+    g_autoptr(GError) error = NULL;
+
+    mm_base_modem_sync_finish (self, res, &error);
+    if (error) {
+        mm_obj_warn (self, "synchronization failed: %s", error->message);
+        return;
+    }
+    mm_obj_info (self, "synchronization finished");
+}
+
+void
+mm_base_manager_sync (MMBaseManager *self)
+{
+    GHashTableIter iter;
+    gpointer       key, value;
+
+    g_return_if_fail (self != NULL);
+    g_return_if_fail (MM_IS_BASE_MANAGER (self));
+
+    /* Refresh each device */
+    g_hash_table_iter_init (&iter, self->priv->devices);
+    while (g_hash_table_iter_next (&iter, &key, &value)) {
+        MMBaseModem *modem;
+
+        modem = mm_device_peek_modem (MM_DEVICE (value));
+
+        /* We just want to start the synchronization, we don't need the result */
+        if (modem)
+            mm_base_modem_sync (modem, (GAsyncReadyCallback)base_modem_sync_ready, NULL);
+    }
+}
+
+#endif
+
+/*****************************************************************************/
 /* Set logging */
 
 typedef struct {
@@ -750,7 +815,7 @@ handle_set_logging (MmGdbusOrgFreedesktopModemManager1 *manager,
     SetLoggingContext *ctx;
 
     ctx = g_new0 (SetLoggingContext, 1);
-    ctx->self = g_object_ref (manager);
+    ctx->self = MM_BASE_MANAGER (g_object_ref (manager));
     ctx->invocation = g_object_ref (invocation);
     ctx->level = g_strdup (level);
 
@@ -813,7 +878,7 @@ handle_scan_devices (MmGdbusOrgFreedesktopModemManager1 *manager,
     ScanDevicesContext *ctx;
 
     ctx = g_new (ScanDevicesContext, 1);
-    ctx->self = g_object_ref (manager);
+    ctx->self = MM_BASE_MANAGER (g_object_ref (manager));
     ctx->invocation = g_object_ref (invocation);
 
     mm_auth_provider_authorize (ctx->self->priv->authp,
@@ -890,7 +955,7 @@ handle_report_kernel_event (MmGdbusOrgFreedesktopModemManager1 *manager,
     ReportKernelEventContext *ctx;
 
     ctx = g_slice_new0 (ReportKernelEventContext);
-    ctx->self = g_object_ref (manager);
+    ctx->self = MM_BASE_MANAGER (g_object_ref (manager));
     ctx->invocation = g_object_ref (invocation);
     ctx->dictionary = g_variant_ref (dictionary);
 
@@ -1215,7 +1280,7 @@ handle_inhibit_device (MmGdbusOrgFreedesktopModemManager1 *manager,
     InhibitDeviceContext *ctx;
 
     ctx = g_slice_new0 (InhibitDeviceContext);
-    ctx->self = g_object_ref (manager);
+    ctx->self = MM_BASE_MANAGER (g_object_ref (manager));
     ctx->invocation = g_object_ref (invocation);
     ctx->uid = g_strdup (uid);
     ctx->inhibit = inhibit;

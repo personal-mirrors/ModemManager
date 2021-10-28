@@ -17,6 +17,7 @@
 
 #include "mm-errors-types.h"
 #include "mm-common-helpers.h"
+#include "mm-3gpp-profile.h"
 #include "mm-simple-connect-properties.h"
 
 /**
@@ -327,6 +328,82 @@ mm_simple_connect_properties_get_ip_type (MMSimpleConnectProperties *self)
 /*****************************************************************************/
 
 /**
+ * mm_simple_connect_properties_set_apn_type:
+ * @self: a #MMSimpleConnectProperties.
+ * @apn_type: a mask of #MMBearerApnType values.
+ *
+ * Sets the APN types to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_simple_connect_properties_set_apn_type (MMSimpleConnectProperties *self,
+                                           MMBearerApnType            apn_type)
+{
+    g_return_if_fail (MM_IS_SIMPLE_CONNECT_PROPERTIES (self));
+
+    mm_bearer_properties_set_apn_type (self->priv->bearer_properties, apn_type);
+}
+
+/**
+ * mm_simple_connect_properties_get_apn_type:
+ * @self: a #MMSimpleConnectProperties.
+ *
+ * Gets the APN types to use.
+ *
+ * Returns: a mask of #MMBearerApnType values.
+ *
+ * Since: 1.18
+ */
+MMBearerApnType
+mm_simple_connect_properties_get_apn_type (MMSimpleConnectProperties *self)
+{
+    g_return_val_if_fail (MM_IS_SIMPLE_CONNECT_PROPERTIES (self), MM_BEARER_APN_TYPE_NONE);
+
+    return mm_bearer_properties_get_apn_type (self->priv->bearer_properties);
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_simple_connect_properties_set_profile_id:
+ * @self: a #MMSimpleConnectProperties.
+ * @profile_id: a profile id.
+ *
+ * Sets the profile ID to use.
+ *
+ * Since: 1.18
+ */
+void
+mm_simple_connect_properties_set_profile_id (MMSimpleConnectProperties *self,
+                                             gint                       profile_id)
+{
+    g_return_if_fail (MM_IS_SIMPLE_CONNECT_PROPERTIES (self));
+
+    mm_bearer_properties_set_profile_id (self->priv->bearer_properties, profile_id);
+}
+
+/**
+ * mm_simple_connect_properties_get_profile_id:
+ * @self: a #MMSimpleConnectProperties.
+ *
+ * Gets the profile ID to use.
+ *
+ * Returns: the profile id.
+ *
+ * Since: 1.18
+ */
+gint
+mm_simple_connect_properties_get_profile_id (MMSimpleConnectProperties *self)
+{
+    g_return_val_if_fail (MM_IS_SIMPLE_CONNECT_PROPERTIES (self), MM_3GPP_PROFILE_ID_UNKNOWN);
+
+    return mm_bearer_properties_get_profile_id (self->priv->bearer_properties);
+}
+
+/*****************************************************************************/
+
+/**
  * mm_simple_connect_properties_set_allow_roaming:
  * @self: a #MMSimpleConnectProperties.
  * @allow_roaming: boolean value.
@@ -439,54 +516,6 @@ mm_simple_connect_properties_get_multiplex (MMSimpleConnectProperties *self)
 
     return mm_bearer_properties_get_multiplex (self->priv->bearer_properties);
 }
-
-/*****************************************************************************/
-
-#ifndef MM_DISABLE_DEPRECATED
-
-/**
- * mm_simple_connect_properties_set_number:
- * @self: a #MMSimpleConnectProperties.
- * @number: the number.
- *
- * Sets the number to use when performing the connection.
- *
- * Since: 1.0
- * Deprecated: 1.10.0. The number setting is not used anywhere, and therefore
- * it doesn't make sense to expose it in the ModemManager interface.
- */
-void
-mm_simple_connect_properties_set_number (MMSimpleConnectProperties *self,
-                                         const gchar *number)
-{
-    g_return_if_fail (MM_IS_SIMPLE_CONNECT_PROPERTIES (self));
-
-    /* NO-OP */
-}
-
-/**
- * mm_simple_connect_properties_get_number:
- * @self: a #MMSimpleConnectProperties.
- *
- * Gets the number to use when performing the connection.
- *
- * Returns: (transfer none): the number, or #NULL if not set. Do not free the
- * returned value, it is owned by @self.
- *
- * Since: 1.0
- * Deprecated: 1.10.0. The number setting is not used anywhere, and therefore
- * it doesn't make sense to expose it in the ModemManager interface.
- */
-const gchar *
-mm_simple_connect_properties_get_number (MMSimpleConnectProperties *self)
-{
-    g_return_val_if_fail (MM_IS_SIMPLE_CONNECT_PROPERTIES (self), NULL);
-
-    /* NO-OP */
-    return NULL;
-}
-
-#endif /* MM_DISABLE_DEPRECATED */
 
 /*****************************************************************************/
 

@@ -70,10 +70,12 @@ void mm_bearer_list_foreach (MMBearerList *self,
                              MMBearerListForeachFunc func,
                              gpointer user_data);
 
-MMBaseBearer *mm_bearer_list_find_by_properties (MMBearerList *self,
+MMBaseBearer *mm_bearer_list_find_by_properties (MMBearerList       *self,
                                                  MMBearerProperties *properties);
-MMBaseBearer *mm_bearer_list_find_by_path (MMBearerList *self,
-                                           const gchar *path);
+MMBaseBearer *mm_bearer_list_find_by_path       (MMBearerList       *self,
+                                                 const gchar        *path);
+MMBaseBearer *mm_bearer_list_find_by_profile_id (MMBearerList       *self,
+                                                 gint                profile_id);
 
 void     mm_bearer_list_disconnect_all_bearers        (MMBearerList *self,
                                                        GAsyncReadyCallback callback,
@@ -81,5 +83,16 @@ void     mm_bearer_list_disconnect_all_bearers        (MMBearerList *self,
 gboolean mm_bearer_list_disconnect_all_bearers_finish (MMBearerList *self,
                                                        GAsyncResult *res,
                                                        GError **error);
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+void     mm_bearer_list_sync_all_bearers        (MMBearerList *self,
+                                                 GAsyncReadyCallback callback,
+                                                 gpointer user_data);
+gboolean mm_bearer_list_sync_all_bearers_finish (MMBearerList *self,
+                                                 GAsyncResult *res,
+                                                 GError **error);
+
+#endif
 
 #endif /* MM_BEARER_LIST_H */

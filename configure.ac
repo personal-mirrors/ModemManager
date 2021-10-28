@@ -5,7 +5,7 @@ dnl Package and library versioning support
 dnl
 
 m4_define([mm_major_version], [1])
-m4_define([mm_minor_version], [17])
+m4_define([mm_minor_version], [19])
 m4_define([mm_micro_version], [0])
 m4_define([mm_version],
           [mm_major_version.mm_minor_version.mm_micro_version])
@@ -18,9 +18,9 @@ dnl        If the interface has grown (that is, the new library is compatible
 dnl            with old code), increment a.
 dnl        If the interface has changed in an incompatible way (that is,
 dnl            functions have changed or been removed), then zero a.
-m4_define([mm_glib_lt_current],  [7])
+m4_define([mm_glib_lt_current],  [8])
 m4_define([mm_glib_lt_revision], [0])
-m4_define([mm_glib_lt_age],      [7])
+m4_define([mm_glib_lt_age],      [8])
 
 dnl-----------------------------------------------------------------------------
 dnl autoconf, automake, libtool initialization
@@ -123,10 +123,8 @@ dnl-----------------------------------------------------------------------------
 dnl Build dependencies
 dnl
 
-# NOTE! If using glib < 2.55.1, make sure you have backported the following patch to avoid
-# the daemon leaking a lot: https://gitlab.gnome.org/GNOME/glib/commit/37d9b0c6995f97ea0f744650aaf5179081f878ba
-GLIB_MIN_VERSION=2.48.0
-GLIB_BUILD_SYMBOLS="-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_48 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_48 -DGLIB_DISABLE_DEPRECATION_WARNINGS"
+GLIB_MIN_VERSION=2.56.0
+GLIB_BUILD_SYMBOLS="-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_56 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_56 -DGLIB_DISABLE_DEPRECATION_WARNINGS"
 
 PKG_CHECK_MODULES(MM,
                   glib-2.0 >= $GLIB_MIN_VERSION
@@ -377,7 +375,7 @@ dnl-----------------------------------------------------------------------------
 dnl MBIM support (enabled by default)
 dnl
 
-LIBMBIM_VERSION=1.25.2
+LIBMBIM_VERSION=1.26.0
 
 AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support]), [], [with_mbim=yes])
 AM_CONDITIONAL(WITH_MBIM, test "x$with_mbim" = "xyes")
@@ -401,7 +399,7 @@ dnl-----------------------------------------------------------------------------
 dnl QMI support (enabled by default)
 dnl
 
-LIBQMI_VERSION=1.29.3
+LIBQMI_VERSION=1.30.2
 
 AC_ARG_WITH(qmi, AS_HELP_STRING([--without-qmi], [Build without QMI support]), [], [with_qmi=yes])
 AM_CONDITIONAL(WITH_QMI, test "x$with_qmi" = "xyes")
@@ -527,7 +525,7 @@ MM_ENABLE_PLUGIN([option],
 MM_ENABLE_PLUGIN([option-hso],
                  [with_shared_option])
 MM_ENABLE_PLUGIN([pantech])
-MM_ENABLE_PLUGIN_DISABLED([qcom-soc])
+MM_ENABLE_PLUGIN([qcom-soc])
 MM_ENABLE_PLUGIN([quectel])
 MM_ENABLE_PLUGIN([samsung],
                  [with_shared_icera])
@@ -601,6 +599,7 @@ examples/modem-watcher-python/Makefile
 examples/modem-watcher-javascript/Makefile
 examples/sms-python/Makefile
 examples/network-scan-python/Makefile
+examples/sms-c/Makefile
 ])
 AC_OUTPUT
 

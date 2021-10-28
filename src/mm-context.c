@@ -48,11 +48,6 @@ filter_policy_option_arg (const gchar  *option_name,
                           gpointer      data,
                           GError      **error)
 {
-    if (!g_ascii_strcasecmp (value, "legacy")) {
-        filter_policy = MM_FILTER_POLICY_LEGACY;
-        return TRUE;
-    }
-
     if (!g_ascii_strcasecmp (value, "whitelist-only")) {
         filter_policy = MM_FILTER_POLICY_WHITELIST_ONLY;
         return TRUE;
@@ -60,11 +55,6 @@ filter_policy_option_arg (const gchar  *option_name,
 
     if (!g_ascii_strcasecmp (value, "strict")) {
         filter_policy = MM_FILTER_POLICY_STRICT;
-        return TRUE;
-    }
-
-    if (!g_ascii_strcasecmp (value, "paranoid")) {
-        filter_policy = MM_FILTER_POLICY_PARANOID;
         return TRUE;
     }
 
@@ -77,7 +67,7 @@ filter_policy_option_arg (const gchar  *option_name,
 static const GOptionEntry entries[] = {
     {
         "filter-policy", 0, 0, G_OPTION_ARG_CALLBACK, filter_policy_option_arg,
-        "Filter policy: one of LEGACY, WHITELIST-ONLY, STRICT, PARANOID",
+        "Filter policy: one of WHITELIST-ONLY, STRICT",
         "[POLICY]"
     },
     {
@@ -227,10 +217,12 @@ static gboolean  test_no_udev;
 #endif
 #if defined WITH_SYSTEMD_SUSPEND_RESUME
 static gboolean  test_no_suspend_resume;
+static gboolean  test_quick_suspend_resume;
 #endif
 #if defined WITH_QRTR
 static gboolean  test_no_qrtr;
 #endif
+static gboolean  test_multiplex_requested;
 
 static const GOptionEntry test_entries[] = {
     {
@@ -261,6 +253,11 @@ static const GOptionEntry test_entries[] = {
         "Disable suspend/resume support at runtime even if available",
         NULL
     },
+    {
+        "test-quick-suspend-resume", 0, 0, G_OPTION_ARG_NONE, &test_quick_suspend_resume,
+        "Enable quick suspend/resume support for modems which stay on during host suspension",
+        NULL
+    },
 #endif
 #if defined WITH_QRTR
     {
@@ -269,6 +266,11 @@ static const GOptionEntry test_entries[] = {
         NULL
     },
 #endif
+    {
+        "test-multiplex-requested", 0, 0, G_OPTION_ARG_NONE, &test_multiplex_requested,
+        "Default to request multiplex support if no explicitly given",
+        NULL
+    },
     { NULL }
 };
 
@@ -318,6 +320,11 @@ mm_context_get_test_no_suspend_resume (void)
 {
     return test_no_suspend_resume;
 }
+gboolean
+mm_context_get_test_quick_suspend_resume (void)
+{
+    return test_quick_suspend_resume;
+}
 #endif
 
 #if defined WITH_QRTR
@@ -327,6 +334,13 @@ mm_context_get_test_no_qrtr (void)
     return test_no_qrtr;
 }
 #endif
+
+gboolean
+mm_context_get_test_multiplex_requested (void)
+{
+    return test_multiplex_requested;
+}
+
 /*****************************************************************************/
 
 static void
@@ -366,7 +380,7 @@ mm_context_init (gint argc,
     g_option_context_set_help_enabled (ctx, FALSE);
 
     if (!g_option_context_parse (ctx, &argc, &argv, &error)) {
-        g_warning ("error: %s", error->message);
+        g_printerr ("error: %s\n", error->message);
         g_error_free (error);
         exit (1);
     }
@@ -395,7 +409,7 @@ mm_context_init (gint argc,
     /* Initial kernel events processing may only be used if autoscan is disabled */
 #if defined WITH_UDEV || defined WITH_QRTR
     if (!no_auto_scan && initial_kernel_events) {
-        g_warning ("error: --initial-kernel-events must be used only if --no-auto-scan is also used");
+        g_printerr ("error: --initial-kernel-events must be used only if --no-auto-scan is also used\n");
         exit (1);
     }
 # if defined WITH_UDEV

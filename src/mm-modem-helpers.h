@@ -146,6 +146,7 @@ GRegex    *mm_3gpp_cds_regex_get (void);
 
 /* AT+WS46=? response parser: returns array of MMModemMode values */
 GArray *mm_3gpp_parse_ws46_test_response (const gchar  *response,
+                                          gpointer      log_object,
                                           GError      **error);
 
 /* AT+COPS=? (network scan) response parser */
@@ -199,25 +200,6 @@ typedef struct {
 void mm_3gpp_pdp_context_list_free (GList *pdp_list);
 GList *mm_3gpp_parse_cgdcont_read_response (const gchar *reply,
                                             GError **error);
-
-/* Select best CID to use during connection */
-guint mm_3gpp_select_best_cid (const gchar      *apn,
-                               MMBearerIpFamily  ip_family,
-                               GList            *context_list,
-                               GList            *context_format_list,
-                               gpointer          log_object,
-                               gboolean         *out_cid_reused,
-                               gboolean         *out_cid_overwritten);
-
-typedef struct {
-    guint profile_id;
-    gchar *apn;
-    gchar *username;
-    gchar *password;
-    MMBearerAllowedAuth auth_type;
-} MM3gppProfile;
-void mm_3gpp_profile_list_free (GList *profiles);
-GList *mm_3gpp_profile_list_copy (GList *profiles);
 
 /* AT+CGACT? (active PDP context query) response parser */
 typedef struct {
@@ -450,6 +432,7 @@ void mm_3gpp_normalize_operator (gchar          **operator,
 gboolean mm_3gpp_parse_operator_id (const gchar *operator_id,
                                     guint16 *mcc,
                                     guint16 *mnc,
+                                    gboolean *three_digit_mnc,
                                     GError **error);
 
 const gchar      *mm_3gpp_get_pdp_type_from_ip_family (MMBearerIpFamily  family);
@@ -479,6 +462,31 @@ gboolean mm_3gpp_rssnr_level_to_rssnr (gint      rssnr_level,
                                        gdouble  *out_rssnr);
 
 GStrv mm_3gpp_parse_emergency_numbers (const char *raw, GError **error);
+
+/* PDP context -> profile */
+MM3gppProfile *mm_3gpp_profile_new_from_pdp_context (MM3gppPdpContext *pdp_context);
+
+/* Profile list operations */
+GList *mm_3gpp_profile_list_new_from_pdp_context_list (GList *pdp_context_list);
+void   mm_3gpp_profile_list_free                      (GList *profile_list);
+
+gint   mm_3gpp_profile_list_find_empty (GList                  *profile_list,
+                                        gint                    min_profile_id,
+                                        gint                    max_profile_id,
+                                        GError                **error);
+gint   mm_3gpp_profile_list_find_best  (GList                  *profile_list,
+                                        MM3gppProfile          *requested,
+                                        GEqualFunc              cmp_apn,
+                                        MM3gppProfileCmpFlags   cmp_flags,
+                                        gint                    min_profile_id,
+                                        gint                    max_profile_id,
+                                        gpointer                log_object,
+                                        MM3gppProfile         **out_reused,
+                                        gboolean               *out_overwritten);
+
+MM3gppProfile *mm_3gpp_profile_list_find_by_profile_id (GList   *profile_list,
+                                                        gint     profile_id,
+                                                        GError **error);
 
 /*****************************************************************************/
 /* CDMA specific helpers and utilities */
@@ -563,5 +571,10 @@ gboolean mm_sim_parse_cpol_test_response (const gchar  *response,
 /* Useful when clamp-ing an unsigned integer with implicit low limit set to 0,
  * and in order to avoid -Wtype-limits warnings. */
 #define MM_CLAMP_HIGH(x, high) (((x) > (high)) ? (high) : (x))
+
+/*****************************************************************************/
+
+/* Helper function to decode eid read from esim */
+gchar *mm_decode_eid (const gchar *eid, gsize eid_len);
 
 #endif  /* MM_MODEM_HELPERS_H */

@@ -114,12 +114,20 @@ MMSmsState mm_sms_state_from_qmi_message_tag (QmiWmsMessageTagType tag);
 /*****************************************************************************/
 /* QMI/WDS to MM translations */
 
-QmiWdsAuthentication mm_bearer_allowed_auth_to_qmi_authentication   (MMBearerAllowedAuth auth);
-MMBearerAllowedAuth mm_bearer_allowed_auth_from_qmi_authentication (QmiWdsAuthentication auth);
+QmiWdsAuthentication mm_bearer_allowed_auth_to_qmi_authentication   (MMBearerAllowedAuth   auth,
+                                                                     gpointer              log_object,
+                                                                     GError              **error);
+MMBearerAllowedAuth  mm_bearer_allowed_auth_from_qmi_authentication (QmiWdsAuthentication auth);
 MMBearerIpFamily     mm_bearer_ip_family_from_qmi_ip_support_type   (QmiWdsIpSupportType ip_support_type);
 MMBearerIpFamily     mm_bearer_ip_family_from_qmi_pdp_type          (QmiWdsPdpType pdp_type);
 gboolean             mm_bearer_ip_family_to_qmi_pdp_type            (MMBearerIpFamily  ip_family,
                                                                      QmiWdsPdpType    *out_pdp_type);
+QmiWdsApnTypeMask    mm_bearer_apn_type_to_qmi_apn_type             (MMBearerApnType apn_type,
+                                                                     gpointer        log_object);
+MMBearerApnType      mm_bearer_apn_type_from_qmi_apn_type           (QmiWdsApnTypeMask apn_type);
+
+GError *qmi_mobile_equipment_error_from_verbose_call_end_reason_3gpp (QmiWdsVerboseCallEndReason3gpp vcer_3gpp,
+                                                                      gpointer                       log_object);
 
 /*****************************************************************************/
 /* QMI/WDA to MM translations */
@@ -177,10 +185,17 @@ gboolean mm_qmi_uim_get_card_status_output_parse (gpointer                      
                                                   QmiUimPinState                    *o_pin2_state,
                                                   guint                             *o_pin2_retries,
                                                   guint                             *o_puk2_retries,
+                                                  guint                             *o_pers_retries,
                                                   GError                           **error);
 
 /*****************************************************************************/
-/* UIM Get Slot Status parsing */
-gchar *mm_qmi_uim_decode_eid (const gchar *eid, gsize eid_len);
+/* UIM Get Configuration parsing */
+
+gboolean mm_qmi_uim_get_configuration_output_parse (gpointer                              log_object,
+                                                    QmiMessageUimGetConfigurationOutput  *output,
+                                                    MMModem3gppFacility                  *o_lock,
+                                                    GError                              **error);
+
+QmiUimCardApplicationPersonalizationFeature qmi_personalization_feature_from_mm_modem_3gpp_facility (MMModem3gppFacility facility);
 
 #endif  /* MM_MODEM_HELPERS_QMI_H */

@@ -94,6 +94,12 @@ void               mm_shared_qmi_set_current_capabilities           (MMIfaceMode
 gboolean           mm_shared_qmi_set_current_capabilities_finish    (MMIfaceModem         *self,
                                                                      GAsyncResult         *res,
                                                                      GError              **error);
+void               mm_shared_qmi_load_model                         (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+gchar             *mm_shared_qmi_load_model_finish                  (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
 void               mm_shared_qmi_load_supported_modes               (MMIfaceModem         *self,
                                                                      GAsyncReadyCallback   callback,
                                                                      gpointer              user_data);
@@ -179,12 +185,18 @@ void               mm_shared_qmi_set_primary_sim_slot               (MMIfaceMode
 gboolean           mm_shared_qmi_set_primary_sim_slot_finish        (MMIfaceModem         *self,
                                                                      GAsyncResult         *res,
                                                                      GError              **error);
-void               mm_shared_qmi_setup_sim_hot_swap                 (MMIfaceModem *self,
-                                                                     GAsyncReadyCallback callback,
-                                                                     gpointer user_data);
-gboolean           mm_shared_qmi_setup_sim_hot_swap_finish          (MMIfaceModem *self,
-                                                                     GAsyncResult *res,
-                                                                     GError **error);
+void               mm_shared_qmi_setup_sim_hot_swap                 (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+gboolean           mm_shared_qmi_setup_sim_hot_swap_finish          (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
+void               mm_shared_qmi_fcc_unlock                         (MMIfaceModem         *self,
+                                                                     GAsyncReadyCallback   callback,
+                                                                     gpointer              user_data);
+gboolean           mm_shared_qmi_fcc_unlock_finish                  (MMIfaceModem         *self,
+                                                                     GAsyncResult         *res,
+                                                                     GError              **error);
 
 /* Shared QMI location support */
 

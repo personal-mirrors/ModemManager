@@ -155,6 +155,22 @@ mm_bearer_list_find_by_path (MMBearerList *self,
     return NULL;
 }
 
+MMBaseBearer *
+mm_bearer_list_find_by_profile_id (MMBearerList *self,
+                                   gint          profile_id)
+{
+    GList *l;
+
+    g_assert (profile_id != MM_3GPP_PROFILE_ID_UNKNOWN);
+
+    for (l = self->priv->bearers; l; l = g_list_next (l)) {
+        if (mm_base_bearer_get_profile_id (MM_BASE_BEARER (l->data)) == profile_id)
+            return g_object_ref (l->data);
+    }
+
+    return NULL;
+}
+
 /*****************************************************************************/
 
 typedef struct {
@@ -242,6 +258,92 @@ mm_bearer_list_disconnect_all_bearers (MMBearerList *self,
 
     disconnect_next_bearer (task);
 }
+
+/*****************************************************************************/
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+typedef struct {
+    GList        *pending;
+    MMBaseBearer *current;
+} SyncAllContext;
+
+static void
+sync_all_context_free (SyncAllContext *ctx)
+{
+    if (ctx->current)
+        g_object_unref (ctx->current);
+    g_list_free_full (ctx->pending, g_object_unref);
+    g_free (ctx);
+}
+
+gboolean
+mm_bearer_list_sync_all_bearers_finish (MMBearerList  *self,
+                                        GAsyncResult  *res,
+                                        GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void sync_next_bearer (GTask *task);
+
+static void
+sync_ready (MMBaseBearer *bearer,
+            GAsyncResult *res,
+            GTask        *task)
+{
+    g_autoptr(GError) error = NULL;
+
+    if (!mm_base_bearer_sync_finish (bearer, res, &error))
+        mm_obj_warn (bearer, "failed synchronizing state: %s", error->message);
+
+    sync_next_bearer (task);
+}
+
+static void
+sync_next_bearer (GTask *task)
+{
+    SyncAllContext *ctx;
+
+    ctx = g_task_get_task_data (task);
+    if (ctx->current)
+        g_clear_object (&ctx->current);
+
+    /* No more bearers? all done! */
+    if (!ctx->pending) {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx->current = MM_BASE_BEARER (ctx->pending->data);
+    ctx->pending = g_list_delete_link (ctx->pending, ctx->pending);
+
+    mm_base_bearer_sync (ctx->current, (GAsyncReadyCallback)sync_ready, task);
+}
+
+void
+mm_bearer_list_sync_all_bearers (MMBearerList        *self,
+                                 GAsyncReadyCallback  callback,
+                                 gpointer             user_data)
+{
+    SyncAllContext *ctx;
+    GTask          *task;
+
+    ctx = g_new0 (SyncAllContext, 1);
+
+    /* Get a copy of the list */
+    ctx->pending = g_list_copy_deep (self->priv->bearers,
+                                     (GCopyFunc)g_object_ref,
+                                     NULL);
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, ctx, (GDestroyNotify)sync_all_context_free);
+
+    sync_next_bearer (task);
+}
+
+#endif
 
 /*****************************************************************************/
 
@@ -352,9 +454,9 @@ mm_bearer_list_class_init (MMBearerListClass *klass)
         g_param_spec_uint (MM_BEARER_LIST_MAX_ACTIVE_BEARERS,
                            "Max active bearers",
                            "Maximum number of active bearers the list can handle",
-                           1,
+                           0,
                            G_MAXUINT,
-                           1,
+                           0,
                            G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
     g_object_class_install_property (object_class, PROP_MAX_ACTIVE_BEARERS, properties[PROP_MAX_ACTIVE_BEARERS]);
 
@@ -362,9 +464,9 @@ mm_bearer_list_class_init (MMBearerListClass *klass)
         g_param_spec_uint (MM_BEARER_LIST_MAX_ACTIVE_MULTIPLEXED_BEARERS,
                            "Max active multiplexed bearers",
                            "Maximum number of active multiplexed bearers the list can handle",
-                           1,
+                           0,
                            G_MAXUINT,
-                           1,
+                           0,
                            G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
     g_object_class_install_property (object_class, PROP_MAX_ACTIVE_MULTIPLEXED_BEARERS, properties[PROP_MAX_ACTIVE_MULTIPLEXED_BEARERS]);
 }

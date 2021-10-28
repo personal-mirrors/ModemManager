@@ -509,7 +509,7 @@ connect_3gpp (MMBroadbandBearer *_self,
 
     /* Setup connection context */
     ctx = g_slice_new0 (Connect3gppContext);
-    ctx->modem = g_object_ref (modem);
+    ctx->modem = MM_BASE_MODEM (g_object_ref (modem));
     ctx->data = g_object_ref (data);
     ctx->step = CONNECT_3GPP_CONTEXT_STEP_FIRST;
 
@@ -777,8 +777,9 @@ disconnect_3gpp (MMBroadbandBearer *_self,
 /*****************************************************************************/
 
 static void
-report_connection_status (MMBaseBearer *bearer,
-                          MMBearerConnectionStatus status)
+report_connection_status (MMBaseBearer             *bearer,
+                          MMBearerConnectionStatus  status,
+                          const GError             *connection_error)
 {
     MMBroadbandBearerHuawei *self = MM_BROADBAND_BEARER_HUAWEI (bearer);
 
@@ -801,7 +802,8 @@ report_connection_status (MMBaseBearer *bearer,
     /* Report disconnected right away */
     MM_BASE_BEARER_CLASS (mm_broadband_bearer_huawei_parent_class)->report_connection_status (
         bearer,
-        MM_BEARER_CONNECTION_STATUS_DISCONNECTED);
+        MM_BEARER_CONNECTION_STATUS_DISCONNECTED,
+        NULL);
 }
 
 /*****************************************************************************/
@@ -865,6 +867,10 @@ mm_broadband_bearer_huawei_class_init (MMBroadbandBearerHuaweiClass *klass)
     base_bearer_class->report_connection_status = report_connection_status;
     base_bearer_class->load_connection_status = NULL;
     base_bearer_class->load_connection_status_finish = NULL;
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+    base_bearer_class->reload_connection_status = NULL;
+    base_bearer_class->reload_connection_status_finish = NULL;
+#endif
 
     broadband_bearer_class->connect_3gpp = connect_3gpp;
     broadband_bearer_class->connect_3gpp_finish = connect_3gpp_finish;

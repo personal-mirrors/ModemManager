@@ -16,6 +16,8 @@
 #ifndef MM_PORT_QMI_H
 #define MM_PORT_QMI_H
 
+#include <config.h>
+
 #include <glib.h>
 #include <glib-object.h>
 #include <gio/gio.h>
@@ -66,7 +68,7 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMPortQmi, g_object_unref)
 
 MMPortQmi *mm_port_qmi_new          (const gchar          *name,
                                      MMPortSubsys          subsys);
-#if QMI_QRTR_SUPPORTED
+#if defined WITH_QRTR
 MMPortQmi *mm_port_qmi_new_from_node (const gchar *name,
                                       QrtrNode    *node);
 #endif
@@ -89,32 +91,40 @@ gboolean   mm_port_qmi_close_finish (MMPortQmi            *self,
 void       mm_port_qmi_set_net_driver (MMPortQmi   *self,
                                        const gchar *net_driver);
 
+void       mm_port_qmi_set_net_sysfs_path (MMPortQmi   *self,
+                                           const gchar *net_sysfs_path);
+
 typedef enum {
     MM_PORT_QMI_FLAG_DEFAULT  = 0,
-    MM_PORT_QMI_FLAG_WDS_IPV4 = 100,
-    MM_PORT_QMI_FLAG_WDS_IPV6 = 101
+    MM_PORT_QMI_FLAG_WDS_IPV4 = 1,
+    MM_PORT_QMI_FLAG_WDS_IPV6 = 2,
 } MMPortQmiFlag;
 
-void     mm_port_qmi_allocate_client        (MMPortQmi *self,
-                                             QmiService service,
-                                             MMPortQmiFlag flag,
-                                             GCancellable *cancellable,
-                                             GAsyncReadyCallback callback,
-                                             gpointer user_data);
-gboolean mm_port_qmi_allocate_client_finish (MMPortQmi *self,
-                                             GAsyncResult *res,
-                                             GError **error);
+/* When using the WDS service, we may not only want to have explicit different
+ * clients for IPv4 or IPv6, but also for different mux ids as well, so that
+ * different bearer objects never attempt to use the same WDS clients. */
+#define MM_PORT_QMI_FLAG_WITH_MUX_ID(flag, mux_id) ((mux_id << 8) | (flag & 0xFF))
 
-void     mm_port_qmi_release_client         (MMPortQmi     *self,
-                                             QmiService     service,
-                                             MMPortQmiFlag  flag);
+void     mm_port_qmi_allocate_client        (MMPortQmi            *self,
+                                             QmiService            service,
+                                             guint                 flag,
+                                             GCancellable         *cancellable,
+                                             GAsyncReadyCallback   callback,
+                                             gpointer              user_data);
+gboolean mm_port_qmi_allocate_client_finish (MMPortQmi            *self,
+                                             GAsyncResult         *res,
+                                             GError              **error);
 
-QmiClient *mm_port_qmi_peek_client (MMPortQmi *self,
-                                    QmiService service,
-                                    MMPortQmiFlag flag);
-QmiClient *mm_port_qmi_get_client  (MMPortQmi *self,
-                                    QmiService service,
-                                    MMPortQmiFlag flag);
+void     mm_port_qmi_release_client         (MMPortQmi  *self,
+                                             QmiService  service,
+                                             guint       flag);
+
+QmiClient *mm_port_qmi_peek_client (MMPortQmi  *self,
+                                    QmiService  service,
+                                    guint       flag);
+QmiClient *mm_port_qmi_get_client  (MMPortQmi  *self,
+                                    QmiService  service,
+                                    guint       flag);
 
 QmiDevice *mm_port_qmi_peek_device (MMPortQmi *self);
 

@@ -51,6 +51,7 @@ static gboolean  register_home_flag;
 static gchar    *register_in_operator_str;
 static gchar    *set_eps_ue_mode_operation_str;
 static gchar    *set_initial_eps_bearer_settings_str;
+static gchar    *disable_facility_lock_str;
 
 static GOptionEntry entries[] = {
     { "3gpp-scan", 0, 0, G_OPTION_ARG_NONE, &scan_flag,
@@ -72,6 +73,10 @@ static GOptionEntry entries[] = {
     { "3gpp-set-initial-eps-bearer-settings", 0, 0, G_OPTION_ARG_STRING, &set_initial_eps_bearer_settings_str,
       "Set the initial EPS bearer settings",
       "[\"key=value,...\"]"
+    },
+    { "3gpp-disable-facility-lock", 0, 0, G_OPTION_ARG_STRING, &disable_facility_lock_str,
+      "Disable facility personalization",
+      "[facility,key]"
     },
     { NULL }
 };
@@ -104,7 +109,8 @@ mmcli_modem_3gpp_options_enabled (void)
                  register_home_flag +
                  !!register_in_operator_str +
                  !!set_eps_ue_mode_operation_str +
-                 !!set_initial_eps_bearer_settings_str);
+                 !!set_initial_eps_bearer_settings_str +
+                 !!disable_facility_lock_str);
 
     if (n_actions > 1) {
         g_printerr ("error: too many 3GPP actions requested\n");
@@ -138,13 +144,19 @@ context_free (void)
 }
 
 static void
-ensure_modem_3gpp (void)
+ensure_modem_enabled (void)
 {
     if (mm_modem_get_state (mm_object_peek_modem (ctx->object)) < MM_MODEM_STATE_ENABLED) {
         g_printerr ("error: modem not enabled yet\n");
         exit (EXIT_FAILURE);
     }
 
+    /* Success */
+}
+
+static void
+ensure_modem_3gpp (void)
+{
     if (!ctx->modem_3gpp) {
         g_printerr ("error: modem has no 3GPP capabilities\n");
         exit (EXIT_FAILURE);
@@ -280,6 +292,55 @@ parse_eps_ue_mode_operation (MMModem3gppEpsUeModeOperation *uemode)
 }
 
 static void
+disable_facility_lock_process_reply (gboolean      result,
+                                     const GError *error)
+{
+    if (!result) {
+        g_printerr ("error: couldn't disable facility lock: '%s'\n",
+                    error ? error->message : "unknown error");
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("successfully disabled facility lock\n");
+}
+
+static gboolean
+disable_facility_lock_parse_input (const gchar          *str,
+                                   MMModem3gppFacility  *out_facility,
+                                   gchar               **out_control_key)
+{
+    g_auto(GStrv)       properties = NULL;
+    MMModem3gppFacility facility;
+
+    properties = g_strsplit (str, ",", -1);
+    if (!properties || !properties[0] || !properties[1])
+        return FALSE;
+
+    /* Facilities is a bitmask, if 0 is returned we failed parsing */
+    facility = mm_common_get_3gpp_facility_from_string (properties[0], NULL);
+    if (!facility)
+        return FALSE;
+
+    *out_facility = facility;
+    *out_control_key = g_strdup (properties[1]);
+    return TRUE;
+}
+
+static void
+disable_facility_lock_ready (MMModem3gpp  *modem_3gpp,
+                             GAsyncResult *result,
+                             gpointer      nothing)
+{
+    gboolean operation_result;
+    GError *error = NULL;
+
+    operation_result = mm_modem_3gpp_disable_facility_lock_finish (modem_3gpp, result, &error);
+    disable_facility_lock_process_reply (operation_result, error);
+
+    mmcli_async_operation_done ();
+}
+
+static void
 get_modem_ready (GObject      *source,
                  GAsyncResult *result)
 {
@@ -291,6 +352,30 @@ get_modem_ready (GObject      *source,
         mmcli_force_operation_timeout (G_DBUS_PROXY (ctx->modem_3gpp));
 
     ensure_modem_3gpp ();
+
+    /* Request to disable facility lock */
+    if (disable_facility_lock_str) {
+        g_autofree gchar    *control_key = NULL;
+        MMModem3gppFacility  facility;
+
+        if (!disable_facility_lock_parse_input (disable_facility_lock_str,
+                                                &facility,
+                                                &control_key)) {
+            g_printerr ("Error parsing properties string.\n");
+            exit (EXIT_FAILURE);
+        }
+
+        g_debug ("Asynchronously disabling facility lock...");
+        mm_modem_3gpp_disable_facility_lock (ctx->modem_3gpp,
+                                             facility,
+                                             control_key,
+                                             ctx->cancellable,
+                                             (GAsyncReadyCallback)disable_facility_lock_ready,
+                                             NULL);
+        return;
+    }
+
+    ensure_modem_enabled ();
 
     /* Request to scan networks? */
     if (scan_flag) {
@@ -390,6 +475,31 @@ mmcli_modem_3gpp_run_synchronous (GDBusConnection *connection)
 
     if (scan_flag)
         g_assert_not_reached ();
+
+    /* Request to remove carrier lock */
+    if (disable_facility_lock_str) {
+        g_autofree gchar    *control_key = NULL;
+        MMModem3gppFacility  facility;
+        gboolean             result;
+
+        if (!disable_facility_lock_parse_input (disable_facility_lock_str,
+                                                &facility,
+                                                &control_key)) {
+            g_printerr ("Error parsing properties string.\n");
+            exit (EXIT_FAILURE);
+        }
+
+        g_debug ("Synchronously disabling facility lock...");
+        result = mm_modem_3gpp_disable_facility_lock_sync (ctx->modem_3gpp,
+                                                           facility,
+                                                           control_key,
+                                                           NULL,
+                                                           &error);
+        disable_facility_lock_process_reply (result, error);
+        return;
+    }
+
+    ensure_modem_enabled ();
 
     /* Request to register the modem? */
     if (register_in_operator_str || register_home_flag) {

@@ -31,6 +31,9 @@
 
 #define DEFAULT_LINK_PREALLOCATED_AMOUNT 4
 
+/* as internally defined in the kernel */
+#define RMNET_MAX_PACKET_SIZE 16384
+
 G_DEFINE_TYPE (MMPortQmi, mm_port_qmi, MM_TYPE_PORT)
 
 #if defined WITH_QRTR
@@ -46,9 +49,9 @@ static GParamSpec *properties[PROP_LAST];
 #endif
 
 typedef struct {
-    QmiService     service;
-    QmiClient     *client;
-    MMPortQmiFlag  flag;
+    QmiService  service;
+    QmiClient  *client;
+    guint       flag;
 } ServiceInfo;
 
 struct _MMPortQmiPrivate {
@@ -56,6 +59,7 @@ struct _MMPortQmiPrivate {
     QmiDevice *qmi_device;
     GList     *services;
     gchar     *net_driver;
+    gchar     *net_sysfs_path;
 #if defined WITH_QRTR
     QrtrNode  *node;
 #endif
@@ -80,10 +84,10 @@ struct _MMPortQmiPrivate {
 /*****************************************************************************/
 
 static QmiClient *
-lookup_client (MMPortQmi     *self,
-               QmiService     service,
-               MMPortQmiFlag  flag,
-               gboolean       steal)
+lookup_client (MMPortQmi  *self,
+               QmiService  service,
+               guint       flag,
+               gboolean    steal)
 {
     GList *l;
 
@@ -106,17 +110,17 @@ lookup_client (MMPortQmi     *self,
 }
 
 QmiClient *
-mm_port_qmi_peek_client (MMPortQmi *self,
-                         QmiService service,
-                         MMPortQmiFlag flag)
+mm_port_qmi_peek_client (MMPortQmi  *self,
+                         QmiService  service,
+                         guint       flag)
 {
     return lookup_client (self, service, flag, FALSE);
 }
 
 QmiClient *
-mm_port_qmi_get_client (MMPortQmi *self,
-                        QmiService service,
-                        MMPortQmiFlag flag)
+mm_port_qmi_get_client (MMPortQmi  *self,
+                        QmiService  service,
+                        guint       flag)
 {
     QmiClient *client;
 
@@ -259,12 +263,12 @@ allocate_client_ready (QmiDevice *qmi_device,
 }
 
 void
-mm_port_qmi_allocate_client (MMPortQmi *self,
-                             QmiService service,
-                             MMPortQmiFlag flag,
-                             GCancellable *cancellable,
-                             GAsyncReadyCallback callback,
-                             gpointer user_data)
+mm_port_qmi_allocate_client (MMPortQmi           *self,
+                             QmiService           service,
+                             guint                flag,
+                             GCancellable        *cancellable,
+                             GAsyncReadyCallback  callback,
+                             gpointer             user_data)
 {
     AllocateClientContext *ctx;
     GTask *task;
@@ -1126,10 +1130,12 @@ static const DataFormatCombination data_format_combinations[] = {
 
 typedef enum {
     INTERNAL_SETUP_DATA_FORMAT_STEP_FIRST,
+    INTERNAL_SETUP_DATA_FORMAT_STEP_ALLOCATE_WDA_CLIENT,
     INTERNAL_SETUP_DATA_FORMAT_STEP_SUPPORTED_KERNEL_DATA_MODES,
     INTERNAL_SETUP_DATA_FORMAT_STEP_RETRY,
     INTERNAL_SETUP_DATA_FORMAT_STEP_CURRENT_KERNEL_DATA_MODES,
-    INTERNAL_SETUP_DATA_FORMAT_STEP_ALLOCATE_WDA_CLIENT,
+    INTERNAL_SETUP_DATA_FORMAT_STEP_ALLOCATE_DPM_CLIENT,
+    INTERNAL_SETUP_DATA_FORMAT_STEP_DPM_OPEN,
     INTERNAL_SETUP_DATA_FORMAT_STEP_GET_WDA_DATA_FORMAT,
     INTERNAL_SETUP_DATA_FORMAT_STEP_QUERY_DONE,
     INTERNAL_SETUP_DATA_FORMAT_STEP_CHECK_DATA_FORMAT_COMBINATION,
@@ -1155,6 +1161,7 @@ typedef struct {
 
     /* configured device data format */
     QmiClient                     *wda;
+    QmiClient                     *dpm;
     QmiWdaLinkLayerProtocol        wda_llp_current;
     QmiWdaLinkLayerProtocol        wda_llp_requested;
     QmiWdaDataAggregationProtocol  wda_ul_dap_current;
@@ -1174,7 +1181,15 @@ internal_setup_data_format_context_free (InternalSetupDataFormatContext *ctx)
                                    ctx->wda,
                                    QMI_DEVICE_RELEASE_CLIENT_FLAGS_RELEASE_CID,
                                    3, NULL, NULL, NULL);
+
+    if (ctx->dpm && ctx->device)
+        qmi_device_release_client (ctx->device,
+                                   ctx->dpm,
+                                   QMI_DEVICE_RELEASE_CLIENT_FLAGS_RELEASE_CID,
+                                   3, NULL, NULL, NULL);
+
     g_clear_object (&ctx->wda);
+    g_clear_object (&ctx->dpm);
     g_clear_object (&ctx->data);
     g_clear_object (&ctx->device);
     g_slice_free (InternalSetupDataFormatContext, ctx);
@@ -1305,12 +1320,17 @@ setup_master_mtu (GTask *task)
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data     (task);
 
-    /* qmi_wwan add_mux/del_mux based logic requires master mtu set to the maximum data
+    /* qmi_wwan multiplexing logic requires master mtu set to the maximum data
      * aggregation size */
-    if (ctx->kernel_data_modes_requested & MM_PORT_QMI_KERNEL_DATA_MODE_MUX_QMIWWAN) {
+    if (ctx->kernel_data_modes_requested & (MM_PORT_QMI_KERNEL_DATA_MODE_MUX_RMNET | MM_PORT_QMI_KERNEL_DATA_MODE_MUX_QMIWWAN)) {
         /* Load current max datagram size supported */
-        if (MM_PORT_QMI_DAP_IS_SUPPORTED_QMAP (ctx->wda_dl_dap_requested))
+        if (MM_PORT_QMI_DAP_IS_SUPPORTED_QMAP (ctx->wda_dl_dap_requested)) {
             mtu = ctx->wda_dl_dap_max_size_current;
+            if ((ctx->kernel_data_modes_requested & MM_PORT_QMI_KERNEL_DATA_MODE_MUX_RMNET) && (mtu > RMNET_MAX_PACKET_SIZE)) {
+                mm_obj_dbg (self, "mtu limited to maximum rmnet packet size");
+                mtu = RMNET_MAX_PACKET_SIZE;
+            }
+        }
 
         /* If no max aggregation size was specified by the modem (e.g. if we requested QMAP
          * aggregation protocol but the modem doesn't support it), skip */
@@ -1576,6 +1596,112 @@ get_data_format_ready (QmiClientWda *client,
 }
 
 static void
+dpm_open_port_ready (QmiClientDpm *client,
+                     GAsyncResult *res,
+                     GTask        *task)
+{
+    g_autoptr(QmiMessageDpmOpenPortOutput)  output = NULL;
+    InternalSetupDataFormatContext         *ctx;
+    g_autoptr(GError)                       error = NULL;
+
+    ctx  = g_task_get_task_data (task);
+
+    output = qmi_client_dpm_open_port_finish (client, res, &error);
+    if (!output ||
+        !qmi_message_dpm_open_port_output_get_result (output, &error)) {
+        g_task_return_error (task, g_steal_pointer (&error));
+        g_object_unref (task);
+        return;
+    }
+
+    /* Go on to next step */
+    ctx->step++;
+    internal_setup_data_format_context_step (task);
+}
+
+static void
+dpm_open_port (GTask *task)
+{
+    MMPortQmi                                          *self;
+    InternalSetupDataFormatContext                     *ctx;
+    QmiMessageDpmOpenPortInputHardwareDataPortsElement  hw_port;
+    g_autoptr(GArray)                                   hw_data_ports = NULL;
+    g_autoptr(QmiMessageDpmOpenPortInput)               input = NULL;
+    g_autofree gchar *tx_sysfs_path = NULL;
+    g_autofree gchar *rx_sysfs_path = NULL;
+    g_autofree gchar *tx_sysfs_str = NULL;
+    g_autofree gchar *rx_sysfs_str = NULL;
+    guint tx_id = 0;
+    guint rx_id = 0;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    tx_sysfs_path = g_build_filename (self->priv->net_sysfs_path, "device", "modem", "tx_endpoint_id", NULL);
+    rx_sysfs_path = g_build_filename (self->priv->net_sysfs_path, "device", "modem", "rx_endpoint_id", NULL);
+
+    if (g_file_get_contents (rx_sysfs_path, &rx_sysfs_str, NULL, NULL) &&
+        g_file_get_contents (tx_sysfs_path, &tx_sysfs_str, NULL, NULL)) {
+        if (rx_sysfs_str && tx_sysfs_str) {
+            mm_get_uint_from_str (rx_sysfs_str, &rx_id);
+            mm_get_uint_from_str (tx_sysfs_str, &tx_id);
+        }
+    }
+
+    if (tx_id == 0 || rx_id == 0) {
+        mm_obj_warn (self, "Unable to read TX and RX endpoint IDs from sysfs. skipping automatic DPM port opening.");
+
+        /* Go on to next step */
+        ctx->step++;
+        internal_setup_data_format_context_step (task);
+        return;
+    }
+
+    mm_obj_dbg (self, "Opening DPM port with TX ID: %u and RX ID: %u", tx_id, rx_id);
+
+    /* The modem TX endpoint connects with the IPA's RX port and the modem RX endpoint connects with the IPA's TX port. */
+    hw_port.rx_endpoint_number = tx_id;
+    hw_port.tx_endpoint_number = rx_id;
+    hw_port.endpoint_type = self->priv->endpoint_type;
+    hw_port.interface_number = self->priv->endpoint_interface_number;
+    hw_data_ports = g_array_new (FALSE, FALSE, sizeof (QmiMessageDpmOpenPortInputHardwareDataPortsElement));
+    g_array_append_val (hw_data_ports, hw_port);
+
+    input = qmi_message_dpm_open_port_input_new ();
+    qmi_message_dpm_open_port_input_set_hardware_data_ports (input,
+                                                             hw_data_ports,
+                                                             NULL);
+    qmi_client_dpm_open_port (QMI_CLIENT_DPM (ctx->dpm),
+                              input,
+                              10,
+                              g_task_get_cancellable (task),
+                              (GAsyncReadyCallback) dpm_open_port_ready,
+                              task);
+}
+
+static void
+allocate_client_dpm_ready (QmiDevice    *device,
+                           GAsyncResult *res,
+                           GTask        *task)
+{
+    InternalSetupDataFormatContext *ctx;
+    GError                         *error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    ctx->dpm = qmi_device_allocate_client_finish (device, res, &error);
+    if (!ctx->dpm) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    /* Go on to next step */
+    ctx->step++;
+    internal_setup_data_format_context_step (task);
+}
+
+static void
 allocate_client_wda_ready (QmiDevice    *device,
                            GAsyncResult *res,
                            GTask        *task)
@@ -1611,6 +1737,18 @@ internal_setup_data_format_context_step (GTask *task)
             ctx->step++;
             /* Fall through */
 
+        case INTERNAL_SETUP_DATA_FORMAT_STEP_ALLOCATE_WDA_CLIENT:
+            /* Allocate new WDA client, only on first loop iteration */
+            g_assert (!ctx->wda);
+            qmi_device_allocate_client (ctx->device,
+                                        QMI_SERVICE_WDA,
+                                        QMI_CID_NONE,
+                                        10,
+                                        g_task_get_cancellable (task),
+                                        (GAsyncReadyCallback) allocate_client_wda_ready,
+                                        task);
+            return;
+
         case INTERNAL_SETUP_DATA_FORMAT_STEP_SUPPORTED_KERNEL_DATA_MODES:
             /* Load kernel data format capabilities, only on first loop iteration */
             ctx->kernel_data_modes_supported = load_supported_kernel_data_modes (self, ctx->device);
@@ -1628,17 +1766,26 @@ internal_setup_data_format_context_step (GTask *task)
             ctx->step++;
             /* Fall through */
 
-        case INTERNAL_SETUP_DATA_FORMAT_STEP_ALLOCATE_WDA_CLIENT:
-            /* Only allocate new WDA client on first loop */
-            if (ctx->data_format_combination_i < 0) {
-                g_assert (!ctx->wda);
+        case INTERNAL_SETUP_DATA_FORMAT_STEP_ALLOCATE_DPM_CLIENT:
+            /* Only allocate new DPM client on first loop */
+            if ((g_strcmp0 (self->priv->net_driver, "ipa") == 0) && (ctx->data_format_combination_i < 0)) {
+                g_assert (!ctx->dpm);
                 qmi_device_allocate_client (ctx->device,
-                                            QMI_SERVICE_WDA,
+                                            QMI_SERVICE_DPM,
                                             QMI_CID_NONE,
                                             10,
                                             g_task_get_cancellable (task),
-                                            (GAsyncReadyCallback) allocate_client_wda_ready,
+                                            (GAsyncReadyCallback) allocate_client_dpm_ready,
                                             task);
+                return;
+            }
+            ctx->step++;
+            /* Fall through */
+
+        case INTERNAL_SETUP_DATA_FORMAT_STEP_DPM_OPEN:
+            /* Only for IPA based setups, open dpm port */
+            if (g_strcmp0 (self->priv->net_driver, "ipa") == 0) {
+                dpm_open_port (task);
                 return;
             }
             ctx->step++;
@@ -1918,7 +2065,8 @@ mm_port_qmi_setup_data_format (MMPortQmi                      *self,
     }
 
     if ((action == MM_PORT_QMI_SETUP_DATA_FORMAT_ACTION_SET_DEFAULT) &&
-        (!(self->priv->kernel_data_modes & (MM_PORT_QMI_KERNEL_DATA_MODE_MUX_RMNET | MM_PORT_QMI_KERNEL_DATA_MODE_MUX_QMIWWAN))) &&
+        (((self->priv->kernel_data_modes & MM_PORT_QMI_KERNEL_DATA_MODE_RAW_IP) && (self->priv->llp == QMI_WDA_LINK_LAYER_PROTOCOL_RAW_IP)) ||
+         ((self->priv->kernel_data_modes & MM_PORT_QMI_KERNEL_DATA_MODE_802_3)  && (self->priv->llp == QMI_WDA_LINK_LAYER_PROTOCOL_802_3))) &&
         !MM_PORT_QMI_DAP_IS_SUPPORTED_QMAP (self->priv->dap)) {
         mm_obj_dbg (self, "multiplex support already disabled when setting up data format");
         g_task_return_boolean (task, TRUE);
@@ -1975,6 +2123,7 @@ typedef struct {
     PortOpenStep             step;
     gboolean                 set_data_format;
     MMPortQmiKernelDataMode  kernel_data_modes;
+    gboolean                 ctl_raw_ip_unsupported;
 } PortOpenContext;
 
 static void
@@ -2031,13 +2180,29 @@ qmi_device_open_second_ready (QmiDevice    *qmi_device,
                               GAsyncResult *res,
                               GTask        *task)
 {
-    MMPortQmi       *self;
-    PortOpenContext *ctx;
+    MMPortQmi         *self;
+    PortOpenContext   *ctx;
+    g_autoptr(GError)  error = NULL;
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
 
-    if (qmi_device_open_finish (qmi_device, res, &ctx->error)) {
+    if (!qmi_device_open_finish (qmi_device, res, &error)) {
+        /* Not all devices support raw-ip, which is the first thing we try
+         * by default. Detect this case, and retry with 802.3 if so. */
+        if ((g_strcmp0 (self->priv->net_driver, "qmi_wwan") == 0) &&
+            g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_INVALID_DATA_FORMAT) &&
+            (ctx->kernel_data_modes & MM_PORT_QMI_KERNEL_DATA_MODE_RAW_IP)) {
+            /* switch to 802.3 right away, so that the logic can successfully go on after that */
+            qmi_device_set_expected_data_format (qmi_device, QMI_DEVICE_EXPECTED_DATA_FORMAT_802_3, NULL);
+            ctx->ctl_raw_ip_unsupported = TRUE;
+            port_open_step (task);
+            return;
+        }
+
+        /* Otherwise, fatal */
+        ctx->error = g_steal_pointer (&error);
+    } else {
         /* If the open with CTL data format is sucessful, update all settings
          * that we would have received with the internal setup data format
          * process */
@@ -2215,7 +2380,7 @@ port_open_step (GTask *task)
         }
 
     case PORT_OPEN_STEP_OPEN_WITHOUT_DATA_FORMAT:
-        if (!self->priv->wda_unsupported) {
+        if (!self->priv->wda_unsupported || !ctx->set_data_format) {
             QmiDeviceOpenFlags  open_flags;
             g_autofree gchar   *open_flags_str = NULL;
 
@@ -2272,15 +2437,22 @@ port_open_step (GTask *task)
 
         ctx->kernel_data_modes = load_current_kernel_data_modes (self, ctx->device);
 
+        /* Skip trying raw-ip if we already tried and it failed */
+        if (ctx->ctl_raw_ip_unsupported)
+            ctx->kernel_data_modes &= ~MM_PORT_QMI_KERNEL_DATA_MODE_RAW_IP;
+
         /* Need to reopen setting 802.3/raw-ip using CTL */
         if (ctx->kernel_data_modes & MM_PORT_QMI_KERNEL_DATA_MODE_RAW_IP)
             open_flags |= QMI_DEVICE_OPEN_FLAGS_NET_RAW_IP;
         else if (ctx->kernel_data_modes & MM_PORT_QMI_KERNEL_DATA_MODE_802_3)
             open_flags |= QMI_DEVICE_OPEN_FLAGS_NET_802_3;
         else {
-            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                                     "Unexpected kernel data mode: cannot setup using CTL");
-            g_object_unref (task);
+            /* Set error and jump to last step, so that we cleanly close the device
+             * in case we need to reopen it right away */
+            ctx->error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                      "Unexpected kernel data mode: cannot setup using CTL");
+            ctx->step = PORT_OPEN_STEP_LAST;
+            port_open_step (task);
             return;
         }
 
@@ -2368,6 +2540,17 @@ mm_port_qmi_set_net_driver (MMPortQmi   *self,
     g_assert (MM_IS_PORT_QMI (self));
     g_assert (!self->priv->net_driver);
     self->priv->net_driver = g_strdup (net_driver);
+}
+
+/*****************************************************************************/
+
+void
+mm_port_qmi_set_net_sysfs_path (MMPortQmi   *self,
+                                const gchar *net_sysfs_path)
+{
+    g_assert (MM_IS_PORT_QMI (self));
+    g_assert (!self->priv->net_sysfs_path);
+    self->priv->net_sysfs_path = g_strdup (net_sysfs_path);
 }
 
 /*****************************************************************************/
@@ -2589,6 +2772,7 @@ dispose (GObject *object)
     g_clear_object (&self->priv->qmi_device);
 
     g_clear_pointer (&self->priv->net_driver, g_free);
+    g_clear_pointer (&self->priv->net_sysfs_path, g_free);
 
     G_OBJECT_CLASS (mm_port_qmi_parent_class)->dispose (object);
 }

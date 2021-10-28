@@ -30,7 +30,7 @@
 
 #include "mm-context.h"
 #include "mm-base-modem.h"
-#if defined WITH_QMI && QMI_QRTR_SUPPORTED
+#if defined WITH_QRTR
 #include "mm-kernel-device-qrtr.h"
 #endif
 
@@ -617,6 +617,56 @@ mm_base_modem_wait_link_port (MMBaseModem         *self,
 
     mm_obj_dbg (self, "waiting for port '%s/%s'...", subsystem, name);
 }
+
+/******************************************************************************/
+
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+gboolean
+mm_base_modem_sync_finish (MMBaseModem   *self,
+                           GAsyncResult  *res,
+                           GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+sync_ready (MMBaseModem  *self,
+            GAsyncResult *res,
+            GTask        *task)
+{
+    g_autoptr(GError) error = NULL;
+
+    if (!MM_BASE_MODEM_GET_CLASS (self)->sync_finish (self, res, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+void
+mm_base_modem_sync (MMBaseModem         *self,
+                    GAsyncReadyCallback  callback,
+                    gpointer             user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    if (!MM_BASE_MODEM_GET_CLASS (self)->sync ||
+        !MM_BASE_MODEM_GET_CLASS (self)->sync_finish) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "Suspend/resume quick synchronization unsupported");
+        g_object_unref (task);
+        return;
+    }
+
+    MM_BASE_MODEM_GET_CLASS (self)->sync (self,
+                                          (GAsyncReadyCallback) sync_ready,
+                                          task);
+}
+
+#endif /* WITH_SYSTEMD_SUSPEND_RESUME */
 
 /******************************************************************************/
 
@@ -1501,6 +1551,11 @@ mm_base_modem_organize_ports (MMBaseModem *self,
         g_list_foreach (qmi,
                         (GFunc)mm_port_qmi_set_net_driver,
                         (gpointer) mm_kernel_device_get_driver (
+                            mm_port_peek_kernel_device (
+                                MM_PORT (self->priv->data->data))));
+        g_list_foreach (qmi,
+                        (GFunc)mm_port_qmi_set_net_sysfs_path,
+                        (gpointer) mm_kernel_device_get_sysfs_path (
                             mm_port_peek_kernel_device (
                                 MM_PORT (self->priv->data->data))));
         g_list_foreach (qmi, (GFunc)g_object_ref, NULL);

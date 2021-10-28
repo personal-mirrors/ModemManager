@@ -145,7 +145,7 @@ uim_get_card_status_ready (QmiClientUim *client,
     output = qmi_client_uim_get_card_status_finish (client, res, &error);
     if (!output ||
         !qmi_message_uim_get_card_status_output_get_result (output, &error) ||
-        (!mm_qmi_uim_get_card_status_output_parse (self, output, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &error) &&
+        (!mm_qmi_uim_get_card_status_output_parse (self, output, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &error) &&
          (g_error_matches (error, MM_MOBILE_EQUIPMENT_ERROR, MM_MOBILE_EQUIPMENT_ERROR_SIM_NOT_INSERTED) ||
           g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_RETRY)))) {
         mm_obj_dbg (self, "sim not yet considered ready... retrying");
@@ -336,7 +336,7 @@ uim_get_iccid_ready (QmiClientUim *client,
 {
     GError *error = NULL;
     GArray *read_result;
-    gchar *raw_iccid;
+    g_autofree gchar *raw_iccid = NULL;
     gchar *iccid;
 
     read_result = uim_read_finish (client, res, &error);
@@ -1016,10 +1016,10 @@ set_preferred_networks (MMBaseSim *self,
 
         operator_code = mm_sim_preferred_network_get_operator_code (preferred_network_list->data);
         act = mm_sim_preferred_network_get_access_technology (preferred_network_list->data);
-        if (mm_3gpp_parse_operator_id (operator_code, &preferred_nets_element.mcc, &preferred_nets_element.mnc, NULL)) {
+        if (mm_3gpp_parse_operator_id (operator_code, &preferred_nets_element.mcc, &preferred_nets_element.mnc,
+                                       &pcs_digit_element.includes_pcs_digit, NULL)) {
             pcs_digit_element.mcc = preferred_nets_element.mcc;
             pcs_digit_element.mnc = preferred_nets_element.mnc;
-            pcs_digit_element.includes_pcs_digit = strlen(operator_code) > 5;
 
             preferred_nets_element.radio_access_technology = QMI_NAS_PLMN_ACCESS_TECHNOLOGY_IDENTIFIER_UNSPECIFIED;
             if (act & MM_MODEM_ACCESS_TECHNOLOGY_GSM)

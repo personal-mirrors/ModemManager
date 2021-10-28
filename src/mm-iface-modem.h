@@ -270,6 +270,14 @@ struct _MMIfaceModem {
                                                GAsyncResult *res,
                                                GError **error);
 
+    /* Asynchronous FCC unlock operation */
+    void     (* fcc_unlock)        (MMIfaceModem         *self,
+                                    GAsyncReadyCallback   callback,
+                                    gpointer              user_data);
+    gboolean (* fcc_unlock_finish) (MMIfaceModem         *self,
+                                    GAsyncResult         *res,
+                                    GError              **error);
+
     /* Asynchronous modem power-up operation */
     void (*modem_power_up) (MMIfaceModem *self,
                             GAsyncReadyCallback callback,
@@ -474,6 +482,17 @@ void mm_iface_modem_shutdown (MMIfaceModem *self);
 gboolean mm_iface_modem_abort_invocation_if_state_not_reached (MMIfaceModem          *self,
                                                                GDBusMethodInvocation *invocation,
                                                                MMModemState           minimum_required);
+#if defined WITH_SYSTEMD_SUSPEND_RESUME
+
+/* Sync Modem interface (async) */
+void     mm_iface_modem_sync           (MMIfaceModem *self,
+                                        GAsyncReadyCallback callback,
+                                        gpointer user_data);
+gboolean mm_iface_modem_sync_finish    (MMIfaceModem *self,
+                                        GAsyncResult *res,
+                                        GError **error);
+
+#endif
 
 /* Allow setting power state */
 void     mm_iface_modem_set_power_state        (MMIfaceModem *self,
@@ -589,5 +608,9 @@ void     mm_iface_modem_check_for_sim_swap        (MMIfaceModem *self,
 gboolean mm_iface_modem_check_for_sim_swap_finish (MMIfaceModem *self,
                                                    GAsyncResult *res,
                                                    GError **error);
+
+void mm_iface_modem_modify_sim (MMIfaceModem *self,
+                                guint slot_index,
+                                MMBaseSim *new_sim);
 
 #endif /* MM_IFACE_MODEM_H */
