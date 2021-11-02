@@ -142,9 +142,11 @@ struct _MMBroadbandModemMbimPrivate {
     /* USSD helpers */
     GTask *pending_ussd_action;
 
-    /* Access technology updates */
+    /* Access technology and registration updates */
     MbimDataClass available_data_classes;
     MbimDataClass highest_available_data_class;
+    MbimRegisterState reg_state;
+    MbimPacketServiceState packet_service_state;
 
     MbimSubscriberReadyState last_ready_state;
 
@@ -3621,13 +3623,19 @@ update_access_technologies (MMBroadbandModemMbim *self)
 
 static void
 update_registration_info (MMBroadbandModemMbim *self,
-                          MbimRegisterState state,
-                          MbimDataClass available_data_classes,
-                          gchar *operator_id_take,
-                          gchar *operator_name_take)
+                          MbimRegisterState     state,
+                          MbimDataClass         available_data_classes,
+                          gchar                *operator_id_take,
+                          gchar                *operator_name_take)
 {
     MMModem3gppRegistrationState reg_state;
+    MMModem3gppRegistrationState reg_state_cs;
+    MMModem3gppRegistrationState reg_state_ps;
+    MMModem3gppRegistrationState reg_state_eps;
+    MMModem3gppRegistrationState reg_state_5gs;
     gboolean                     operator_updated = FALSE;
+
+    self->priv->reg_state = state;
 
     reg_state = mm_modem_3gpp_registration_state_from_mbim_register_state (state);
 
@@ -3659,9 +3667,30 @@ update_registration_info (MMBroadbandModemMbim *self,
         g_free (operator_name_take);
     }
 
-    mm_iface_modem_3gpp_update_ps_registration_state (
-        MM_IFACE_MODEM_3GPP (self),
-        reg_state);
+    reg_state_cs = MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+    reg_state_ps = MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+    reg_state_eps = MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+    reg_state_5gs = MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+
+    if (available_data_classes & (MBIM_DATA_CLASS_GPRS  | MBIM_DATA_CLASS_EDGE  |
+                                  MBIM_DATA_CLASS_UMTS  | MBIM_DATA_CLASS_HSDPA | MBIM_DATA_CLASS_HSUPA)) {
+        reg_state_cs = reg_state;
+        if (self->priv->packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHED)
+            reg_state_ps = reg_state;
+    }
+
+    if (available_data_classes & (MBIM_DATA_CLASS_LTE))
+        reg_state_eps = reg_state;
+
+    if (available_data_classes & (MBIM_DATA_CLASS_5G_NSA | MBIM_DATA_CLASS_5G_SA))
+        reg_state_5gs = reg_state;
+
+    mm_iface_modem_3gpp_update_cs_registration_state (MM_IFACE_MODEM_3GPP (self), reg_state_cs);
+    mm_iface_modem_3gpp_update_ps_registration_state (MM_IFACE_MODEM_3GPP (self), reg_state_ps);
+    if (mm_iface_modem_is_3gpp_lte (MM_IFACE_MODEM (self)))
+        mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self), reg_state_eps);
+    if (mm_iface_modem_is_3gpp_5gnr (MM_IFACE_MODEM (self)))
+        mm_iface_modem_3gpp_update_5gs_registration_state (MM_IFACE_MODEM_3GPP (self), reg_state_5gs);
 
     self->priv->available_data_classes = available_data_classes;
     update_access_technologies (self);
@@ -3899,8 +3928,16 @@ basic_connect_notification_packet_service (MMBroadbandModemMbim *self,
     } else if (packet_service_state == MBIM_PACKET_SERVICE_STATE_DETACHED) {
         self->priv->highest_available_data_class = 0;
     }
-
     update_access_technologies (self);
+
+    if (self->priv->packet_service_state != packet_service_state) {
+        self->priv->packet_service_state = packet_service_state;
+        update_registration_info (self,
+                                  self->priv->reg_state,
+                                  self->priv->available_data_classes,
+                                  NULL,
+                                  NULL);
+    }
 }
 
 static void
@@ -7659,6 +7696,122 @@ set_primary_sim_slot (MMIfaceModem       *self,
 }
 
 /*****************************************************************************/
+/* Set packet service state (3GPP interface)  */
+
+static gboolean
+set_packet_service_state_finish (MMIfaceModem3gpp  *self,
+                                 GAsyncResult      *res,
+                                 GError           **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+packet_service_set_ready (MbimDevice   *device,
+                          GAsyncResult *res,
+                          GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                 *error = NULL;
+    MbimPacketServiceState  requested_packet_service_state;
+    MbimPacketServiceState  packet_service_state;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        mbim_message_ms_basic_connect_v2_packet_service_response_parse (
+            response,
+            NULL, /* nw_error */
+            &packet_service_state,
+            NULL, /* data_class */
+            NULL, /* uplink_speed */
+            NULL, /* downlink_speed */
+            NULL, /* frequency_range */
+            &error);
+    } else {
+        mbim_message_packet_service_response_parse (
+            response,
+            NULL, /* nw_error */
+            &packet_service_state,
+            NULL, /* data_class */
+            NULL, /* uplink_speed */
+            NULL, /* downlink_speed */
+            &error);
+    }
+
+    if (error) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    requested_packet_service_state = GPOINTER_TO_UINT (g_task_get_task_data (task));
+
+    if (((requested_packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHED) &&
+         (packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHED || packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHING)) ||
+        ((requested_packet_service_state == MBIM_PACKET_SERVICE_STATE_DETACHED) &&
+         (packet_service_state == MBIM_PACKET_SERVICE_STATE_DETACHED || packet_service_state == MBIM_PACKET_SERVICE_STATE_DETACHING)))
+        g_task_return_boolean (task, TRUE);
+    else
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "Failed to request state %s, current state: %s",
+                                 mbim_packet_service_state_get_string (requested_packet_service_state),
+                                 mbim_packet_service_state_get_string (packet_service_state));
+    g_object_unref (task);
+}
+
+static void
+set_packet_service_state (MMIfaceModem3gpp              *self,
+                          MMModem3gppPacketServiceState  packet_service_state,
+                          GAsyncReadyCallback            callback,
+                          gpointer                       user_data)
+{
+    g_autoptr(MbimMessage)   message = NULL;
+    MbimDevice              *device;
+    GTask                   *task;
+    MbimPacketServiceAction  packet_service_action;
+    MbimPacketServiceState   requested_packet_service_state;
+
+    g_assert ((packet_service_state == MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED) ||
+              (packet_service_state == MM_MODEM_3GPP_PACKET_SERVICE_STATE_DETACHED));
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    switch (packet_service_state) {
+    case MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED:
+        packet_service_action = MBIM_PACKET_SERVICE_ACTION_ATTACH;
+        requested_packet_service_state = MBIM_PACKET_SERVICE_STATE_ATTACHED;
+        break;
+    case MM_MODEM_3GPP_PACKET_SERVICE_STATE_DETACHED:
+        packet_service_action = MBIM_PACKET_SERVICE_ACTION_DETACH;
+        requested_packet_service_state = MBIM_PACKET_SERVICE_STATE_DETACHED;
+        break;
+    case MM_MODEM_3GPP_PACKET_SERVICE_STATE_UNKNOWN:
+    default:
+        g_assert_not_reached ();
+    }
+
+    g_task_set_task_data (task, GUINT_TO_POINTER (requested_packet_service_state), NULL);
+
+    message = mbim_message_packet_service_set_new (packet_service_action, NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)packet_service_set_ready,
+                         task);
+}
+
+
+/*****************************************************************************/
 
 MMBroadbandModemMbim *
 mm_broadband_modem_mbim_new (const gchar *device,
@@ -7689,6 +7842,7 @@ mm_broadband_modem_mbim_init (MMBroadbandModemMbim *self)
     self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self,
                                               MM_TYPE_BROADBAND_MODEM_MBIM,
                                               MMBroadbandModemMbimPrivate);
+    self->priv->packet_service_state = MBIM_PACKET_SERVICE_STATE_UNKNOWN;
 }
 
 static void
@@ -7875,6 +8029,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->scan_networks_finish = modem_3gpp_scan_networks_finish;
     iface->disable_facility_lock = modem_3gpp_disable_facility_lock;
     iface->disable_facility_lock_finish = modem_3gpp_disable_facility_lock_finish;
+    iface->set_packet_service_state = set_packet_service_state;
+    iface->set_packet_service_state_finish = set_packet_service_state_finish;
 }
 
 static void
