@@ -107,6 +107,8 @@ mm_object_peek_modem_signal
 mm_object_get_modem_signal
 mm_object_peek_modem_voice
 mm_object_get_modem_voice
+mm_object_peek_modem_sar
+mm_object_get_modem_sar
 <SUBSECTION Standard>
 MMObjectClass
 MM_IS_OBJECT
@@ -1224,6 +1226,7 @@ mm_bearer_ip_config_get_type
 MMBearerStats
 <SUBSECTION Getters>
 mm_bearer_stats_get_duration
+mm_bearer_stats_get_start_date
 mm_bearer_stats_get_rx_bytes
 mm_bearer_stats_get_tx_bytes
 mm_bearer_stats_get_attempts
@@ -1238,6 +1241,7 @@ mm_bearer_stats_get_dictionary
 mm_bearer_stats_new
 mm_bearer_stats_new_from_dictionary
 mm_bearer_stats_set_duration
+mm_bearer_stats_set_start_date
 mm_bearer_stats_set_rx_bytes
 mm_bearer_stats_set_tx_bytes
 mm_bearer_stats_set_attempts
@@ -3131,6 +3135,8 @@ MmGdbusModemSignal
 MmGdbusModemSignalIface
 <SUBSECTION Getters>
 mm_gdbus_modem_signal_get_rate
+mm_gdbus_modem_signal_get_error_rate_threshold
+mm_gdbus_modem_signal_get_rssi_threshold
 mm_gdbus_modem_signal_get_cdma
 mm_gdbus_modem_signal_get_evdo
 mm_gdbus_modem_signal_get_gsm
@@ -3147,6 +3153,9 @@ mm_gdbus_modem_signal_dup_nr5g
 mm_gdbus_modem_signal_call_setup
 mm_gdbus_modem_signal_call_setup_finish
 mm_gdbus_modem_signal_call_setup_sync
+mm_gdbus_modem_signal_call_setup_thresholds
+mm_gdbus_modem_signal_call_setup_thresholds_finish
+mm_gdbus_modem_signal_call_setup_thresholds_sync
 <SUBSECTION Private>
 mm_gdbus_modem_signal_set_cdma
 mm_gdbus_modem_signal_set_evdo
@@ -3155,7 +3164,10 @@ mm_gdbus_modem_signal_set_lte
 mm_gdbus_modem_signal_set_nr5g
 mm_gdbus_modem_signal_set_rate
 mm_gdbus_modem_signal_set_umts
+mm_gdbus_modem_signal_set_error_rate_threshold
+mm_gdbus_modem_signal_set_rssi_threshold
 mm_gdbus_modem_signal_complete_setup
+mm_gdbus_modem_signal_complete_setup_thresholds
 mm_gdbus_modem_signal_interface_info
 mm_gdbus_modem_signal_override_properties
 <SUBSECTION Standard>
