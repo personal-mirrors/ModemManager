@@ -1693,4 +1693,22 @@ typedef enum { /*< underscore_name=mm_modem_3gpp_drx_cycle >*/
     MM_MODEM_3GPP_DRX_CYCLE_256         = 5,
 } MMModem3gppDrxCycle;
 
+/**
+ * MMModem3gppNetworkSliceRejectionCause:
+ * @MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNKNOWN:
+ * @MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNAVAILABLE_IN_PLMN:
+ * @MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNAVAILABLE_IN_REGISTRATION_AREA:
+ *
+ * Cause for rejection of a given S-NSSAI.
+ *
+ * This is a 5G-specific registration status.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_modem_3gpp_network_slice_rejection_cause >*/
+    MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNKNOWN,
+    MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNAVAILABLE_IN_PLMN,
+    MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNAVAILABLE_IN_REGISTRATION_AREA,
+} MMModem3gppNetworkSliceRejectionCause;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */
