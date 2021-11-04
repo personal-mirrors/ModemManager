@@ -382,6 +382,15 @@
 	      representing the Registration Area Allocation Indication (RAAI),
               given as an unsigned integer (signature <literal>"u"</literal>).
             </para>
+          </listitem
+        </varlistentry>
+        <varlistentry><term>"drx-cycle"</term>
+          <listitem>
+            <para>
+              A <link linkend="MMModem3gppDrxCycle">MMModem3gppDrxCycle</link> value
+	      representing the DRX settings negotiated with the network, given as an
+	      unsigned integer (signature <literal>"u"</literal>).
+            </para>
           </listitem>
         </varlistentry>
         </variablelist>
