@@ -1629,4 +1629,24 @@ typedef enum { /*< underscore_name=mm_modem_3gpp_packet_service_state >*/
     MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED = 2,
 } MMModem3gppPacketServiceState;
 
+/**
+ * MMModem3gppMicoMode:
+ * @MM_MODEM_3GPP_MICO_MODE_UNKNOWN: Unknown or not specified.
+ * @MM_MODEM_3GPP_MICO_MODE_UNSUPPORTED: Unsupported.
+ * @MM_MODEM_3GPP_MICO_MODE_DISABLED: Disabled.
+ * @MM_MODEM_3GPP_MICO_MODE_ENABLED: Enabled.
+ *
+ * Mobile Initiated Connection Only (MICO) mode.
+ *
+ * This is a 5G-specific registration setting.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_modem_3gpp_mico_mode >*/
+    MM_MODEM_3GPP_MICO_MODE_UNKNOWN     = 0,
+    MM_MODEM_3GPP_MICO_MODE_UNSUPPORTED = 1,
+    MM_MODEM_3GPP_MICO_MODE_DISABLED    = 2,
+    MM_MODEM_3GPP_MICO_MODE_ENABLED     = 3,
+} MMModem3gppMicoMode;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */
