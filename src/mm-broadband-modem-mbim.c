@@ -881,7 +881,7 @@ modem_load_device_identifier (MMIfaceModem *self,
 
     task = g_task_new (self, NULL, callback, user_data);
 
-    /* Just use dummy ATI/ATI1 replies, all the other internal info should be
+    /* Just use placeholder ATI/ATI1 replies, all the other internal info should be
      * enough for uniqueness */
     device_identifier = mm_broadband_modem_create_device_identifier (MM_BROADBAND_MODEM (self), "", "", &error);
     if (!device_identifier)
@@ -2202,7 +2202,7 @@ modem_create_bearer (MMIfaceModem        *self,
 
     /* Note: the session id to be used by the bearer will always be 0
      * for non-multiplexed sessions, bound to the non-VLAN-tagged traffic
-     * managed by the master network interface */
+     * managed by the main network interface */
 
     task = g_task_new (self, NULL, callback, user_data);
     mm_obj_dbg (self, "creating MBIM bearer in MBIM modem");
