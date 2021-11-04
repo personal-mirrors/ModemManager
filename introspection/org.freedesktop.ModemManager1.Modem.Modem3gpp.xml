@@ -358,5 +358,28 @@
     -->
     <property name="Nr5gRegistrationSettings" type="a{sv}" access="read" />
 
+    <!--
+        Nr5gRegistrationStatus:
+
+        5G specific registration status.
+
+        This is a read-only property containing values reported by the network.
+
+        <variablelist>
+        <varlistentry><term>"mico-raai"</term>
+          <listitem>
+            <para>
+              A <link linkend="MMModem3gppMicoRaai">MMModem3gppMicoRaai</link> value
+	      representing the Registration Area Allocation Indication (RAAI),
+              given as an unsigned integer (signature <literal>"u"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        </variablelist>
+
+        Since: 1.20
+    -->
+    <property name="Nr5gRegistrationStatus" type="a{sv}" access="read" />
+
   </interface>
 </node>

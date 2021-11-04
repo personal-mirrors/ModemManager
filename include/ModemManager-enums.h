@@ -1649,4 +1649,24 @@ typedef enum { /*< underscore_name=mm_modem_3gpp_mico_mode >*/
     MM_MODEM_3GPP_MICO_MODE_ENABLED     = 3,
 } MMModem3gppMicoMode;
 
+/**
+ * MMModem3gppMicoRaai:
+ * @MM_MODEM_3GPP_MICO_RAAI_UNKNOWN: Unknown or not specified.
+ * @MM_MODEM_3GPP_MICO_RAAI_NOT_ALLOCATED: Registration area not allocated.
+ * @MM_MODEM_3GPP_MICO_RAAI_ALLOCATED: Registration area allocated.
+ *
+ * Registration Area Allocation Indication reported by the network
+ * when MICO mode is allowed by the network, see 3GPP TS 24.501 section
+ * 9.11.3.31.
+ *
+ * This is a 5G-specific registration status.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_modem_3gpp_mico_raai >*/
+    MM_MODEM_3GPP_MICO_RAAI_UNKNOWN       = 0,
+    MM_MODEM_3GPP_MICO_RAAI_NOT_ALLOCATED = 1,
+    MM_MODEM_3GPP_MICO_RAAI_ALLOCATED     = 2,
+} MMModem3gppMicoRaai;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */
