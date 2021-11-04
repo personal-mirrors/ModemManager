@@ -1629,4 +1629,21 @@ typedef enum { /*< underscore_name=mm_modem_3gpp_packet_service_state >*/
     MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED = 2,
 } MMModem3gppPacketServiceState;
 
+/**
+ * MMBearerAccessTypePreference:
+ * @MM_BEARER_ACCESS_TYPE_PREFERENCE_NONE: No access type preference, or unknown.
+ * @MM_BEARER_ACCESS_TYPE_PREFERENCE_3GPP_ONLY: 3GPP access type only.
+ * @MM_BEARER_ACCESS_TYPE_PREFERENCE_3GPP_PREFERRED: 3GPP access type preferred.
+ *
+ * Preference of access type to the 5G network, such as 3GPP (NR, E-UTRA),
+ * non-3GPP (untrusted WiFi, trusted WiFi, wireline) or others.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_bearer_access_type_preference >*/
+    MM_BEARER_ACCESS_TYPE_PREFERENCE_NONE           = 0,
+    MM_BEARER_ACCESS_TYPE_PREFERENCE_3GPP_ONLY      = 1,
+    MM_BEARER_ACCESS_TYPE_PREFERENCE_3GPP_PREFERRED = 2,
+} MMBearerAccessTypePreference;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */

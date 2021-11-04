@@ -520,6 +520,18 @@
           </varlistentry>
         </variablelist>
 
+        The following settings apply to 3GPP 5G-capable devices:
+
+        <variablelist>
+          <varlistentry><term><literal>"access-type-preference"</literal></term>
+            <listitem><para>
+              Access type preference, given as a
+              <link linkend="MMBearerAccessTypePreference">MMBearerAccessTypePreference</link>
+              value (signature <literal>"u"</literal>. Since 1.20.
+            </para></listitem>
+          </varlistentry>
+        </variablelist>
+
         The following settings are no longer supported, but they are kept on the
         interface for compatibility purposes:
 
