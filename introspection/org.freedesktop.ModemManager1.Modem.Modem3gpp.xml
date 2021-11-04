@@ -423,6 +423,20 @@
             </para>
           </listitem>
         </varlistentry>
+        <varlistentry><term>"allowed-nssai"</term>
+          <listitem>
+            <para>
+              The allowed NSSAI that can be used in the current registration area,
+              given as an array of S-NSSAI elements (signature <literal>"a(ay)"</literal>).
+              See 3GPP TS 23.501.
+
+              Each S-NSSAI is defined as an array of bytes encoded as per
+              3GPP TS 24.501 section 9.11.2.8, but without the initial IEI octet
+              (i.e. the first byte in the array specifies already the length of
+              the S-NSSAI contents).
+            </para>
+          </listitem>
+        </varlistentry>
         </variablelist>
 
         Since: 1.20
