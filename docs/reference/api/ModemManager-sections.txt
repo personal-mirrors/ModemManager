@@ -29,6 +29,7 @@ MMModem3gppEpsUeModeOperation
 MMModem3gppPacketServiceState
 MMModem3gppMicoMode
 MMModem3gppMicoRaai
+MMModem3gppDrxCycle
 MMModemAccessTechnology
 MMModemBand
 MMModemCapability
