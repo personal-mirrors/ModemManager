@@ -84,14 +84,14 @@ void mm_3gpp_profile_set_ip_type      (MM3gppProfile       *self,
 void mm_3gpp_profile_set_apn_type     (MM3gppProfile       *self,
                                        MMBearerApnType      apn_type);
 
-gint                 mm_3gpp_profile_get_profile_id   (MM3gppProfile *self);
-const gchar         *mm_3gpp_profile_get_profile_name (MM3gppProfile *self);
-const gchar         *mm_3gpp_profile_get_apn          (MM3gppProfile *self);
-MMBearerAllowedAuth  mm_3gpp_profile_get_allowed_auth (MM3gppProfile *self);
-const gchar         *mm_3gpp_profile_get_user         (MM3gppProfile *self);
-const gchar         *mm_3gpp_profile_get_password     (MM3gppProfile *self);
-MMBearerIpFamily     mm_3gpp_profile_get_ip_type      (MM3gppProfile *self);
-MMBearerApnType      mm_3gpp_profile_get_apn_type     (MM3gppProfile *self);
+gint                 mm_3gpp_profile_get_profile_id   (const MM3gppProfile *self);
+const gchar         *mm_3gpp_profile_get_profile_name (const MM3gppProfile *self);
+const gchar         *mm_3gpp_profile_get_apn          (const MM3gppProfile *self);
+MMBearerAllowedAuth  mm_3gpp_profile_get_allowed_auth (const MM3gppProfile *self);
+const gchar         *mm_3gpp_profile_get_user         (const MM3gppProfile *self);
+const gchar         *mm_3gpp_profile_get_password     (const MM3gppProfile *self);
+MMBearerIpFamily     mm_3gpp_profile_get_ip_type      (const MM3gppProfile *self);
+MMBearerApnType      mm_3gpp_profile_get_apn_type     (const MM3gppProfile *self);
 
 /*****************************************************************************/
 /* ModemManager/libmm-glib/mmcli specific methods */
@@ -123,8 +123,8 @@ typedef enum {
     MM_3GPP_PROFILE_CMP_FLAGS_NO_IP_TYPE      = 1 << 5,
 } MM3gppProfileCmpFlags;
 
-gboolean mm_3gpp_profile_cmp (MM3gppProfile         *a,
-                              MM3gppProfile         *b,
+gboolean mm_3gpp_profile_cmp (const MM3gppProfile   *a,
+                              const MM3gppProfile   *b,
                               GEqualFunc             cmp_apn,
                               MM3gppProfileCmpFlags  flags);
 
