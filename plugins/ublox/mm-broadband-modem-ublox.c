@@ -26,6 +26,7 @@
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-3gpp.h"
 #include "mm-iface-modem-voice.h"
+#include "mm-iface-modem-3gpp-profile-manager.h"
 #include "mm-base-modem-at.h"
 #include "mm-broadband-bearer.h"
 #include "mm-broadband-modem-ublox.h"
@@ -37,16 +38,19 @@
 static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_voice_init (MMIfaceModemVoice *iface);
 static void iface_modem_3gpp_init(MMIfaceModem3gpp * iface);
+static void iface_modem_3gpp_profile_manager_init (MMIfaceModem3gppProfileManager *iface);
 
 
 static MMIfaceModemVoice *iface_modem_voice_parent;
 static MMIfaceModem3gpp * iface_modem_3gpp_parent;
+static MMIfaceModem3gppProfileManager *iface_modem_3gpp_profile_manager_parent;
 
 
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemUblox, mm_broadband_modem_ublox, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP_PROFILE_MANAGER, iface_modem_3gpp_profile_manager_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_VOICE, iface_modem_voice_init))
 
 
@@ -1802,6 +1806,90 @@ setup_ports (MMBroadbandModem *_self)
     }
 }
 
+
+
+
+typedef struct {
+    GList *profiles;
+} ListProfilesContext;
+
+static void
+list_profiles_context_free (ListProfilesContext *ctx)
+{
+    mm_3gpp_profile_list_free (ctx->profiles);
+    g_slice_free (ListProfilesContext, ctx);
+}
+
+static gboolean
+modem_3gpp_profile_manager_list_profiles_finish (MMIfaceModem3gppProfileManager  *self,
+                                                 GAsyncResult                    *res,
+                                                 GList                          **out_profiles,
+                                                 GError                         **error)
+{
+    ListProfilesContext *ctx;
+
+    if (!g_task_propagate_boolean (G_TASK (res), error))
+        return FALSE;
+
+    ctx = g_task_get_task_data (G_TASK (res));
+    if (out_profiles)
+        *out_profiles = g_steal_pointer (&ctx->profiles);
+    return TRUE;
+}
+
+static gint
+cmp_prefer_default_EPS_cid (gconstpointer  a, gconstpointer  b) {
+    const MM3gppProfile *p2 = (const MM3gppProfile *) b;
+    (void) a;
+
+    return mm_3gpp_profile_get_profile_id (p2) == 4 ? 1 : -1;
+}
+
+
+static void
+profile_manager_parent_list_profiles_ready (MMIfaceModem3gppProfileManager *self,
+                                            GAsyncResult                   *res,
+                                            GTask                          *task)
+{
+    ListProfilesContext *ctx;
+    GError              *error = NULL;
+
+    ctx = g_slice_new0 (ListProfilesContext);
+    g_task_set_task_data (task, ctx, (GDestroyNotify) list_profiles_context_free);
+
+    if (!iface_modem_3gpp_profile_manager_parent->list_profiles_finish (self, res, &ctx->profiles, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (!ctx->profiles) {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx->profiles = g_list_sort(ctx->profiles, cmp_prefer_default_EPS_cid);
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_profile_manager_list_profiles (MMIfaceModem3gppProfileManager *self,
+                                          GAsyncReadyCallback             callback,
+                                          gpointer                        user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    iface_modem_3gpp_profile_manager_parent->list_profiles (
+        self,
+        (GAsyncReadyCallback)profile_manager_parent_list_profiles_ready,
+        task);
+}
+
 /*****************************************************************************/
 /* Common initial EPS bearer info loading for both:
  *   - runtime status
@@ -2330,6 +2418,15 @@ mm_broadband_modem_ublox_new (const gchar  *device,
                          MM_BASE_MODEM_DATA_NET_SUPPORTED, TRUE,
                          MM_BASE_MODEM_DATA_TTY_SUPPORTED, TRUE,
                          NULL);
+}
+
+static void
+iface_modem_3gpp_profile_manager_init (MMIfaceModem3gppProfileManager *iface)
+{
+    iface_modem_3gpp_profile_manager_parent = g_type_interface_peek_parent (iface);
+
+    iface->list_profiles = modem_3gpp_profile_manager_list_profiles;
+    iface->list_profiles_finish = modem_3gpp_profile_manager_list_profiles_finish;
 }
 
 static void
