@@ -90,6 +90,21 @@ gboolean mm_ublox_parse_uipaddr_response (const gchar  *response,
                                           gchar       **out_ipv6_link_local_address,
                                           GError      **error);
 
+
+
+GList *
+mm_ublox_parse_ucgdflt_test_response (const gchar       *response,
+                                      GError           **error);
+
+/*****************************************************************************/
+/* UCGDFLT? response parser */
+
+gboolean
+mm_ublox_parse_ucgdflt_response (const gchar       *response,
+                                 gchar            **out_apn,
+                                 MMBearerIpFamily  *ip_type,
+                                 GError           **error);
+
 /*****************************************************************************/
 /* CFUN? response parser */
 
