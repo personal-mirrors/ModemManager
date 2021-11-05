@@ -811,7 +811,8 @@ mm_bearer_properties_cmp (MMBearerProperties         *a,
         return FALSE;
     if (!cmp_allowed_auth (mm_3gpp_profile_get_allowed_auth (a->priv->profile), mm_3gpp_profile_get_allowed_auth (b->priv->profile), flags))
         return FALSE;
-    if (!cmp_str (mm_3gpp_profile_get_user (a->priv->profile), mm_3gpp_profile_get_user (b->priv->profile), flags))
+    if (!(flags & MM_BEARER_PROPERTIES_CMP_FLAGS_NO_USERNAME) &&
+        !cmp_str (mm_3gpp_profile_get_user (a->priv->profile), mm_3gpp_profile_get_user (b->priv->profile), flags))
         return FALSE;
     if (!(flags & MM_BEARER_PROPERTIES_CMP_FLAGS_NO_PASSWORD) &&
         !cmp_str (mm_3gpp_profile_get_password (a->priv->profile), mm_3gpp_profile_get_password (b->priv->profile), flags))
