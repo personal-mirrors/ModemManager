@@ -12,6 +12,7 @@
  *
  * Copyright (C) 2012-2018 Google, Inc.
  * Copyright (C) 2018 Aleksander Morgado <aleksander@aleksander.es>
+ * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <string.h>
@@ -351,10 +352,43 @@ dms_add_extended_qmi_lte_bands (GArray   *mm_bands,
     }
 }
 
+static void
+dms_add_qmi_nr5g_bands (GArray   *mm_bands,
+                        GArray   *qmi_bands,
+                        gpointer  log_object)
+{
+    guint i;
+
+    g_assert (mm_bands != NULL);
+
+    if (!qmi_bands)
+        return;
+
+    for (i = 0; i < qmi_bands->len; i++) {
+        guint16 val;
+
+        val = g_array_index (qmi_bands, guint16, i);
+
+        /* MM_MODEM_BAND_NGRAN_1 = 301,
+         * ...
+         * MM_MODEM_BAND_NGRAN_261 = 561
+         */
+        if (val < 1 || val > 261)
+            mm_obj_dbg (log_object, "unexpected NR5G band supported by module: NGRAN %u", val);
+        else {
+            MMModemBand band;
+
+            band = (MMModemBand)(val + MM_MODEM_BAND_NGRAN_1 - 1);
+            g_array_append_val (mm_bands, band);
+        }
+    }
+}
+
 GArray *
 mm_modem_bands_from_qmi_band_capabilities (QmiDmsBandCapability     qmi_bands,
                                            QmiDmsLteBandCapability  qmi_lte_bands,
                                            GArray                  *extended_qmi_lte_bands,
+                                           GArray                  *qmi_nr5g_bands,
                                            gpointer                 log_object)
 {
     GArray *mm_bands;
@@ -366,6 +400,9 @@ mm_modem_bands_from_qmi_band_capabilities (QmiDmsBandCapability     qmi_bands,
         dms_add_extended_qmi_lte_bands (mm_bands, extended_qmi_lte_bands, log_object);
     else
         dms_add_qmi_lte_bands (mm_bands, qmi_lte_bands);
+
+    if (qmi_nr5g_bands)
+        dms_add_qmi_nr5g_bands (mm_bands, qmi_nr5g_bands, log_object);
 
     return mm_bands;
 }
@@ -562,11 +599,50 @@ nas_add_extended_qmi_lte_bands (GArray        *mm_bands,
     }
 }
 
+static void
+nas_add_qmi_nr5g_bands (GArray        *mm_bands,
+                        const guint64 *qmi_nr5g_bands,
+                        guint          qmi_nr5g_bands_size,
+                        gpointer       log_object)
+{
+    guint i;
+
+    g_assert (mm_bands != NULL);
+
+    for (i = 0; i < qmi_nr5g_bands_size; i++) {
+        guint j;
+
+        for (j = 0; j < 64; j++) {
+            guint val;
+
+            if (!(qmi_nr5g_bands[i] & (((guint64) 1) << j)))
+                continue;
+
+            val = 1 + j + (i * 64);
+
+            /* MM_MODEM_BAND_NGRAN_1 = 301,
+             * ...
+             * MM_MODEM_BAND_NGRAN_261 = 561
+             */
+            if (val < 1 || val > 261)
+                mm_obj_dbg (log_object, "unexpected NR5G band supported by module: NGRAN %u", val);
+            else {
+                MMModemBand band;
+
+                band = (val + MM_MODEM_BAND_NGRAN_1 - 1);
+                g_array_append_val (mm_bands, band);
+            }
+        }
+    }
+}
+
 GArray *
 mm_modem_bands_from_qmi_band_preference (QmiNasBandPreference     qmi_bands,
                                          QmiNasLteBandPreference  qmi_lte_bands,
                                          const guint64           *extended_qmi_lte_bands,
                                          guint                    extended_qmi_lte_bands_size,
+                                         const guint64           *qmi_nr5g_bands,
+                                         guint                    qmi_nr5g_bands_size,
                                          gpointer                 log_object)
 {
     GArray *mm_bands;
@@ -579,6 +655,9 @@ mm_modem_bands_from_qmi_band_preference (QmiNasBandPreference     qmi_bands,
     else
         nas_add_qmi_lte_bands (mm_bands, qmi_lte_bands);
 
+    if (qmi_nr5g_bands && qmi_nr5g_bands_size)
+        nas_add_qmi_nr5g_bands (mm_bands, qmi_nr5g_bands, qmi_nr5g_bands_size, log_object);
+
     return mm_bands;
 }
 
@@ -588,6 +667,8 @@ mm_modem_bands_to_qmi_band_preference (GArray                  *mm_bands,
                                        QmiNasLteBandPreference *qmi_lte_bands,
                                        guint64                 *extended_qmi_lte_bands,
                                        guint                    extended_qmi_lte_bands_size,
+                                       guint64                 *qmi_nr5g_bands,
+                                       guint                    qmi_nr5g_bands_size,
                                        gpointer                 log_object)
 {
     guint i;
@@ -596,6 +677,8 @@ mm_modem_bands_to_qmi_band_preference (GArray                  *mm_bands,
     *qmi_lte_bands = 0;
     if (extended_qmi_lte_bands)
         memset (extended_qmi_lte_bands, 0, extended_qmi_lte_bands_size * sizeof (guint64));
+    if (qmi_nr5g_bands)
+        memset (qmi_nr5g_bands, 0, qmi_nr5g_bands_size * sizeof (guint64));
 
     for (i = 0; i < mm_bands->len; i++) {
         MMModemBand band;
@@ -631,6 +714,22 @@ mm_modem_bands_to_qmi_band_preference (GArray                  *mm_bands,
                 if (j == G_N_ELEMENTS (nas_lte_bands_map))
                     mm_obj_dbg (log_object, "cannot add the following LTE band: '%s'",
                                 mm_modem_band_get_string (band));
+            }
+        } else if (band >= MM_MODEM_BAND_NGRAN_1 && band <= MM_MODEM_BAND_NGRAN_261) {
+            if (qmi_nr5g_bands && qmi_nr5g_bands_size) {
+                /* Add NR5G band preference */
+                guint val;
+                guint j;
+                guint k;
+
+                /* it's really (band - MM_MODEM_BAND_NGRAN_1 +1 -1), because
+                 * we want NGRAN1 in index 0 */
+                val = band - MM_MODEM_BAND_NGRAN_1;
+                j = val / 64;
+                g_assert (j < qmi_nr5g_bands_size);
+                k = val % 64;
+
+                qmi_nr5g_bands[j] |= ((guint64)1 << k);
             }
         } else {
             /* Add non-LTE band preference */

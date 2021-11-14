@@ -12,6 +12,7 @@
  *
  * Copyright (C) 2012 Google Inc.
  * Copyright (C) 2014 Aleksander Morgado <aleksander@aleksander.es>
+ * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <config.h>
@@ -1293,6 +1294,13 @@ modem_load_supported_ip_families (MMIfaceModem *self,
 /*****************************************************************************/
 /* Load signal quality (Modem interface) */
 
+#define RSRP_MAX -44
+#define RSRP_MIN -140
+#define SNR_MAX 40
+#define SNR_MIN -23
+#define RSRQ_MAX 20
+#define RSRQ_MIN -43
+
 static gboolean
 qmi_dbm_valid (gint8 dbm, QmiNasRadioInterface radio_interface)
 {
@@ -1340,10 +1348,17 @@ common_signal_info_get_quality (MMBroadbandModemQmi *self,
                                 gint8 gsm_rssi,
                                 gint8 wcdma_rssi,
                                 gint8 lte_rssi,
+                                gint16 nr5g_rsrp,
+                                gint16 nr5g_snr,
+                                gint16 nr5g_rsrq,
                                 guint8 *out_quality,
                                 MMModemAccessTechnology *out_act)
 {
     gint8 rssi_max = -125;
+    gint8 signal_quality = -1;
+    /* Valid nr5g signal quality will be in percentage [0,100].
+     * It is minimum of (rsrp, snr, rsrq) signal quality for 5G. */
+    guint8 nr5g_signal_quality_min = 101;
     QmiNasRadioInterface signal_info_radio_interface = QMI_NAS_RADIO_INTERFACE_UNKNOWN;
 
     g_assert (out_quality != NULL);
@@ -1395,12 +1410,41 @@ common_signal_info_get_quality (MMBroadbandModemQmi *self,
         }
     }
 
+    if (nr5g_rsrp <= RSRP_MAX && nr5g_rsrp >= RSRP_MIN) {
+        mm_obj_dbg (self, "RSRP (5G): %d dBm", nr5g_rsrp);
+        nr5g_signal_quality_min = MIN (nr5g_signal_quality_min,
+                                       (guint8)((nr5g_rsrp - RSRP_MIN) * 100 / (RSRP_MAX - RSRP_MIN)));
+        signal_info_radio_interface = QMI_NAS_RADIO_INTERFACE_5GNR;
+    }
+
+    if (nr5g_snr <= SNR_MAX && nr5g_snr >= SNR_MIN) {
+        mm_obj_dbg (self, "SNR (5G): %d dB", nr5g_snr);
+        nr5g_signal_quality_min = MIN (nr5g_signal_quality_min,
+                                       (guint8)((nr5g_snr - SNR_MIN) * 100 / (SNR_MAX - SNR_MIN)));
+        signal_info_radio_interface = QMI_NAS_RADIO_INTERFACE_5GNR;
+    }
+
+    if (nr5g_rsrq <= RSRQ_MAX && nr5g_rsrq >= RSRQ_MIN) {
+        mm_obj_dbg (self, "RSRQ (5G): %d dB", nr5g_rsrq);
+        nr5g_signal_quality_min = MIN (nr5g_signal_quality_min,
+                                       (guint8)((nr5g_rsrq - RSRQ_MIN) * 100 / (RSRQ_MAX - RSRQ_MIN)));
+        signal_info_radio_interface = QMI_NAS_RADIO_INTERFACE_5GNR;
+    }
+
     if (rssi_max < 0 && rssi_max > -125) {
         /* This RSSI comes as negative dBms */
-        *out_quality = MM_RSSI_TO_QUALITY (rssi_max);
-        *out_act = mm_modem_access_technology_from_qmi_radio_interface (signal_info_radio_interface);
+        signal_quality = MM_RSSI_TO_QUALITY (rssi_max);
+        mm_obj_dbg (self, "RSSI: %d dBm --> %u%%", rssi_max, signal_quality);
+    }
 
-        mm_obj_dbg (self, "RSSI: %d dBm --> %u%%", rssi_max, *out_quality);
+    if (nr5g_signal_quality_min < 101 && nr5g_signal_quality_min >= signal_quality) {
+        signal_quality = nr5g_signal_quality_min;
+        mm_obj_dbg (self, "5G signal quality: %d%%", signal_quality);
+    }
+
+    if (signal_quality >= 0) {
+        *out_quality = signal_quality;
+        *out_act = mm_modem_access_technology_from_qmi_radio_interface (signal_info_radio_interface);
         return TRUE;
     }
 
@@ -1418,14 +1462,34 @@ signal_info_get_quality (MMBroadbandModemQmi *self,
     gint8 gsm_rssi = 0;
     gint8 wcdma_rssi = 0;
     gint8 lte_rssi = 0;
+    gint16 nr5g_rsrp = RSRP_MAX + 1;
+    /* Multiplying SNR_MAX by 10 as QMI gives SNR level
+     * as a scaled integer in units of 0.1 dB. */
+    gint16 nr5g_snr = 10 * SNR_MAX + 10;
+    gint16 nr5g_rsrq = RSRQ_MAX + 1;
 
     qmi_message_nas_get_signal_info_output_get_cdma_signal_strength (output, &cdma1x_rssi, NULL, NULL);
     qmi_message_nas_get_signal_info_output_get_hdr_signal_strength (output, &evdo_rssi, NULL, NULL, NULL, NULL);
     qmi_message_nas_get_signal_info_output_get_gsm_signal_strength (output, &gsm_rssi, NULL);
     qmi_message_nas_get_signal_info_output_get_wcdma_signal_strength (output, &wcdma_rssi, NULL, NULL);
     qmi_message_nas_get_signal_info_output_get_lte_signal_strength (output, &lte_rssi, NULL, NULL, NULL, NULL);
+    qmi_message_nas_get_signal_info_output_get_5g_signal_strength (output, &nr5g_rsrp, &nr5g_snr, NULL);
+    qmi_message_nas_get_signal_info_output_get_5g_signal_strength_extended (output, &nr5g_rsrq, NULL);
 
-    return common_signal_info_get_quality (self, cdma1x_rssi, evdo_rssi, gsm_rssi, wcdma_rssi, lte_rssi, out_quality, out_act);
+    /* Scale to integer values in units of 1 dB/dBm, if any */
+    nr5g_snr = 0.1 * nr5g_snr;
+
+    return common_signal_info_get_quality (self,
+                                           cdma1x_rssi,
+                                           evdo_rssi,
+                                           gsm_rssi,
+                                           wcdma_rssi,
+                                           lte_rssi,
+                                           nr5g_rsrp,
+                                           nr5g_snr,
+                                           nr5g_rsrq,
+                                           out_quality,
+                                           out_act);
 }
 
 static gboolean
@@ -3199,7 +3263,6 @@ process_gsm_info (MMBroadbandModemQmi *self,
                 NULL, NULL, /* dtm_support */
                 NULL)) {
             mm_obj_dbg (self, "no GSM service reported");
-            /* No GSM service */
             return FALSE;
         }
     } else {
@@ -3223,7 +3286,6 @@ process_gsm_info (MMBroadbandModemQmi *self,
                 NULL, NULL, /* dtm_support */
                 NULL)) {
             mm_obj_dbg (self, "no GSM service reported");
-            /* No GSM service */
             return FALSE;
         }
     }
@@ -3308,7 +3370,6 @@ process_wcdma_info (MMBroadbandModemQmi *self,
                 NULL, NULL, /* primary_scrambling_code */
                 NULL)) {
             mm_obj_dbg (self, "no WCDMA service reported");
-            /* No GSM service */
             return FALSE;
         }
     } else {
@@ -3333,7 +3394,6 @@ process_wcdma_info (MMBroadbandModemQmi *self,
                 NULL, NULL, /* primary_scrambling_code */
                 NULL)) {
             mm_obj_dbg (self, "no WCDMA service reported");
-            /* No GSM service */
             return FALSE;
         }
     }
@@ -3418,7 +3478,6 @@ process_lte_info (MMBroadbandModemQmi *self,
                 &tac_valid,            &tac,
                 NULL)) {
             mm_obj_dbg (self, "no LTE service reported");
-            /* No GSM service */
             return FALSE;
         }
     } else {
@@ -3441,7 +3500,6 @@ process_lte_info (MMBroadbandModemQmi *self,
                 &tac_valid,            &tac,
                 NULL)) {
             mm_obj_dbg (self, "no LTE service reported");
-            /* No GSM service */
             return FALSE;
         }
     }
@@ -3467,6 +3525,112 @@ process_lte_info (MMBroadbandModemQmi *self,
     return TRUE;
 }
 
+static gboolean
+process_nr5g_info (MMBroadbandModemQmi *self,
+                  QmiMessageNasGetSystemInfoOutput *response_output,
+                  QmiIndicationNasSystemInfoOutput *indication_output,
+                  MMModem3gppRegistrationState *mm_cs_registration_state,
+                  MMModem3gppRegistrationState *mm_ps_registration_state,
+                  guint16 *mm_lac,
+                  guint16 *mm_tac,
+                  guint32 *mm_cid,
+                  gchar **mm_operator_id)
+{
+    QmiNasServiceStatus service_status;
+    gboolean domain_valid;
+    QmiNasNetworkServiceDomain domain;
+    gboolean roaming_status_valid;
+    QmiNasRoamingStatus roaming_status;
+    gboolean forbidden_valid;
+    gboolean forbidden;
+    gboolean lac_valid;
+    guint16 lac;
+    gboolean tac_valid;
+    guint16 tac;
+    gboolean cid_valid;
+    guint32 cid;
+    gboolean network_id_valid;
+    const gchar *mcc;
+    const gchar *mnc;
+
+    g_assert ((response_output != NULL && indication_output == NULL) ||
+              (response_output == NULL && indication_output != NULL));
+
+    *mm_ps_registration_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
+    *mm_cs_registration_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
+    *mm_lac = 0;
+    *mm_tac = 0;
+    *mm_cid = 0;
+    g_free (*mm_operator_id);
+    *mm_operator_id = NULL;
+
+    if (response_output) {
+        if (!qmi_message_nas_get_system_info_output_get_nr5g_service_status_info (
+                response_output,
+                &service_status,
+                NULL, /* true_service_status */
+                NULL, /* preferred_data_path */
+                NULL) ||
+            !qmi_message_nas_get_system_info_output_get_nr5g_system_info (
+                response_output,
+                &domain_valid,         &domain,
+                NULL, NULL, /* service_capability */
+                &roaming_status_valid, &roaming_status,
+                &forbidden_valid,      &forbidden,
+                &lac_valid,            &lac,
+                &cid_valid,            &cid,
+                NULL, NULL, NULL, /* registration_reject_info */
+                &network_id_valid,     &mcc, &mnc,
+                &tac_valid,            &tac,
+                NULL)) {
+            mm_obj_dbg (self, "no NR5G service reported");
+            return FALSE;
+        }
+    } else {
+        if (!qmi_indication_nas_system_info_output_get_nr5g_service_status_info (
+                indication_output,
+                &service_status,
+                NULL, /* true_service_status */
+                NULL, /* preferred_data_path */
+                NULL) ||
+            !qmi_indication_nas_system_info_output_get_nr5g_system_info (
+                indication_output,
+                &domain_valid,         &domain,
+                NULL, NULL, /* service_capability */
+                &roaming_status_valid, &roaming_status,
+                &forbidden_valid,      &forbidden,
+                &lac_valid,            &lac,
+                &cid_valid,            &cid,
+                NULL, NULL, NULL, /* registration_reject_info */
+                &network_id_valid,     &mcc, &mnc,
+                &tac_valid,            &tac,
+                NULL)) {
+            mm_obj_dbg (self, "no NR5G service reported");
+            return FALSE;
+        }
+    }
+
+    if (!process_common_info (service_status,
+                              domain_valid,         domain,
+                              roaming_status_valid, roaming_status,
+                              forbidden_valid,      forbidden,
+                              lac_valid,            lac,
+                              tac_valid,            tac,
+                              cid_valid,            cid,
+                              network_id_valid,     mcc, mnc,
+                              mm_cs_registration_state,
+                              mm_ps_registration_state,
+                              mm_lac,
+                              mm_tac,
+                              mm_cid,
+                              mm_operator_id)) {
+        mm_obj_dbg (self, "no NR5G service registered");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 static void
 common_process_system_info_3gpp (MMBroadbandModemQmi *self,
                                  QmiMessageNasGetSystemInfoOutput *response_output,
@@ -3478,7 +3642,8 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
     guint16 tac;
     guint32 cid;
     gchar *operator_id;
-    gboolean has_lte_info;
+    gboolean has_nr5g_info = FALSE;
+    gboolean has_lte_info = FALSE;
 
     ps_registration_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
     cs_registration_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
@@ -3488,17 +3653,23 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
     operator_id = NULL;
 
     /* Process infos, with the following priority:
-     *   LTE > WCDMA > GSM
+     *   NR5G > LTE > WCDMA > GSM
      * The first one giving results will be the one reported.
      */
-    has_lte_info = process_lte_info (self, response_output, indication_output,
-                                     &cs_registration_state,
-                                     &ps_registration_state,
-                                     &lac,
-                                     &tac,
-                                     &cid,
-                                     &operator_id);
-    if (!has_lte_info &&
+    if (!(has_nr5g_info = process_nr5g_info (self, response_output, indication_output,
+                                             &cs_registration_state,
+                                             &ps_registration_state,
+                                             &lac,
+                                             &tac,
+                                             &cid,
+                                             &operator_id)) &&
+        !(has_lte_info = process_lte_info (self, response_output, indication_output,
+                                           &cs_registration_state,
+                                           &ps_registration_state,
+                                           &lac,
+                                           &tac,
+                                           &cid,
+                                           &operator_id)) &&
         !process_wcdma_info (self, response_output, indication_output,
                              &cs_registration_state,
                              &ps_registration_state,
@@ -3511,7 +3682,7 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
                            &lac,
                            &cid,
                            &operator_id)) {
-        mm_obj_dbg (self, "no service (GSM, WCDMA or LTE) reported");
+        mm_obj_dbg (self, "no service (GSM, WCDMA, LTE or NR5G) reported");
     }
 
     /* Cache current operator ID */
@@ -3523,10 +3694,12 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
     /* Report new registration states */
     mm_iface_modem_3gpp_update_cs_registration_state (MM_IFACE_MODEM_3GPP (self), cs_registration_state);
     mm_iface_modem_3gpp_update_ps_registration_state (MM_IFACE_MODEM_3GPP (self), ps_registration_state);
-    if (has_lte_info)
-        mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self), ps_registration_state);
-    else
-        mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self), MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
+    mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self),
+                                                       has_lte_info ?
+                                                       ps_registration_state : MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
+    mm_iface_modem_3gpp_update_5gs_registration_state (MM_IFACE_MODEM_3GPP (self),
+                                                       has_nr5g_info ?
+                                                       ps_registration_state : MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
     mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, tac, cid);
 }
 
@@ -5402,6 +5575,11 @@ nas_signal_info_indication_cb (QmiClientNas                     *client,
     gint8 gsm_rssi = 0;
     gint8 wcdma_rssi = 0;
     gint8 lte_rssi = 0;
+    gint16 nr5g_rsrp = RSRP_MAX + 1;
+    /* Multiplying SNR_MAX by 10 as QMI gives SNR level
+     * as a scaled integer in units of 0.1 dB. */
+    gint16 nr5g_snr = 10 * SNR_MAX + 10;
+    gint16 nr5g_rsrq = RSRQ_MAX + 1;
     guint8 quality;
     MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
 
@@ -5410,6 +5588,11 @@ nas_signal_info_indication_cb (QmiClientNas                     *client,
     qmi_indication_nas_signal_info_output_get_gsm_signal_strength (output, &gsm_rssi, NULL);
     qmi_indication_nas_signal_info_output_get_wcdma_signal_strength (output, &wcdma_rssi, NULL, NULL);
     qmi_indication_nas_signal_info_output_get_lte_signal_strength (output, &lte_rssi, NULL, NULL, NULL, NULL);
+    qmi_indication_nas_signal_info_output_get_5g_signal_strength (output, &nr5g_rsrp, &nr5g_snr, NULL);
+    qmi_indication_nas_signal_info_output_get_5g_signal_strength_extended (output, &nr5g_rsrq, NULL);
+
+    /* Scale to integer values in units of 1 dB/dBm, if any */
+    nr5g_snr = 0.1 * nr5g_snr;
 
     if (common_signal_info_get_quality (self,
                                         cdma1x_rssi,
@@ -5417,6 +5600,9 @@ nas_signal_info_indication_cb (QmiClientNas                     *client,
                                         gsm_rssi,
                                         wcdma_rssi,
                                         lte_rssi,
+                                        nr5g_rsrp,
+                                        nr5g_snr,
+                                        nr5g_rsrq,
                                         &quality,
                                         &act)) {
         mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);

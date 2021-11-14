@@ -11,6 +11,7 @@
  * GNU General Public License for more details:
  *
  * Copyright (C) 2012 Google, Inc.
+ * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef MM_MODEM_HELPERS_QMI_H
@@ -41,6 +42,7 @@ QmiDmsUimFacility mm_3gpp_facility_to_qmi_uim_facility (MMModem3gppFacility mm);
 GArray *mm_modem_bands_from_qmi_band_capabilities (QmiDmsBandCapability     qmi_bands,
                                                    QmiDmsLteBandCapability  qmi_lte_bands,
                                                    GArray                  *extended_qmi_lte_bands,
+                                                   GArray                  *qmi_nr5g_bands,
                                                    gpointer                 log_object);
 
 /*****************************************************************************/
@@ -87,12 +89,16 @@ GArray *mm_modem_bands_from_qmi_band_preference (QmiNasBandPreference     qmi_ba
                                                  QmiNasLteBandPreference  qmi_lte_bands,
                                                  const guint64           *extended_qmi_lte_bands,
                                                  guint                    extended_qmi_lte_bands_size,
+                                                 const guint64           *qmi_nr5g_bands,
+                                                 guint                    qmi_nr5g_bands_size,
                                                  gpointer                 log_object);
 void mm_modem_bands_to_qmi_band_preference (GArray                  *mm_bands,
                                             QmiNasBandPreference    *qmi_bands,
                                             QmiNasLteBandPreference *qmi_lte_bands,
                                             guint64                 *extended_qmi_lte_bands,
                                             guint                    extended_qmi_lte_bands_size,
+                                            guint64                 *qmi_nr5g_bands,
+                                            guint                    qmi_nr5g_bands_size,
                                             gpointer                 log_object);
 
 MMModem3gppRegistrationState mm_modem_3gpp_registration_state_from_qmi_registration_state (QmiNasAttachState attach_state,
