@@ -61,8 +61,9 @@ create_modem (MMPlugin     *self,
 
 #if defined WITH_MBIM
     if (mm_port_probe_list_has_mbim_port (probes)) {
-        if (vendor == 0x1eac) {
-            mm_obj_dbg (self, "MBIM-powered PCI Quectel modem found...");
+        if (vendor == 0x1eac ||
+           (vendor == 0x2c7c && (product == 0x030a || product == 0x030c || product == 0x0217))) {
+            mm_obj_dbg (self, "MBIM-powered Quectel modem found...");
             return MM_BASE_MODEM (mm_broadband_modem_mbim_quectel_new (uid,
                                                                        drivers,
                                                                        mm_plugin_get_name (self),

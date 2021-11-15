@@ -17,6 +17,8 @@
 #include <config.h>
 
 #include "mm-base-modem-at.h"
+#include "mm-port-mbim.h"
+#include "mm-broadband-modem-mbim.h"
 #include "mm-log-object.h"
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-firmware.h"
@@ -46,7 +48,7 @@ firmware_load_update_settings_finish (MMIfaceModemFirmware  *self,
 }
 
 static void
-quectel_get_firmware_version_ready (MMBaseModem  *modem,
+quectel_at_port_get_firmware_version_ready (MMBaseModem  *modem,
                                     GAsyncResult *res,
                                     GTask        *task)
 {
@@ -63,20 +65,85 @@ quectel_get_firmware_version_ready (MMBaseModem  *modem,
 }
 
 static void
+quectel_mbim_port_get_firmware_version_ready (MbimDevice   *device,
+                                              GAsyncResult *res,
+                                              GTask        *task)
+{
+    GError                   *error = NULL;
+    MMFirmwareUpdateSettings *update_settings;
+    g_autoptr(MbimMessage)    response = NULL;
+    const guint8             *response_buffer;
+    g_autofree gchar         *version = NULL;
+    guint32                   sz;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        (response_buffer = mbim_message_command_done_get_raw_information_buffer (response, &sz))) {
+        version = mm_quectel_get_firmware_version (response_buffer, sz);
+    }
+
+    update_settings = mm_firmware_update_settings_new (MM_MODEM_FIRMWARE_UPDATE_METHOD_FIREHOSE);
+
+    if (version && update_settings)
+        mm_firmware_update_settings_set_version (update_settings, version);
+
+    g_task_return_pointer (task, update_settings, g_object_unref);
+    g_object_unref (task);
+}
+
+
+static void
 firmware_load_update_settings (MMIfaceModemFirmware *self,
                                GAsyncReadyCallback   callback,
                                gpointer              user_data)
 {
     GTask *task;
+    g_autoptr(GError) error = NULL;
+    MMPortMbim *mbim;
+    MMPortSerialAt *at_port;
 
     task = g_task_new (self, NULL, callback, user_data);
 
-    mm_base_modem_at_command (MM_BASE_MODEM (self),
-                              "+QGMR?",
-                              3,
-                              FALSE,
-                              (GAsyncReadyCallback) quectel_get_firmware_version_ready,
-                              task);
+    at_port = mm_base_modem_peek_best_at_port ( MM_BASE_MODEM (self), &error);
+    if (at_port != NULL) {
+        mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                at_port,
+                                "+QGMR?",
+                                3,
+                                FALSE,
+                                FALSE,
+                                FALSE,
+                                (GAsyncReadyCallback) quectel_at_port_get_firmware_version_ready,
+                                task);
+        return;
+    }
+
+    mbim = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
+    if (mbim != NULL) {
+        guint8 buffer[] = { 0x00, 0x01 };
+        g_autoptr(MbimMessage)  message = NULL;
+
+        message = mbim_message_command_new (0, MBIM_SERVICE_QDU, 7, MBIM_MESSAGE_COMMAND_TYPE_SET);
+        mbim_message_command_append (message, buffer, sizeof (buffer));
+
+        mbim_device_command (mm_port_mbim_peek_device (mbim),
+                            message,
+                            5,
+                            NULL,
+                            (GAsyncReadyCallback) quectel_mbim_port_get_firmware_version_ready,
+                            task);
+        return;
+    }
+
+    g_task_report_new_error (self,
+                             callback,
+                             user_data,
+                             firmware_load_update_settings,
+                             MM_CORE_ERROR,
+                             MM_CORE_ERROR_FAILED,
+                             "Couldn't find a port to fetch firmware info");
+    return;
 }
 
 /*****************************************************************************/
