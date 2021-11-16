@@ -89,3 +89,27 @@ mm_quectel_parse_ctzu_test_response (const gchar  *response,
 
     return TRUE;
 }
+
+gchar *
+mm_quectel_get_firmware_version (const guint8 *buffer, gsize size)
+{
+    guint i = 0;
+    g_autoptr(GString)    tmp = NULL;
+    g_autoptr(GRegex)     regex = NULL;
+    g_autoptr(GMatchInfo) match_info = NULL;
+
+    g_return_val_if_fail(buffer != NULL, NULL);
+
+    tmp = g_string_sized_new (size);
+    for (i = 0; i < size; ++i) {
+        if (g_ascii_isprint (buffer[i]))
+            g_string_append_c (tmp, buffer[i]);
+    }
+
+    regex = g_regex_new ("(EM[0-9A-Z]+_[0-9][0-9][.][0-9]+)", 0, 0, NULL);
+    g_assert (regex);
+
+    g_regex_match_full (regex, tmp->str, tmp->len, 0, 0, &match_info, NULL);
+
+    return g_match_info_fetch (match_info, 1);
+}
