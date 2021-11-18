@@ -404,6 +404,7 @@ main (gint argc, gchar **argv)
         else
             mmcli_modem_firmware_run_synchronous (connection);
     }
+    /* Modem SAR options? */
     else if (mmcli_modem_sar_options_enabled ()) {
         if (async_flag)
             mmcli_modem_sar_run_asynchronous (connection, cancellable);

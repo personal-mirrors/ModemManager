@@ -36,6 +36,7 @@ headers = files(
   'mm-modem-location.h',
   'mm-modem-messaging.h',
   'mm-modem-oma.h',
+  'mm-modem-sar.h',
   'mm-modem-signal.h',
   'mm-modem-simple.h',
   'mm-modem-time.h',
@@ -44,6 +45,7 @@ headers = files(
   'mm-object.h',
   'mm-pco.h',
   'mm-signal.h',
+  'mm-signal-threshold-properties.h',
   'mm-sim.h',
   'mm-simple-connect-properties.h',
   'mm-simple-status.h',
@@ -88,6 +90,7 @@ sources = files(
   'mm-modem-location.c',
   'mm-modem-messaging.c',
   'mm-modem-oma.c',
+  'mm-modem-sar.c',
   'mm-modem-signal.c',
   'mm-modem-simple.c',
   'mm-modem-time.c',
@@ -96,6 +99,7 @@ sources = files(
   'mm-object.c',
   'mm-pco.c',
   'mm-signal.c',
+  'mm-signal-threshold-properties.c',
   'mm-sim.c',
   'mm-simple-connect-properties.c',
   'mm-simple-status.c',
@@ -118,9 +122,9 @@ libmm_glib = shared_library(
 )
 
 libmm_glib_dep = declare_dependency(
-  sources: gen_headers,
-  include_directories: [libmm_glib_inc, generated_inc],
-  dependencies: deps + [glib_deps],
+  include_directories: libmm_glib_inc,
+  # FIXME: glib_deps is included because `dependencies` parameter is not part of partial_dependency
+  dependencies: deps + [glib_deps, libmm_generated_dep.partial_dependency(sources: true, includes: true)],
   link_with: libmm_glib,
 )
 

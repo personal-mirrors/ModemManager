@@ -39,8 +39,8 @@
 #include "mm-iface-modem-3gpp-ussd.h"
 #include "mm-iface-modem-location.h"
 #include "mm-iface-modem-messaging.h"
-#include "mm-iface-modem-sar.h"
 #include "mm-iface-modem-signal.h"
+#include "mm-iface-modem-sar.h"
 #include "mm-sms-part-3gpp.h"
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
@@ -54,8 +54,8 @@ static void iface_modem_3gpp_profile_manager_init (MMIfaceModem3gppProfileManage
 static void iface_modem_3gpp_ussd_init            (MMIfaceModem3gppUssd           *iface);
 static void iface_modem_location_init             (MMIfaceModemLocation           *iface);
 static void iface_modem_messaging_init            (MMIfaceModemMessaging          *iface);
-static void iface_modem_sar_init                  (MMIfaceModemSar                *iface);
 static void iface_modem_signal_init               (MMIfaceModemSignal             *iface);
+static void iface_modem_sar_init                  (MMIfaceModemSar                *iface);
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
 static void shared_qmi_init                       (MMSharedQmi                    *iface);
 #endif
@@ -72,8 +72,8 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbim, mm_broadband_modem_mbim, MM_TYPE_B
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP_USSD, iface_modem_3gpp_ussd_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_LOCATION, iface_modem_location_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SAR, iface_modem_sar_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SAR, iface_modem_sar_init)
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
                         G_IMPLEMENT_INTERFACE (MM_TYPE_SHARED_QMI, shared_qmi_init)
 #endif
@@ -122,8 +122,8 @@ struct _MMBroadbandModemMbimPrivate {
     gboolean is_atds_location_supported;
     gboolean is_atds_signal_supported;
     gboolean is_intel_reset_supported;
-    gboolean is_ms_sar_supported;
     gboolean is_slot_info_status_supported;
+    gboolean is_ms_sar_supported;
 
     /* Process unsolicited notifications */
     guint notification_id;
@@ -133,15 +133,20 @@ struct _MMBroadbandModemMbimPrivate {
     GList *pco_list;
 
     /* 3GPP registration helpers */
-    gchar *current_operator_id;
-    gchar *current_operator_name;
+    gchar         *current_operator_id;
+    gchar         *current_operator_name;
+    gchar         *requested_operator_id;
+    MbimDataClass  requested_data_class; /* 0 for defaults/auto */
+    GTask         *pending_allowed_modes_action;
 
     /* USSD helpers */
     GTask *pending_ussd_action;
 
-    /* Access technology updates */
+    /* Access technology and registration updates */
     MbimDataClass available_data_classes;
     MbimDataClass highest_available_data_class;
+    MbimRegisterState reg_state;
+    MbimPacketServiceState packet_service_state;
 
     MbimSubscriberReadyState last_ready_state;
 
@@ -890,24 +895,26 @@ modem_load_device_identifier (MMIfaceModem *self,
 /* Supported modes loading (Modem interface) */
 
 static GArray *
-modem_load_supported_modes_finish (MMIfaceModem *self,
-                                   GAsyncResult *res,
-                                   GError **error)
+modem_load_supported_modes_finish (MMIfaceModem  *self,
+                                   GAsyncResult  *res,
+                                   GError       **error)
 {
-#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
-    if (MM_BROADBAND_MODEM_MBIM (self)->priv->qmi_capability_and_mode_switching)
-        return mm_shared_qmi_load_supported_modes_finish (self, res, error);
-#endif
     return g_task_propagate_pointer (G_TASK (res), error);
 }
 
 static void
-load_supported_modes_mbim (GTask *task)
+load_supported_modes_mbim (GTask      *task,
+                           MbimDevice *device)
 {
     MMBroadbandModemMbim   *self;
-    MMModemModeCombination  mode;
-    MMModemMode             all;
-    GArray                 *supported;
+    GArray                 *all;
+    GArray                 *combinations;
+    GArray                 *filtered;
+    MMModemMode             mask_all;
+    MMModemModeCombination  mode = {
+        .allowed   = MM_MODEM_MODE_NONE,
+        .preferred = MM_MODEM_MODE_NONE,
+    };
 
     self = g_task_get_source_object (task);
 
@@ -920,57 +927,98 @@ load_supported_modes_mbim (GTask *task)
         return;
     }
 
-    all = 0;
-
-    /* 3GPP... */
-    if (self->priv->caps_data_class & (MBIM_DATA_CLASS_GPRS |
-                                       MBIM_DATA_CLASS_EDGE))
-        all |= MM_MODEM_MODE_2G;
-    if (self->priv->caps_data_class & (MBIM_DATA_CLASS_UMTS |
-                                       MBIM_DATA_CLASS_HSDPA |
-                                       MBIM_DATA_CLASS_HSUPA))
-        all |= MM_MODEM_MODE_3G;
-    if (self->priv->caps_data_class & MBIM_DATA_CLASS_LTE)
-        all |= MM_MODEM_MODE_4G;
-
-    /* 3GPP2... */
-    if (self->priv->caps_data_class & MBIM_DATA_CLASS_1XRTT)
-        all |= MM_MODEM_MODE_2G;
-    if (self->priv->caps_data_class & (MBIM_DATA_CLASS_1XEVDO |
-                                       MBIM_DATA_CLASS_1XEVDO_REVA |
-                                       MBIM_DATA_CLASS_1XEVDV |
-                                       MBIM_DATA_CLASS_3XRTT |
-                                       MBIM_DATA_CLASS_1XEVDO_REVB))
-        all |= MM_MODEM_MODE_3G;
-    if (self->priv->caps_data_class & MBIM_DATA_CLASS_UMB)
-        all |= MM_MODEM_MODE_4G;
-
-    /* Build a mask with all supported modes */
-    supported = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 1);
-    mode.allowed = all;
+    /* Build all */
+    mask_all = mm_modem_mode_from_mbim_data_class (self->priv->caps_data_class);
+    mode.allowed = mask_all;
     mode.preferred = MM_MODEM_MODE_NONE;
-    g_array_append_val (supported, mode);
+    all = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 1);
+    g_array_append_val (all, mode);
 
-    g_task_return_pointer (task, supported, (GDestroyNotify) g_array_unref);
+    combinations = g_array_new (FALSE, FALSE, sizeof (MMModemModeCombination));
+
+    /* When using MBIMEx we can enable the mode switching operation because
+     * we'll be able to know if the modes requested are the ones configured
+     * as preferred after the operation. */
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+#define ADD_MODE_PREFERENCE(MODE_MASK) do {                             \
+            mode.allowed = MODE_MASK;                                   \
+            mode.preferred = MM_MODEM_MODE_NONE;                        \
+            g_array_append_val (combinations, mode);                    \
+        } while (0)
+
+        /* 2G, 3G */
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_2G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_3G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
+
+        /* +4G */
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_4G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_2G | MM_MODEM_MODE_4G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
+
+        /* +5G */
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_5G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_2G | MM_MODEM_MODE_5G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_3G | MM_MODEM_MODE_5G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_4G | MM_MODEM_MODE_5G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_5G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_2G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G);
+        ADD_MODE_PREFERENCE (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G);
+
+        filtered = mm_filter_supported_modes (all, combinations, self);
+        g_array_unref (combinations);
+        g_array_unref (all);
+#undef ADD_MODE_PREFERENCE
+    } else
+        filtered = all;
+
+    g_task_return_pointer (task, filtered, (GDestroyNotify)g_array_unref);
     g_object_unref (task);
 }
+
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+
+static void
+shared_qmi_load_supported_modes_ready (MMIfaceModem *self,
+                                       GAsyncResult *res,
+                                       GTask        *task)
+{
+    GArray *combinations;
+    GError *error = NULL;
+
+    combinations = mm_shared_qmi_load_supported_modes_finish (self, res, &error);
+    if (!combinations)
+        g_task_return_error (task, error);
+    else
+        g_task_return_pointer (task, combinations, (GDestroyNotify)g_array_unref);
+    g_object_unref (task);
+}
+
+#endif
 
 static void
 modem_load_supported_modes (MMIfaceModem        *self,
                             GAsyncReadyCallback  callback,
                             gpointer             user_data)
 {
-    GTask *task;
+    GTask      *task;
+    MbimDevice *device;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
     if (MM_BROADBAND_MODEM_MBIM (self)->priv->qmi_capability_and_mode_switching) {
-        mm_shared_qmi_load_supported_modes (self, callback, user_data);
+        mm_shared_qmi_load_supported_modes (self, (GAsyncReadyCallback)shared_qmi_load_supported_modes_ready, task);
         return;
     }
 #endif
 
-    task = g_task_new (self, NULL, callback, user_data);
-    load_supported_modes_mbim (task);
+    load_supported_modes_mbim (task, device);
 }
 
 /*****************************************************************************/
@@ -983,30 +1031,111 @@ modem_load_current_modes_finish (MMIfaceModem  *self,
                                  MMModemMode   *preferred,
                                  GError       **error)
 {
-#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
-    if (MM_BROADBAND_MODEM_MBIM (self)->priv->qmi_capability_and_mode_switching)
-        return mm_shared_qmi_load_current_modes_finish (self, res, allowed, preferred, error);
-#endif
-    g_assert (error);
-    return g_task_propagate_boolean (G_TASK (res), error);
+    g_autofree MMModemModeCombination *mode = NULL;
+
+    mode = g_task_propagate_pointer (G_TASK (res), error);
+    if (!mode)
+        return FALSE;
+
+    *allowed   = mode->allowed;
+    *preferred = mode->preferred;
+    return TRUE;
 }
+
+static void
+register_state_current_modes_query_ready (MbimDevice   *device,
+                                          GAsyncResult *res,
+                                          GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    MMModemModeCombination *mode = NULL;
+    GError                 *error = NULL;
+    MbimDataClass           preferred_data_classes;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response ||
+        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
+        !mbim_message_ms_basic_connect_v2_register_state_response_parse (
+            response,
+            NULL, /* nw_error */
+            NULL, /* register_state */
+            NULL, /* register_mode */
+            NULL, /* available_data_classes */
+            NULL, /* current_cellular_class */
+            NULL, /* provider_id */
+            NULL, /* provider_name */
+            NULL, /* roaming_text */
+            NULL, /* registration_flag */
+            &preferred_data_classes,
+            &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    mode = g_new0 (MMModemModeCombination, 1);
+    mode->allowed = mm_modem_mode_from_mbim_data_class (preferred_data_classes);
+    mode->preferred = MM_MODEM_MODE_NONE;
+    g_task_return_pointer (task, mode, (GDestroyNotify)g_free);
+    g_object_unref (task);
+}
+
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+
+static void
+shared_qmi_load_current_modes_ready (MMIfaceModem *self,
+                                     GAsyncResult *res,
+                                     GTask        *task)
+{
+    g_autofree MMModemModeCombination *mode = NULL;
+    GError                            *error = NULL;
+
+    mode = g_new0 (MMModemModeCombination, 1);
+    if (!mm_shared_qmi_load_current_modes_finish (self, res, &mode->allowed, &mode->preferred, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_pointer (task, g_steal_pointer (&mode), (GDestroyNotify)g_free);
+    g_object_unref (task);
+}
+
+#endif
 
 static void
 modem_load_current_modes (MMIfaceModem        *self,
                           GAsyncReadyCallback  callback,
                           gpointer             user_data)
 {
+    GTask      *task;
+    MbimDevice *device;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
     if (MM_BROADBAND_MODEM_MBIM (self)->priv->qmi_capability_and_mode_switching) {
-        mm_shared_qmi_load_current_modes (self, callback, user_data);
+        mm_shared_qmi_load_current_modes (self, (GAsyncReadyCallback)shared_qmi_load_current_modes_ready, task);
         return;
     }
 #endif
 
-    g_task_report_new_error (self, callback, user_data,
-                             modem_set_current_capabilities,
-                             MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        g_autoptr(MbimMessage) message = NULL;
+
+        message = mbim_message_register_state_query_new (NULL);
+        mbim_device_command (device,
+                             message,
+                             60,
+                             NULL,
+                             (GAsyncReadyCallback)register_state_current_modes_query_ready,
+                             task);
+        return;
+    }
+
+    g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
                              "Current mode loading is not supported");
+    g_object_unref (task);
 }
 
 /*****************************************************************************/
@@ -1017,32 +1146,202 @@ modem_set_current_modes_finish (MMIfaceModem  *self,
                                 GAsyncResult  *res,
                                 GError       **error)
 {
-#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
-    if (MM_BROADBAND_MODEM_MBIM (self)->priv->qmi_capability_and_mode_switching)
-        return mm_shared_qmi_set_current_modes_finish (self, res, error);
-#endif
-    g_assert (error);
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
-modem_set_current_modes (MMIfaceModem        *self,
+complete_pending_allowed_modes_action (MMBroadbandModemMbim *self,
+                                       MbimDataClass         preferred_data_classes)
+{
+    MbimDataClass requested_data_classes;
+    MMModemMode   preferred_modes;
+    MMModemMode   requested_modes;
+
+    if (!self->priv->pending_allowed_modes_action)
+        return;
+
+    requested_data_classes = (MbimDataClass) GPOINTER_TO_UINT (g_task_get_task_data (self->priv->pending_allowed_modes_action));
+    requested_modes = mm_modem_mode_from_mbim_data_class (requested_data_classes);
+    preferred_modes = mm_modem_mode_from_mbim_data_class (preferred_data_classes);
+
+    /* only early complete on success, as we don't know if they're going to be
+     * intermediate indications emitted before the preference change is valid */
+    if (requested_modes == preferred_modes) {
+        GTask *task;
+
+        task = g_steal_pointer (&self->priv->pending_allowed_modes_action);
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+    }
+}
+
+static void
+register_state_current_modes_set_ready (MbimDevice   *device,
+                                        GAsyncResult *res,
+                                        GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    MMBroadbandModemMbim   *self;
+    GError                 *error = NULL;
+    MbimDataClass           preferred_data_classes;
+    MMModemMode             preferred_modes;
+    MbimDataClass           requested_data_classes;
+    MMModemMode             requested_modes;
+
+    self = g_task_get_source_object (task);
+    requested_data_classes = (MbimDataClass) GPOINTER_TO_UINT (g_task_get_task_data (task));
+
+    /* If the task is still in the private info, it means it wasn't either
+     * cancelled or completed, so we just unref that reference and go on
+     * with out response processing. But if the task is no longer in the
+     * private info (or if there's a different task), then it means we're
+     * either cancelled (by some new incoming user request) or otherwise
+     * successfully completed (if completed via a Register State indication).
+     * In both those cases, just unref the incoming task and go on. */
+    if (self->priv->pending_allowed_modes_action != task) {
+        g_assert (g_task_get_completed (task));
+        g_object_unref (task);
+        return;
+    }
+    g_clear_object (&self->priv->pending_allowed_modes_action);
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response ||
+        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
+        !mbim_message_ms_basic_connect_v2_register_state_response_parse (
+            response,
+            NULL, /* nw_error */
+            NULL, /* register_state */
+            NULL, /* register_mode */
+            NULL, /* available_data_classes */
+            NULL, /* current_cellular_class */
+            NULL, /* provider_id */
+            NULL, /* provider_name */
+            NULL, /* roaming_text */
+            NULL, /* registration_flag */
+            &preferred_data_classes,
+            &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    requested_modes = mm_modem_mode_from_mbim_data_class (requested_data_classes);
+    preferred_modes = mm_modem_mode_from_mbim_data_class (preferred_data_classes);
+
+    if (requested_modes != preferred_modes) {
+        g_autofree gchar *requested_modes_str = NULL;
+        g_autofree gchar *preferred_modes_str = NULL;
+        g_autofree gchar *requested_data_classes_str = NULL;
+        g_autofree gchar *preferred_data_classes_str = NULL;
+
+        requested_modes_str = mm_modem_mode_build_string_from_mask (requested_modes);
+        preferred_modes_str = mm_modem_mode_build_string_from_mask (preferred_modes);
+        requested_data_classes_str = mbim_data_class_build_string_from_mask (requested_data_classes);
+        preferred_data_classes_str = mbim_data_class_build_string_from_mask (preferred_data_classes);
+
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "Current mode update failed: requested %s (%s) but reported preferred is %s (%s)",
+                                 requested_modes_str, requested_data_classes_str,
+                                 preferred_modes_str, preferred_data_classes_str);
+        g_object_unref (task);
+        return;
+    }
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+#if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
+
+static void
+shared_qmi_set_current_modes_ready (MMIfaceModem *self,
+                                    GAsyncResult *res,
+                                    GTask        *task)
+{
+    GError *error = NULL;
+
+    if (!mm_shared_qmi_set_current_modes_finish (self, res, &error))
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+#endif
+
+static void
+modem_set_current_modes (MMIfaceModem        *_self,
                          MMModemMode          allowed,
                          MMModemMode          preferred,
                          GAsyncReadyCallback  callback,
                          gpointer             user_data)
 {
+    MMBroadbandModemMbim    *self = MM_BROADBAND_MODEM_MBIM (_self);
+    GTask                   *task;
+    MbimDevice              *device;
+    g_autoptr(GCancellable)  cancellable = NULL;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    cancellable = g_cancellable_new ();
+    task = g_task_new (self, cancellable, callback, user_data);
+
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
-    if (MM_BROADBAND_MODEM_MBIM (self)->priv->qmi_capability_and_mode_switching) {
-        mm_shared_qmi_set_current_modes (self, allowed, preferred, callback, user_data);
+    if (self->priv->qmi_capability_and_mode_switching) {
+        mm_shared_qmi_set_current_modes (MM_IFACE_MODEM (self),
+                                         allowed,
+                                         preferred,
+                                         (GAsyncReadyCallback)shared_qmi_set_current_modes_ready,
+                                         task);
         return;
     }
 #endif
 
-    g_task_report_new_error (self, callback, user_data,
-                             modem_set_current_capabilities,
-                             MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
-                             "Capability switching is not supported");
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        g_autoptr(MbimMessage) message = NULL;
+
+        /* Limit ANY to the currently supported modes */
+        if (allowed == MM_MODEM_MODE_ANY)
+            allowed = mm_modem_mode_from_mbim_data_class (self->priv->caps_data_class);
+
+        self->priv->requested_data_class = mm_mbim_data_class_from_modem_mode (allowed,
+                                                                               mm_iface_modem_is_3gpp (_self),
+                                                                               mm_iface_modem_is_cdma (_self));
+
+        /* Store the ongoing allowed modes action, so that we can finish the
+         * operation early via indications, instead of waiting for the modem
+         * to be registered on the requested access technologies */
+        g_task_set_task_data (task, GUINT_TO_POINTER (self->priv->requested_data_class), NULL);
+        if (self->priv->pending_allowed_modes_action) {
+            /* cancel the task and clear this reference; the _set_ready()
+             * will take care of completing the task */
+            g_cancellable_cancel (g_task_get_cancellable (self->priv->pending_allowed_modes_action));
+            g_task_return_error_if_cancelled (self->priv->pending_allowed_modes_action);
+            g_clear_object (&self->priv->pending_allowed_modes_action);
+        }
+        self->priv->pending_allowed_modes_action = g_object_ref (task);
+
+        /* use the last requested operator id to determine whether the
+         * registration should be manual or automatic */
+        message = mbim_message_register_state_set_new (
+                      self->priv->requested_operator_id ? self->priv->requested_operator_id : "",
+                      self->priv->requested_operator_id ? MBIM_REGISTER_ACTION_MANUAL : MBIM_REGISTER_ACTION_AUTOMATIC,
+                      self->priv->requested_data_class,
+                      NULL);
+        mbim_device_command (device,
+                             message,
+                             60,
+                             NULL,
+                             (GAsyncReadyCallback)register_state_current_modes_set_ready,
+                             task);
+        return;
+    }
+
+    g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                             "Current mode switching is not supported");
+    g_object_unref (task);
 }
 
 /*****************************************************************************/
@@ -1196,6 +1495,7 @@ unlock_required_subscriber_ready_state_ready (MbimDevice *device,
             break;
         case MBIM_SUBSCRIBER_READY_STATE_FAILURE:
         case MBIM_SUBSCRIBER_READY_STATE_NOT_ACTIVATED:
+        case MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE:
         default:
             error = mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE, self);
             break;
@@ -1693,34 +1993,62 @@ modem_load_signal_quality_finish (MMIfaceModem *self,
 }
 
 static void
-signal_state_query_ready (MbimDevice *device,
+signal_state_query_ready (MbimDevice   *device,
                           GAsyncResult *res,
-                          GTask *task)
+                          GTask        *task)
 {
-    MbimMessage *response;
-    GError *error = NULL;
-    guint32 rssi;
+    MMBroadbandModemMbim            *self;
+    GError                          *error = NULL;
+    g_autoptr(MbimMessage)           response = NULL;
+    g_autoptr(MbimRsrpSnrInfoArray)  rsrp_snr = NULL;
+    guint32                          rsrp_snr_count = 0;
+    guint32                          rssi;
+    guint                            quality;
+
+    self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
-    if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_signal_state_response_parse (
-            response,
-            &rssi,
-            NULL, /* error_rate */
-            NULL, /* signal_strength_interval */
-            NULL, /* rssi_threshold */
-            NULL, /* error_rate_threshold */
-            &error)) {
-        /* Normalize the quality. 99 means unknown, we default it to 0 */
-        g_task_return_int (task, MM_CLAMP_HIGH (rssi == 99 ? 0 : rssi, 31) * 100 / 31);
-    } else
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
         g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
 
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_signal_state_response_parse (
+                response,
+                &rssi,
+                NULL, /* error_rate */
+                NULL, /* signal_strength_interval */
+                NULL, /* rssi_threshold */
+                NULL, /* error_rate_threshold */
+                &rsrp_snr_count,
+                &rsrp_snr,
+                &error))
+            g_prefix_error (&error, "Failed processing MBIMEx v2.0 signal state response: ");
+        else
+            mm_obj_dbg (self, "proccessed MBIMEx v2.0 signal state response");
+    } else {
+        if (!mbim_message_signal_state_response_parse (
+                response,
+                &rssi,
+                NULL, /* error_rate */
+                NULL, /* signal_strength_interval */
+                NULL, /* rssi_threshold */
+                NULL, /* error_rate_threshold */
+                &error))
+            g_prefix_error (&error, "Failed processing signal state response: ");
+        else
+            mm_obj_dbg (self, "proccessed signal state response");
+    }
+
+    if (error)
+        g_task_return_error (task, error);
+    else {
+        quality = mm_signal_quality_from_mbim_signal_state (rssi, rsrp_snr, rsrp_snr_count, self);
+        g_task_return_int (task, quality);
+    }
     g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
 }
 
 static void
@@ -3221,26 +3549,64 @@ modem_3gpp_set_initial_eps_bearer_settings (MMIfaceModem3gpp    *_self,
 
 static void
 basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
-                                         MbimMessage *notification)
+                                         MbimDevice           *device,
+                                         MbimMessage          *notification)
 {
-    guint32 rssi;
+    g_autoptr(GError)               error = NULL;
+    g_autoptr(MbimRsrpSnrInfoArray) rsrp_snr = NULL;
+    guint32                         rsrp_snr_count = 0;
+    guint32                         coded_rssi;
+    guint32                         coded_error_rate;
+    guint32                         quality;
+    MbimDataClass                   data_class;
+    g_autoptr(MMSignal)             cdma = NULL;
+    g_autoptr(MMSignal)             evdo = NULL;
+    g_autoptr(MMSignal)             gsm = NULL;
+    g_autoptr(MMSignal)             umts = NULL;
+    g_autoptr(MMSignal)             lte = NULL;
+    g_autoptr(MMSignal)             nr5g = NULL;
 
-    if (mbim_message_signal_state_notification_parse (
-            notification,
-            &rssi,
-            NULL, /* error_rate */
-            NULL, /* signal_strength_interval */
-            NULL, /* rssi_threshold */
-            NULL, /* error_rate_threshold */
-            NULL)) {
-        guint32 quality;
-
-        /* Normalize the quality. 99 means unknown, we default it to 0 */
-        quality = MM_CLAMP_HIGH (rssi == 99 ? 0 : rssi, 31) * 100 / 31;
-
-        mm_obj_dbg (self, "signal state indication: %u --> %u%%", rssi, quality);
-        mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_signal_state_notification_parse (
+                notification,
+                &coded_rssi,
+                &coded_error_rate,
+                NULL, /* signal_strength_interval */
+                NULL, /* rssi_threshold */
+                NULL, /* error_rate_threshold */
+                &rsrp_snr_count,
+                &rsrp_snr,
+                &error)) {
+            mm_obj_warn (self, "failed processing MBIMEx v2.0 signal state indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed MBIMEx v2.0 signal state indication");
+    } else {
+        if (!mbim_message_signal_state_notification_parse (
+                notification,
+                &coded_rssi,
+                &coded_error_rate,
+                NULL, /* signal_strength_interval */
+                NULL, /* rssi_threshold */
+                NULL, /* error_rate_threshold */
+                &error)) {
+            mm_obj_warn (self, "failed processing signal state indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed signal state indication");
     }
+
+    quality = mm_signal_quality_from_mbim_signal_state (coded_rssi, rsrp_snr, rsrp_snr_count, self);
+    mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
+
+    /* Best guess of current data class */
+    data_class = self->priv->highest_available_data_class;
+    if (data_class == 0)
+        data_class = self->priv->available_data_classes;
+
+    if (mm_signal_from_mbim_signal_state (data_class, coded_rssi, coded_error_rate, rsrp_snr, rsrp_snr_count,
+                                          self, &cdma, &evdo, &gsm, &umts, &lte, &nr5g))
+        mm_iface_modem_signal_update (MM_IFACE_MODEM_SIGNAL (self), cdma, evdo, gsm, umts, lte, nr5g);
 }
 
 static void
@@ -3257,13 +3623,19 @@ update_access_technologies (MMBroadbandModemMbim *self)
 
 static void
 update_registration_info (MMBroadbandModemMbim *self,
-                          MbimRegisterState state,
-                          MbimDataClass available_data_classes,
-                          gchar *operator_id_take,
-                          gchar *operator_name_take)
+                          MbimRegisterState     state,
+                          MbimDataClass         available_data_classes,
+                          gchar                *operator_id_take,
+                          gchar                *operator_name_take)
 {
     MMModem3gppRegistrationState reg_state;
+    MMModem3gppRegistrationState reg_state_cs;
+    MMModem3gppRegistrationState reg_state_ps;
+    MMModem3gppRegistrationState reg_state_eps;
+    MMModem3gppRegistrationState reg_state_5gs;
     gboolean                     operator_updated = FALSE;
+
+    self->priv->reg_state = state;
 
     reg_state = mm_modem_3gpp_registration_state_from_mbim_register_state (state);
 
@@ -3295,9 +3667,30 @@ update_registration_info (MMBroadbandModemMbim *self,
         g_free (operator_name_take);
     }
 
-    mm_iface_modem_3gpp_update_ps_registration_state (
-        MM_IFACE_MODEM_3GPP (self),
-        reg_state);
+    reg_state_cs = MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+    reg_state_ps = MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+    reg_state_eps = MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+    reg_state_5gs = MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+
+    if (available_data_classes & (MBIM_DATA_CLASS_GPRS  | MBIM_DATA_CLASS_EDGE  |
+                                  MBIM_DATA_CLASS_UMTS  | MBIM_DATA_CLASS_HSDPA | MBIM_DATA_CLASS_HSUPA)) {
+        reg_state_cs = reg_state;
+        if (self->priv->packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHED)
+            reg_state_ps = reg_state;
+    }
+
+    if (available_data_classes & (MBIM_DATA_CLASS_LTE))
+        reg_state_eps = reg_state;
+
+    if (available_data_classes & (MBIM_DATA_CLASS_5G_NSA | MBIM_DATA_CLASS_5G_SA))
+        reg_state_5gs = reg_state;
+
+    mm_iface_modem_3gpp_update_cs_registration_state (MM_IFACE_MODEM_3GPP (self), reg_state_cs);
+    mm_iface_modem_3gpp_update_ps_registration_state (MM_IFACE_MODEM_3GPP (self), reg_state_ps);
+    if (mm_iface_modem_is_3gpp_lte (MM_IFACE_MODEM (self)))
+        mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self), reg_state_eps);
+    if (mm_iface_modem_is_3gpp_5gnr (MM_IFACE_MODEM (self)))
+        mm_iface_modem_3gpp_update_5gs_registration_state (MM_IFACE_MODEM_3GPP (self), reg_state_5gs);
 
     self->priv->available_data_classes = available_data_classes;
     update_access_technologies (self);
@@ -3310,31 +3703,61 @@ update_registration_info (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification_register_state (MMBroadbandModemMbim *self,
-                                           MbimMessage *notification)
+                                           MbimDevice           *device,
+                                           MbimMessage          *notification)
 {
-    MbimRegisterState register_state;
-    MbimDataClass available_data_classes;
-    gchar *provider_id;
-    gchar *provider_name;
+    g_autoptr(GError)  error = NULL;
+    MbimRegisterState  register_state;
+    MbimDataClass      available_data_classes;
+    gchar             *provider_id;
+    gchar             *provider_name;
+    MbimDataClass      preferred_data_classes = 0;
 
-    if (mbim_message_register_state_notification_parse (
-            notification,
-            NULL, /* nw_error */
-            &register_state,
-            NULL, /* register_mode */
-            &available_data_classes,
-            NULL, /* current_cellular_class */
-            &provider_id,
-            &provider_name,
-            NULL, /* roaming_text */
-            NULL, /* registration_flag */
-            NULL)) {
-        update_registration_info (self,
-                                  register_state,
-                                  available_data_classes,
-                                  provider_id,
-                                  provider_name);
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_register_state_notification_parse (
+                notification,
+                NULL, /* nw_error */
+                &register_state,
+                NULL, /* register_mode */
+                &available_data_classes,
+                NULL, /* current_cellular_class */
+                &provider_id,
+                &provider_name,
+                NULL, /* roaming_text */
+                NULL, /* registration_flag */
+                &preferred_data_classes,
+                &error)) {
+            mm_obj_warn (self, "failed processing MBIMEx v2.0 register state indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed MBIMEx v2.0 register state indication");
+    } else {
+        if (!mbim_message_register_state_notification_parse (
+                notification,
+                NULL, /* nw_error */
+                &register_state,
+                NULL, /* register_mode */
+                &available_data_classes,
+                NULL, /* current_cellular_class */
+                &provider_id,
+                &provider_name,
+                NULL, /* roaming_text */
+                NULL, /* registration_flag */
+                NULL)) {
+            mm_obj_warn (self, "failed processing register state indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed register state indication");
     }
+
+    update_registration_info (self,
+                              register_state,
+                              available_data_classes,
+                              provider_id,
+                              provider_name);
+
+    if (preferred_data_classes)
+        complete_pending_allowed_modes_action (self, preferred_data_classes);
 }
 
 typedef struct {
@@ -3358,6 +3781,7 @@ bearer_list_report_disconnected_status (MMBaseBearer *bearer,
 
 static void
 basic_connect_notification_connect (MMBroadbandModemMbim *self,
+                                    MbimDevice           *device,
                                     MbimMessage          *notification)
 {
     guint32                  session_id;
@@ -3405,7 +3829,8 @@ basic_connect_notification_connect (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
-                                                    MbimMessage *notification)
+                                                    MbimDevice           *device,
+                                                    MbimMessage          *notification)
 {
     MbimSubscriberReadyState ready_state;
     gchar **telephone_numbers;
@@ -3438,41 +3863,119 @@ basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
     g_strfreev (telephone_numbers);
 }
 
+typedef struct {
+    MMBroadbandModemMbim *self;
+    guint64               uplink_speed;
+    guint64               downlink_speed;
+} ReportSpeedsContext;
+
+static void
+bearer_list_report_speeds (MMBaseBearer *bearer,
+                           gpointer      user_data)
+{
+    ReportSpeedsContext *ctx = user_data;
+
+    if (MM_IS_BEARER_MBIM (bearer)) {
+        mm_obj_dbg (ctx->self, "bearer '%s' speeds updated", mm_base_bearer_get_path (bearer));
+        mm_base_bearer_report_speeds (bearer, ctx->uplink_speed, ctx->downlink_speed);
+    }
+}
+
 static void
 basic_connect_notification_packet_service (MMBroadbandModemMbim *self,
-                                           MbimMessage *notification)
+                                           MbimDevice           *device,
+                                           MbimMessage          *notification)
 {
-    MbimPacketServiceState packet_service_state;
-    MbimDataClass highest_available_data_class;
-    gchar *str;
+    guint32                 nw_error;
+    MbimPacketServiceState  packet_service_state;
+    MbimDataClass           data_class;
+    guint64                 uplink_speed;
+    guint64                 downlink_speed;
+    MbimFrequencyRange      frequency_range = MBIM_FREQUENCY_RANGE_UNKNOWN;
+    g_autofree gchar       *data_class_str = NULL;
+    g_autofree gchar       *frequency_range_str = NULL;
+    const gchar            *nw_error_str;
+    g_autoptr(GError)       error = NULL;
+    g_autoptr(MMBearerList) bearer_list = NULL;
 
-    if (!mbim_message_packet_service_notification_parse (
-            notification,
-            NULL, /* nw_error */
-            &packet_service_state,
-            &highest_available_data_class,
-            NULL, /* uplink_speed */
-            NULL, /* downlink_speed */
-            NULL)) {
-        return;
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_packet_service_notification_parse (
+                notification,
+                &nw_error,
+                &packet_service_state,
+                &data_class, /* current */
+                &uplink_speed,
+                &downlink_speed,
+                &frequency_range,
+                &error)) {
+            mm_obj_warn (self, "failed processing MBIMEx v2.0 packet service indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed MBIMEx v2.0 packet service indication");
+    } else {
+        if (!mbim_message_packet_service_notification_parse (
+                notification,
+                &nw_error,
+                &packet_service_state,
+                &data_class, /* highest_available */
+                &uplink_speed,
+                &downlink_speed,
+                &error)) {
+            mm_obj_warn (self, "failed processing packet service indication: %s", error->message);
+            return;
+        }
+        mm_obj_dbg (self, "proccessed packet service indication");
     }
 
-    str = mbim_data_class_build_string_from_mask (highest_available_data_class);
-    mm_obj_dbg (self, "packet service state: '%s', data class: '%s'",
-                mbim_packet_service_state_get_string (packet_service_state), str);
-    g_free (str);
+    data_class_str = mbim_data_class_build_string_from_mask (data_class);
+    frequency_range_str = mbim_frequency_range_build_string_from_mask (frequency_range);
+    nw_error_str = mbim_nw_error_get_string (nw_error);
+
+    mm_obj_dbg (self, "packet service update:");
+    if (nw_error_str)
+        mm_obj_dbg (self, "        nw error: '%s'", nw_error_str);
+    else
+        mm_obj_dbg (self, "        nw error: '0x%x'", nw_error);
+    mm_obj_dbg (self, "           state: '%s'", mbim_packet_service_state_get_string (packet_service_state));
+    mm_obj_dbg (self, "      data class: '%s'", data_class_str);
+    mm_obj_dbg (self, "          uplink: '%" G_GUINT64_FORMAT "' bps", uplink_speed);
+    mm_obj_dbg (self, "        downlink: '%" G_GUINT64_FORMAT "' bps", downlink_speed);
+    mm_obj_dbg (self, " frequency range: '%s'", frequency_range_str);
 
     if (packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHED) {
-      self->priv->highest_available_data_class = highest_available_data_class;
+        self->priv->highest_available_data_class = data_class;
     } else if (packet_service_state == MBIM_PACKET_SERVICE_STATE_DETACHED) {
-      self->priv->highest_available_data_class = 0;
+        self->priv->highest_available_data_class = 0;
+    }
+    update_access_technologies (self);
+
+    if (self->priv->packet_service_state != packet_service_state) {
+        self->priv->packet_service_state = packet_service_state;
+        update_registration_info (self,
+                                  self->priv->reg_state,
+                                  self->priv->available_data_classes,
+                                  NULL,
+                                  NULL);
     }
 
-    update_access_technologies (self);
+    g_object_get (self,
+                  MM_IFACE_MODEM_BEARER_LIST, &bearer_list,
+                  NULL);
+    if (bearer_list) {
+        ReportSpeedsContext ctx = {
+            .uplink_speed = uplink_speed,
+            .downlink_speed = downlink_speed,
+        };
+
+        mm_bearer_list_foreach (bearer_list,
+                                (MMBearerListForeachFunc)bearer_list_report_speeds,
+                                &ctx);
+    }
 }
 
 static void
 basic_connect_notification_provisioned_contexts (MMBroadbandModemMbim *self,
+                                                 MbimDevice           *device,
                                                  MbimMessage          *notification)
 {
     /* We don't even attempt to parse the indication, we just need to notify that
@@ -3485,7 +3988,8 @@ static void add_sms_part (MMBroadbandModemMbim *self,
 
 static void
 sms_notification_read_flash_sms (MMBroadbandModemMbim *self,
-                                 MbimMessage *notification)
+                                 MbimDevice           *device,
+                                 MbimMessage          *notification)
 {
     MbimSmsFormat format;
     guint32 messages_count;
@@ -3512,32 +4016,33 @@ sms_notification_read_flash_sms (MMBroadbandModemMbim *self,
 
 static void
 basic_connect_notification (MMBroadbandModemMbim *self,
-                            MbimMessage *notification)
+                            MbimDevice           *device,
+                            MbimMessage          *notification)
 {
     switch (mbim_message_indicate_status_get_cid (notification)) {
     case MBIM_CID_BASIC_CONNECT_SIGNAL_STATE:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SIGNAL_QUALITY)
-            basic_connect_notification_signal_state (self, notification);
+            basic_connect_notification_signal_state (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_REGISTER_STATE:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_REGISTRATION_UPDATES)
-            basic_connect_notification_register_state (self, notification);
+            basic_connect_notification_register_state (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_CONNECT:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_CONNECT)
-            basic_connect_notification_connect (self, notification);
+            basic_connect_notification_connect (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_SUBSCRIBER_READY_STATUS:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO)
-            basic_connect_notification_subscriber_ready_status (self, notification);
+            basic_connect_notification_subscriber_ready_status (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_PACKET_SERVICE:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PACKET_SERVICE)
-            basic_connect_notification_packet_service (self, notification);
+            basic_connect_notification_packet_service (self, device, notification);
         break;
     case MBIM_CID_BASIC_CONNECT_PROVISIONED_CONTEXTS:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PROVISIONED_CONTEXTS)
-            basic_connect_notification_provisioned_contexts (self, notification);
+            basic_connect_notification_provisioned_contexts (self, device, notification);
     default:
         /* Ignore */
         break;
@@ -3613,13 +4118,14 @@ sms_notification_read_stored_sms (MMBroadbandModemMbim *self,
 
 static void
 sms_notification (MMBroadbandModemMbim *self,
-                  MbimMessage *notification)
+                  MbimDevice           *device,
+                  MbimMessage          *notification)
 {
     switch (mbim_message_indicate_status_get_cid (notification)) {
     case MBIM_CID_SMS_READ:
         /* New flash/alert message? */
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SMS_READ)
-            sms_notification_read_flash_sms (self, notification);
+            sms_notification_read_flash_sms (self, device, notification);
         break;
 
     case MBIM_CID_SMS_MESSAGE_STORE_STATUS: {
@@ -3647,7 +4153,8 @@ sms_notification (MMBroadbandModemMbim *self,
 
 static void
 ms_basic_connect_extensions_notification_pco (MMBroadbandModemMbim *self,
-                                              MbimMessage *notification)
+                                              MbimDevice           *device,
+                                              MbimMessage          *notification)
 {
     MbimPcoValue *pco_value;
     GError *error = NULL;
@@ -3689,7 +4196,8 @@ ms_basic_connect_extensions_notification_pco (MMBroadbandModemMbim *self,
 
 static void
 ms_basic_connect_extensions_notification_lte_attach_info (MMBroadbandModemMbim *self,
-                                                          MbimMessage *notification)
+                                                          MbimDevice           *device,
+                                                          MbimMessage          *notification)
 {
     g_autoptr(GError)              error = NULL;
     g_autoptr(MMBearerProperties)  properties = NULL;
@@ -3759,6 +4267,7 @@ update_sim_from_slot_status (MMBroadbandModemMbim *self,
 
 static void
 ms_basic_connect_extensions_notification_slot_info_status (MMBroadbandModemMbim *self,
+                                                           MbimDevice           *device,
                                                            MbimMessage          *notification)
 {
     g_autoptr(GError) error = NULL;
@@ -3788,20 +4297,21 @@ ms_basic_connect_extensions_notification_slot_info_status (MMBroadbandModemMbim 
 
 static void
 ms_basic_connect_extensions_notification (MMBroadbandModemMbim *self,
-                                          MbimMessage *notification)
+                                          MbimDevice           *device,
+                                          MbimMessage          *notification)
 {
     switch (mbim_message_indicate_status_get_cid (notification)) {
     case MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_PCO:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PCO)
-            ms_basic_connect_extensions_notification_pco (self, notification);
+            ms_basic_connect_extensions_notification_pco (self, device, notification);
         break;
     case MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_LTE_ATTACH_INFO:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_LTE_ATTACH_INFO)
-            ms_basic_connect_extensions_notification_lte_attach_info (self, notification);
+            ms_basic_connect_extensions_notification_lte_attach_info (self, device, notification);
         break;
     case MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_SLOT_INFO_STATUS:
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS)
-            ms_basic_connect_extensions_notification_slot_info_status (self, notification);
+            ms_basic_connect_extensions_notification_slot_info_status (self, device, notification);
         break;
     default:
         /* Ignore */
@@ -3815,6 +4325,7 @@ process_ussd_notification (MMBroadbandModemMbim *self,
 
 static void
 ussd_notification (MMBroadbandModemMbim *self,
+                   MbimDevice           *device,
                    MbimMessage          *notification)
 {
     if (mbim_message_indicate_status_get_cid (notification) != MBIM_CID_USSD) {
@@ -3842,13 +4353,13 @@ device_notification_cb (MbimDevice *device,
                                         mbim_message_indicate_status_get_cid (notification)));
 
     if (service == MBIM_SERVICE_BASIC_CONNECT)
-        basic_connect_notification (self, notification);
+        basic_connect_notification (self, device, notification);
     else if (service == MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS)
-        ms_basic_connect_extensions_notification (self, notification);
+        ms_basic_connect_extensions_notification (self, device, notification);
     else if (service == MBIM_SERVICE_SMS)
-        sms_notification (self, notification);
+        sms_notification (self, device, notification);
     else if (service == MBIM_SERVICE_USSD)
-        ussd_notification (self, notification);
+        ussd_notification (self, device, notification);
 }
 
 static void
@@ -4438,12 +4949,12 @@ atds_location_query_ready (MbimDevice   *device,
                            GAsyncResult *res,
                            GTask        *task)
 {
-    MMBroadbandModemMbim *self;
-    MbimMessage          *response;
-    GError               *error = NULL;
-    guint32               lac;
-    guint32               tac;
-    guint32               cid;
+    g_autoptr(MbimMessage)  response = NULL;
+    MMBroadbandModemMbim   *self;
+    GError                 *error = NULL;
+    guint32                 lac;
+    guint32                 tac;
+    guint32                 cid;
 
     self = g_task_get_source_object (task);
 
@@ -4457,9 +4968,6 @@ atds_location_query_ready (MbimDevice   *device,
         g_task_return_boolean (task, TRUE);
     }
     g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
 }
 
 static void
@@ -4467,35 +4975,64 @@ register_state_query_ready (MbimDevice   *device,
                             GAsyncResult *res,
                             GTask        *task)
 {
-    MMBroadbandModemMbim *self;
-    MbimMessage          *response;
-    GError               *error = NULL;
-    MbimRegisterState     register_state;
-    MbimDataClass         available_data_classes;
-    gchar                *provider_id;
-    gchar                *provider_name;
-
-    response = mbim_device_command_finish (device, res, &error);
-    if (!response ||
-        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
-        !mbim_message_register_state_response_parse (
-            response,
-            NULL, /* nw_error */
-            &register_state,
-            NULL, /* register_mode */
-            &available_data_classes,
-            NULL, /* current_cellular_class */
-            &provider_id,
-            &provider_name,
-            NULL, /* roaming_text */
-            NULL, /* registration_flag */
-            &error)) {
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        goto out;
-    }
+    g_autoptr(MbimMessage)  response = NULL;
+    MMBroadbandModemMbim   *self;
+    GError                 *error = NULL;
+    MbimRegisterState       register_state;
+    MbimDataClass           available_data_classes;
+    gchar                  *provider_id;
+    gchar                  *provider_name;
 
     self = g_task_get_source_object (task);
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        if (!mbim_message_ms_basic_connect_v2_register_state_response_parse (
+                response,
+                NULL, /* nw_error */
+                &register_state,
+                NULL, /* register_mode */
+                &available_data_classes,
+                NULL, /* current_cellular_class */
+                &provider_id,
+                &provider_name,
+                NULL, /* roaming_text */
+                NULL, /* registration_flag */
+                NULL, /* preferred_data_classes */
+                &error))
+            g_prefix_error (&error, "Failed processing MBIMEx v2.0 register state response: ");
+        else
+            mm_obj_dbg (self, "proccessed MBIMEx v2.0 register state response");
+    } else {
+        if (!mbim_message_register_state_response_parse (
+                response,
+                NULL, /* nw_error */
+                &register_state,
+                NULL, /* register_mode */
+                &available_data_classes,
+                NULL, /* current_cellular_class */
+                &provider_id,
+                &provider_name,
+                NULL, /* roaming_text */
+                NULL, /* registration_flag */
+                &error))
+            g_prefix_error (&error, "Failed processing register state response: ");
+        else
+            mm_obj_dbg (self, "proccessed register state response");
+    }
+
+    if (error) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
     update_registration_info (self,
                               register_state,
                               available_data_classes,
@@ -4503,26 +5040,20 @@ register_state_query_ready (MbimDevice   *device,
                               provider_name);
 
     if (self->priv->is_atds_location_supported) {
-        MbimMessage *message;
+        g_autoptr(MbimMessage) message = NULL;
 
         message = mbim_message_atds_location_query_new (NULL);
-
         mbim_device_command (device,
                              message,
                              10,
                              NULL,
                              (GAsyncReadyCallback)atds_location_query_ready,
                              task);
-        mbim_message_unref (message);
-        goto out;
+        return;
     }
 
     g_task_return_boolean (task, TRUE);
     g_object_unref (task);
-
- out:
-    if (response)
-        mbim_message_unref (response);
 }
 
 static void
@@ -4534,9 +5065,9 @@ modem_3gpp_run_registration_checks (MMIfaceModem3gpp    *self,
                                     GAsyncReadyCallback  callback,
                                     gpointer             user_data)
 {
-    MbimDevice  *device;
-    MbimMessage *message;
-    GTask       *task;
+    g_autoptr(MbimMessage)  message = NULL;
+    MbimDevice             *device;
+    GTask                  *task;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
@@ -4550,7 +5081,6 @@ modem_3gpp_run_registration_checks (MMIfaceModem3gpp    *self,
                          NULL,
                          (GAsyncReadyCallback)register_state_query_ready,
                          task);
-    mbim_message_unref (message);
 }
 
 /*****************************************************************************/
@@ -4627,23 +5157,24 @@ register_state_set_ready (MbimDevice *device,
 }
 
 static void
-modem_3gpp_register_in_network (MMIfaceModem3gpp *self,
+modem_3gpp_register_in_network (MMIfaceModem3gpp *_self,
                                 const gchar *operator_id,
                                 GCancellable *cancellable,
                                 GAsyncReadyCallback callback,
                                 gpointer user_data)
 {
-    MbimDevice *device;
-    MbimMessage *message;
-    GTask *task;
+    MMBroadbandModemMbim   *self = MM_BROADBAND_MODEM_MBIM (_self);
+    MbimDevice             *device;
+    GTask                  *task;
+    g_autoptr(MbimMessage)  message = NULL;
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
     /* data_class set to 0 in the MBIM register state set message ends up
      * selecting some "auto" mode that would overwrite whatever capabilities
      * and modes we had set. So, if we're using QMI-based capability and
      * mode switching, also use QMI-based network registration. */
-    if (MM_BROADBAND_MODEM_MBIM (self)->priv->qmi_capability_and_mode_switching) {
-        mm_shared_qmi_3gpp_register_in_network (self, operator_id, cancellable, callback, user_data);
+    if (self->priv->qmi_capability_and_mode_switching) {
+        mm_shared_qmi_3gpp_register_in_network (_self, operator_id, cancellable, callback, user_data);
         return;
     }
 #endif
@@ -4653,25 +5184,22 @@ modem_3gpp_register_in_network (MMIfaceModem3gpp *self,
 
     task = g_task_new (self, NULL, callback, user_data);
 
+    /* keep track of which operator id is selected */
+    g_clear_pointer (&self->priv->requested_operator_id, g_free);
     if (operator_id && operator_id[0])
-        message = (mbim_message_register_state_set_new (
-                       operator_id,
-                       MBIM_REGISTER_ACTION_MANUAL,
-                       0, /* data_class, none preferred */
-                       NULL));
-    else
-        message = (mbim_message_register_state_set_new (
-                       "",
-                       MBIM_REGISTER_ACTION_AUTOMATIC,
-                       0, /* data_class, none preferred */
-                       NULL));
+        self->priv->requested_operator_id = g_strdup (operator_id);
+
+    message = (mbim_message_register_state_set_new (
+                   self->priv->requested_operator_id ? self->priv->requested_operator_id : "",
+                   self->priv->requested_operator_id ? MBIM_REGISTER_ACTION_MANUAL : MBIM_REGISTER_ACTION_AUTOMATIC,
+                   self->priv->requested_data_class,
+                   NULL));
     mbim_device_command (device,
                          message,
                          60,
                          NULL,
                          (GAsyncReadyCallback)register_state_set_ready,
                          task);
-    mbim_message_unref (message);
 }
 
 /*****************************************************************************/
@@ -4986,6 +5514,91 @@ modem_signal_load_values (MMIfaceModemSignal  *self,
                                             NULL,
                                             (GAsyncReadyCallback)parent_signal_load_values_ready,
                                             task);
+}
+
+/*****************************************************************************/
+/* Setup threshold values (Signal interface) */
+
+static gboolean
+modem_signal_setup_thresholds_finish (MMIfaceModemSignal  *self,
+                                      GAsyncResult        *res,
+                                      GError             **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+signal_state_set_thresholds_ready (MbimDevice   *device,
+                                   GAsyncResult *res,
+                                   GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                  *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        mbim_message_signal_state_response_parse (
+            response,
+            NULL, /* rssi */
+            NULL, /* error_rate */
+            NULL, /* signal_strength_interval */
+            NULL, /* rssi_threshold */
+            NULL, /* error_rate_threshold */
+            &error))
+        g_task_return_boolean (task, TRUE);
+    else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+}
+
+static void
+modem_signal_setup_thresholds (MMIfaceModemSignal  *self,
+                               guint                rssi_threshold,
+                               gboolean             error_rate_threshold,
+                               GAsyncReadyCallback  callback,
+                               gpointer             user_data)
+{
+    g_autoptr(MbimMessage)  message = NULL;
+    MbimDevice             *device;
+    GTask                  *task;
+    guint                   coded_rssi_threshold = 0;
+    guint                   coded_error_rate_threshold = 0;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* the input RSSI threshold difference is given in dBm, and in the MBIM
+     * protocol we use a linear scale of coded values that correspond to 2dBm
+     * per code point. */
+    if (rssi_threshold) {
+        coded_rssi_threshold = rssi_threshold / 2;
+        if (!coded_rssi_threshold)
+            coded_rssi_threshold = 1; /* minimum value when enabled */
+    }
+
+    /* the input error rate threshold is given as a boolean to enable or
+     * disable, and in the MBIM protocol we have a non-linear scale of
+     * coded values. We just select the minimum coded value, so that we
+     * get all reports, i.e. every time it changes the coded value */
+    if (error_rate_threshold)
+        coded_error_rate_threshold = 1; /* minimum value when enabled */
+
+    message = (mbim_message_signal_state_set_new (
+                   0, /* signal strength interval set to default always */
+                   coded_rssi_threshold,
+                   coded_error_rate_threshold,
+                   NULL));
+
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)signal_state_set_thresholds_ready,
+                         task);
 }
 
 /*****************************************************************************/
@@ -6217,7 +6830,332 @@ messaging_create_sms (MMIfaceModemMessaging *self)
 }
 
 /*****************************************************************************/
+/* Check support (SAR interface) */
 
+static gboolean
+sar_check_support_finish (MMIfaceModemSar *self,
+                          GAsyncResult    *res,
+                          GError         **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+sar_check_support (MMIfaceModemSar    *_self,
+                   GAsyncReadyCallback callback,
+                   gpointer            user_data)
+{
+    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
+    GTask                *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    mm_obj_dbg (self, "SAR capabilities %s", self->priv->is_ms_sar_supported ? "supported" : "not supported");
+    g_task_return_boolean (task, self->priv->is_ms_sar_supported);
+    g_object_unref (task);
+}
+
+/*****************************************************************************/
+
+static gboolean
+sar_load_state_finish (MMIfaceModemSar *self,
+                       GAsyncResult    *res,
+                       gboolean        *out_state,
+                       GError         **error)
+{
+    GError   *inner_error = NULL;
+    gboolean  result;
+
+    result = g_task_propagate_boolean (G_TASK (res), &inner_error);
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    if (out_state)
+        *out_state = result;
+    return TRUE;
+}
+
+static void
+sar_config_query_state_ready (MbimDevice   *device,
+                              GAsyncResult *res,
+                              GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                 *error = NULL;
+    MbimSarBackoffState     state;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        mbim_message_ms_sar_config_response_parse (
+            response,
+            NULL,
+            &state,
+            NULL,
+            NULL,
+            NULL,
+            &error))
+        g_task_return_boolean (task, state);
+    else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+}
+
+static void
+sar_load_state (MMIfaceModemSar    *_self,
+                GAsyncReadyCallback callback,
+                gpointer            user_data)
+{
+    MMBroadbandModemMbim   *self = MM_BROADBAND_MODEM_MBIM (_self);
+    MbimDevice             *device;
+    GTask                  *task;
+    g_autoptr(MbimMessage)  message = NULL;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    message = mbim_message_ms_sar_config_query_new (NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)sar_config_query_state_ready,
+                         task);
+}
+
+/*****************************************************************************/
+
+static gboolean
+sar_load_power_level_finish (MMIfaceModemSar *self,
+                             GAsyncResult    *res,
+                             guint           *out_power_level,
+                             GError         **error)
+{
+    gssize result;
+
+    result = g_task_propagate_int (G_TASK (res), error);
+    if (result < 0)
+        return FALSE;
+
+    *out_power_level = (guint) result;
+    return TRUE;
+}
+
+static void
+sar_config_query_power_level_ready (MbimDevice   *device,
+                                    GAsyncResult *res,
+                                    GTask        *task)
+{
+    MMBroadbandModemMbim               *self;
+    GError                             *error = NULL;
+    guint32                             states_count;
+    g_autoptr(MbimSarConfigStateArray)  config_states = NULL;
+    g_autoptr(MbimMessage)              response = NULL;
+
+    self = g_task_get_source_object (task);
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        mbim_message_ms_sar_config_response_parse (
+            response,
+            NULL,
+            NULL,
+            NULL,
+            &states_count,
+            &config_states,
+            &error)) {
+        if (states_count == 0) {
+            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_WRONG_STATE, "Couldn't load config states");
+        } else {
+            if (states_count > 1)
+                mm_obj_dbg (self, "Device reports SAR config states for %u antennas separately, but only considering the first one", states_count);
+            g_task_return_int (task, config_states[0]->backoff_index);
+        }
+    } else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+}
+
+static void
+sar_load_power_level (MMIfaceModemSar    *_self,
+                      GAsyncReadyCallback callback,
+                      gpointer            user_data)
+{
+    MMBroadbandModemMbim   *self = MM_BROADBAND_MODEM_MBIM (_self);
+    MbimDevice             *device;
+    GTask                  *task;
+    g_autoptr(MbimMessage)  message = NULL;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    message = mbim_message_ms_sar_config_query_new (NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)sar_config_query_power_level_ready,
+                         task);
+}
+
+/*****************************************************************************/
+
+static gboolean
+sar_enable_finish (MMIfaceModemSar *self,
+                   GAsyncResult    *res,
+                   GError         **error)
+{
+     return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+sar_config_set_enable_ready (MbimDevice   *device,
+                             GAsyncResult *res,
+                             GTask        *task)
+{
+    g_autoptr(MbimMessage) response = NULL;
+    GError *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_boolean (task, TRUE);
+    } else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+}
+
+static void
+sar_enable (MMIfaceModemSar    *_self,
+            gboolean            enable,
+            GAsyncReadyCallback callback,
+            gpointer            user_data)
+{
+    MMBroadbandModemMbim          *self = MM_BROADBAND_MODEM_MBIM (_self);
+    MbimDevice                    *device;
+    GTask                         *task;
+    g_autoptr(MbimMessage)         message = NULL;
+    g_autofree MbimSarConfigState *config_state = NULL;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /*
+     * the value 0xFFFFFFFF means all antennas
+     * the backoff index set to the current index of modem
+     */
+    config_state = g_new (MbimSarConfigState, 1);
+#if defined MBIM_FIBOCOM_SAR_HACK //TODO(b/188002987): Remove hacks before merging to upstream
+    config_state->antenna_index = 0;
+#else
+    config_state->antenna_index = 0xFFFFFFFF;
+#endif
+    config_state->backoff_index = mm_iface_modem_sar_get_power_level (_self);
+
+    message = mbim_message_ms_sar_config_set_new (MBIM_SAR_CONTROL_MODE_OS,
+                                                  enable ? MBIM_SAR_BACKOFF_STATE_ENABLED : MBIM_SAR_BACKOFF_STATE_DISABLED,
+                                                  1, (const MbimSarConfigState **)&config_state, NULL);
+
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)sar_config_set_enable_ready,
+                         task);
+}
+
+/*****************************************************************************/
+
+static gboolean
+sar_set_power_level_finish (MMIfaceModemSar *self,
+                            GAsyncResult    *res,
+                            GError         **error)
+{
+     return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+sar_config_set_power_level_ready (MbimDevice   *device,
+                                  GAsyncResult *res,
+                                  GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                 *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_boolean (task, TRUE);
+    } else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+}
+
+static void
+sar_set_power_level (MMIfaceModemSar    *_self,
+                     guint               power_level,
+                     GAsyncReadyCallback callback,
+                     gpointer            user_data)
+{
+    MMBroadbandModemMbim          *self = MM_BROADBAND_MODEM_MBIM (_self);
+    MbimDevice                    *device;
+    GTask                         *task;
+    g_autoptr(MbimMessage)         message = NULL;
+    g_autofree MbimSarConfigState *config_state = NULL;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    if (!mm_iface_modem_get_sar_state (_self)) {
+        g_task_report_new_error (self,
+                                 callback,
+                                 user_data,
+                                 sar_set_power_level,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_WRONG_STATE,
+                                 "Couldn't set power level of SAR, because the SAR is disabled");
+        return;
+    }
+
+    /*
+     * the value 0xFFFFFFFF means all antennas
+     * the backoff index set to the input power level
+     */
+    config_state = g_new (MbimSarConfigState, 1);
+#if defined MBIM_FIBOCOM_SAR_HACK //TODO(b/188002987): Remove hacks before merging to upstream
+    config_state->antenna_index = 0;
+#else
+    config_state->antenna_index = 0xFFFFFFFF;
+#endif
+    config_state->backoff_index = power_level;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    message = mbim_message_ms_sar_config_set_new (MBIM_SAR_CONTROL_MODE_OS,
+                                                  MBIM_SAR_BACKOFF_STATE_ENABLED,
+                                                  1, (const MbimSarConfigState **)&config_state, NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)sar_config_set_power_level_ready,
+                         task);
+}
+
+/*****************************************************************************/
 
 static void
 set_property (GObject *object,
@@ -6763,322 +7701,6 @@ set_primary_sim_slot_mbim (GTask *task)
     mbim_message_unref (message);
 }
 
-/* Check support (SAR interface) */
-
-static gboolean
-sar_check_support_finish (MMIfaceModemSar *self,
-                          GAsyncResult    *res,
-                          GError         **error)
-{
-    return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static void
-sar_check_support (MMIfaceModemSar    *_self,
-                   GAsyncReadyCallback callback,
-                   gpointer            user_data)
-{
-    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
-    GTask *task;
-
-    task = g_task_new (self, NULL, callback, user_data);
-
-    mm_obj_dbg (self, "SAR capabilities %s",self->priv->is_ms_sar_supported ? "supported" : "not supported");
-    g_task_return_boolean (task, self->priv->is_ms_sar_supported);
-    g_object_unref (task);
-}
-
-static gboolean
-sar_load_state_finish (MMIfaceModemSar *self,
-                       GAsyncResult *res,
-                       GError **error)
-{
-    return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static void
-sar_load_state_ready (MbimDevice *device,
-                      GAsyncResult *res,
-                      GTask *task)
-{
-    MbimMessage *response;
-    GError *error = NULL;
-    MbimSarControlMode mode;
-    MbimSarBackoffState state;
-
-    guint32 states_count;
-    MbimSarConfigStateArray *config_states;
-    response = mbim_device_command_finish (device, res, &error);
-    if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_ms_sar_config_response_parse (
-            response,
-            &mode,
-            &state,
-            NULL,
-            &states_count,
-            &config_states,
-            &error)) {
-        g_task_return_boolean (task, state);
-    }
-    else
-        g_task_return_error (task, error);
-
-    g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
-}
-
-static void
-sar_load_state (MMIfaceModemSar    *_self,
-                GAsyncReadyCallback callback,
-                gpointer            user_data)
-{
-    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
-    MbimDevice *device;
-    MbimMessage *message;
-    GTask *task;
-
-    if (!peek_device (self, &device, callback, user_data))
-        return;
-
-    task = g_task_new (self, NULL, callback, user_data);
-
-    message = mbim_message_ms_sar_config_query_new (NULL);
-    mbim_device_command (device,
-                         message,
-                         10,
-                         NULL,
-                         (GAsyncReadyCallback) sar_load_state_ready,
-                         task);
-    mbim_message_unref (message);
-}
-
-static gboolean
-sar_load_power_level_finish (MMIfaceModemSar *self,
-                             GAsyncResult    *res,
-                             guint           *out_power_level,
-                             GError         **error)
-{
-    gssize result;
-
-    result = g_task_propagate_int(G_TASK (res), error);
-    if (result < 0)
-        return FALSE;
-
-    *out_power_level = (guint) result;
-    return TRUE;
-}
-
-static void
-sar_load_power_level_ready (MbimDevice   *device,
-                            GAsyncResult *res,
-                            GTask        *task)
-{
-    MbimMessage             *response;
-    GError                  *error = NULL;
-    MbimSarControlMode       mode;
-    MbimSarBackoffState      state;
-    guint32                  states_count;
-    MbimSarConfigStateArray *config_states = NULL;
-
-    response = mbim_device_command_finish (device, res, &error);
-    if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
-        mbim_message_ms_sar_config_response_parse (
-            response,
-            &mode,
-            &state,
-            NULL,
-            &states_count,
-            &config_states,
-            &error)) {
-        MMBroadbandModemMbim *self;
-
-        self = g_task_get_source_object (task);
-        if (states_count == 0) {
-            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_WRONG_STATE,
-                                     "Couldn't load config states");
-        }
-        else {
-            if (states_count > 1) {
-                mm_obj_warn (self, "The count of config states is %d, We're just taking the state reported for the first antenna.",states_count);
-            }
-
-            g_task_return_int (task, config_states[0]->backoff_index);
-        }
-
-        mbim_sar_config_state_array_free (config_states);
-    }
-    else
-        g_task_return_error (task, error);
-
-    g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
-}
-
-static void
-sar_load_power_level (MMIfaceModemSar    *_self,
-                      GAsyncReadyCallback callback,
-                      gpointer            user_data)
-{
-    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
-    MbimDevice *device;
-    MbimMessage *message;
-    GTask *task;
-
-    if (!peek_device (self, &device, callback, user_data))
-        return;
-
-    task = g_task_new (self, NULL, callback, user_data);
-
-    message = mbim_message_ms_sar_config_query_new (NULL);
-    mbim_device_command (device,
-                         message,
-                         10,
-                         NULL,
-                         (GAsyncReadyCallback) sar_load_power_level_ready,
-                         task);
-    mbim_message_unref (message);
-}
-
-static gboolean
-sar_enable_finish (MMIfaceModemSar *self,
-                   GAsyncResult    *res,
-                   GError         **error)
-{
-     return g_task_propagate_boolean(G_TASK (res), error);
-}
-
-static void
-sar_enable_ready (MbimDevice   *device,
-                  GAsyncResult *res,
-                  GTask        *task)
-{
-    MbimMessage *response;
-    GError *error = NULL;
-
-    response = mbim_device_command_finish (device, res, &error);
-    if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
-        g_task_return_boolean(task, TRUE);
-    }
-    else
-        g_task_return_error (task, error);
-
-    g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
-}
-
-static void
-sar_enable (MMIfaceModemSar    *_self,
-            gboolean            enable,
-            GAsyncReadyCallback callback,
-            gpointer            user_data)
-{
-    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
-    MbimDevice *device;
-    MbimMessage *message;
-    GTask *task;
-    MbimSarConfigState state          = {0, 0};
-    const MbimSarConfigState* states[] = {&state};
-
-    if (!peek_device (self, &device, callback, user_data))
-        return;
-
-    task = g_task_new (self, NULL, callback, user_data);
-    message = mbim_message_ms_sar_config_set_new (MBIM_SAR_CONTROL_MODE_OS,
-                                                      enable ? MBIM_SAR_BACKOFF_STATE_ENABLED : MBIM_SAR_BACKOFF_STATE_DISABLED,
-                                                    G_N_ELEMENTS (states), states, NULL);
-    mbim_device_command (device,
-                         message,
-                         10,
-                         NULL,
-                         (GAsyncReadyCallback) sar_enable_ready,
-                         task);
-    mbim_message_unref (message);
-}
-
-static gboolean
-sar_set_power_level_finish (MMIfaceModemSar *self,
-                            GAsyncResult    *res,
-                            GError         **error)
-{
-     return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static void
-sar_set_power_level_ready (MbimDevice   *device,
-                           GAsyncResult *res,
-                           GTask        *task)
-{
-    MbimMessage *response;
-    GError      *error = NULL;
-
-    response = mbim_device_command_finish (device, res, &error);
-    if (response &&
-        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
-        g_task_return_boolean (task, TRUE);
-    }
-    else
-        g_task_return_error (task, error);
-
-    g_object_unref (task);
-
-    if (response)
-        mbim_message_unref (response);
-}
-
-
-static void
-sar_set_power_level (MMIfaceModemSar    *_self,
-                     guint               power_level,
-                     GAsyncReadyCallback callback,
-                     gpointer            user_data)
-{
-    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
-    MbimDevice           *device;
-    MbimMessage          *message;
-    GTask                *task;
-    MbimSarConfigState    state = {0, power_level};
-    const MbimSarConfigState* states[] = {&state};
-
-    if (!peek_device (self, &device, callback, user_data))
-        return;
-
-    if (!mm_iface_modem_get_sar_state (_self)) {
-        g_task_report_new_error (self,
-                                 callback,
-                                 user_data,
-                                 sar_set_power_level,
-                                 MM_CORE_ERROR,
-                                 MM_CORE_ERROR_WRONG_STATE,
-                                 "Couldn't set power level of SAR, because the SAR is disabled");
-        return;
-    }
-
-    task = g_task_new (self, NULL, callback, user_data);
-    message = mbim_message_ms_sar_config_set_new (MBIM_SAR_CONTROL_MODE_OS,
-                                                  MBIM_SAR_BACKOFF_STATE_ENABLED,
-                                                  G_N_ELEMENTS (states), states, NULL);
-
-
-    mbim_device_command (device,
-                         message,
-                         10,
-                         NULL,
-                         (GAsyncReadyCallback) sar_set_power_level_ready,
-                         task);
-
-    mbim_message_unref (message);
-}
-
-
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
 static void
 shared_qmi_set_primary_sim_slot_ready (MMIfaceModem *self,
@@ -7115,6 +7737,122 @@ set_primary_sim_slot (MMIfaceModem       *self,
 }
 
 /*****************************************************************************/
+/* Set packet service state (3GPP interface)  */
+
+static gboolean
+set_packet_service_state_finish (MMIfaceModem3gpp  *self,
+                                 GAsyncResult      *res,
+                                 GError           **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+packet_service_set_ready (MbimDevice   *device,
+                          GAsyncResult *res,
+                          GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                 *error = NULL;
+    MbimPacketServiceState  requested_packet_service_state;
+    MbimPacketServiceState  packet_service_state;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        mbim_message_ms_basic_connect_v2_packet_service_response_parse (
+            response,
+            NULL, /* nw_error */
+            &packet_service_state,
+            NULL, /* data_class */
+            NULL, /* uplink_speed */
+            NULL, /* downlink_speed */
+            NULL, /* frequency_range */
+            &error);
+    } else {
+        mbim_message_packet_service_response_parse (
+            response,
+            NULL, /* nw_error */
+            &packet_service_state,
+            NULL, /* data_class */
+            NULL, /* uplink_speed */
+            NULL, /* downlink_speed */
+            &error);
+    }
+
+    if (error) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    requested_packet_service_state = GPOINTER_TO_UINT (g_task_get_task_data (task));
+
+    if (((requested_packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHED) &&
+         (packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHED || packet_service_state == MBIM_PACKET_SERVICE_STATE_ATTACHING)) ||
+        ((requested_packet_service_state == MBIM_PACKET_SERVICE_STATE_DETACHED) &&
+         (packet_service_state == MBIM_PACKET_SERVICE_STATE_DETACHED || packet_service_state == MBIM_PACKET_SERVICE_STATE_DETACHING)))
+        g_task_return_boolean (task, TRUE);
+    else
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "Failed to request state %s, current state: %s",
+                                 mbim_packet_service_state_get_string (requested_packet_service_state),
+                                 mbim_packet_service_state_get_string (packet_service_state));
+    g_object_unref (task);
+}
+
+static void
+set_packet_service_state (MMIfaceModem3gpp              *self,
+                          MMModem3gppPacketServiceState  packet_service_state,
+                          GAsyncReadyCallback            callback,
+                          gpointer                       user_data)
+{
+    g_autoptr(MbimMessage)   message = NULL;
+    MbimDevice              *device;
+    GTask                   *task;
+    MbimPacketServiceAction  packet_service_action;
+    MbimPacketServiceState   requested_packet_service_state;
+
+    g_assert ((packet_service_state == MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED) ||
+              (packet_service_state == MM_MODEM_3GPP_PACKET_SERVICE_STATE_DETACHED));
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    switch (packet_service_state) {
+    case MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED:
+        packet_service_action = MBIM_PACKET_SERVICE_ACTION_ATTACH;
+        requested_packet_service_state = MBIM_PACKET_SERVICE_STATE_ATTACHED;
+        break;
+    case MM_MODEM_3GPP_PACKET_SERVICE_STATE_DETACHED:
+        packet_service_action = MBIM_PACKET_SERVICE_ACTION_DETACH;
+        requested_packet_service_state = MBIM_PACKET_SERVICE_STATE_DETACHED;
+        break;
+    case MM_MODEM_3GPP_PACKET_SERVICE_STATE_UNKNOWN:
+    default:
+        g_assert_not_reached ();
+    }
+
+    g_task_set_task_data (task, GUINT_TO_POINTER (requested_packet_service_state), NULL);
+
+    message = mbim_message_packet_service_set_new (packet_service_action, NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)packet_service_set_ready,
+                         task);
+}
+
+
+/*****************************************************************************/
 
 MMBroadbandModemMbim *
 mm_broadband_modem_mbim_new (const gchar *device,
@@ -7145,6 +7883,7 @@ mm_broadband_modem_mbim_init (MMBroadbandModemMbim *self)
     self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self,
                                               MM_TYPE_BROADBAND_MODEM_MBIM,
                                               MMBroadbandModemMbimPrivate);
+    self->priv->packet_service_state = MBIM_PACKET_SERVICE_STATE_UNKNOWN;
 }
 
 static void
@@ -7182,6 +7921,7 @@ finalize (GObject *object)
     g_free (self->priv->caps_hardware_info);
     g_free (self->priv->current_operator_id);
     g_free (self->priv->current_operator_name);
+    g_free (self->priv->requested_operator_id);
     g_list_free_full (self->priv->pco_list, g_object_unref);
 
     G_OBJECT_CLASS (mm_broadband_modem_mbim_parent_class)->finalize (object);
@@ -7330,6 +8070,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->scan_networks_finish = modem_3gpp_scan_networks_finish;
     iface->disable_facility_lock = modem_3gpp_disable_facility_lock;
     iface->disable_facility_lock_finish = modem_3gpp_disable_facility_lock_finish;
+    iface->set_packet_service_state = set_packet_service_state;
+    iface->set_packet_service_state_finish = set_packet_service_state_finish;
 }
 
 static void
@@ -7457,6 +8199,8 @@ iface_modem_signal_init (MMIfaceModemSignal *iface)
     iface->check_support_finish = modem_signal_check_support_finish;
     iface->load_values = modem_signal_load_values;
     iface->load_values_finish = modem_signal_load_values_finish;
+    iface->setup_thresholds = modem_signal_setup_thresholds;
+    iface->setup_thresholds_finish = modem_signal_setup_thresholds_finish;
 }
 
 static void

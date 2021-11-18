@@ -39,7 +39,6 @@
 #include "mm-iface-modem-messaging.h"
 #include "mm-iface-modem-location.h"
 #include "mm-iface-modem-firmware.h"
-#include "mm-iface-modem-sar.h"
 #include "mm-iface-modem-signal.h"
 #include "mm-iface-modem-oma.h"
 #include "mm-shared-qmi.h"
@@ -62,7 +61,6 @@ static void iface_modem_location_init (MMIfaceModemLocation *iface);
 static void iface_modem_oma_init (MMIfaceModemOma *iface);
 static void iface_modem_firmware_init (MMIfaceModemFirmware *iface);
 static void iface_modem_signal_init (MMIfaceModemSignal *iface);
-static void iface_modem_sar_init (MMIfaceModemSar *iface);
 static void shared_qmi_init (MMSharedQmi *iface);
 
 static MMIfaceModemLocation  *iface_modem_location_parent;
@@ -81,7 +79,6 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemQmi, mm_broadband_modem_qmi, MM_TYPE_BRO
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_OMA, iface_modem_oma_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_FIRMWARE, iface_modem_firmware_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SAR, iface_modem_sar_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_SHARED_QMI, shared_qmi_init))
 
 /* TODO(b/175305412): Use rmnet_data0 as the only link. */
@@ -173,8 +170,6 @@ struct _MMBroadbandModemQmiPrivate {
     gboolean firmware_list_preloaded;
     GList *firmware_list;
     MMFirmwareProperties *current_firmware;
-
-    gboolean is_sar_supported;
 
     /* For notifying when the qmi-proxy connection is dead */
     guint qmi_device_removed_id;
@@ -1311,10 +1306,6 @@ modem_load_supported_ip_families (MMIfaceModem *self,
 /*****************************************************************************/
 /* Load signal quality (Modem interface) */
 
-/* Limit the value betweeen [-113,-51] and scale it to a percentage */
-#define STRENGTH_TO_QUALITY(strength)                                   \
-    (guint8)(100 - ((CLAMP (strength, -113, -51) + 51) * 100 / (-113 + 51)))
-
 static gboolean
 qmi_dbm_valid (gint8 dbm, QmiNasRadioInterface radio_interface)
 {
@@ -1421,7 +1412,7 @@ common_signal_info_get_quality (MMBroadbandModemQmi *self,
 
     if (rssi_max < 0 && rssi_max > -125) {
         /* This RSSI comes as negative dBms */
-        *out_quality = STRENGTH_TO_QUALITY (rssi_max);
+        *out_quality = MM_RSSI_TO_QUALITY (rssi_max);
         *out_act = mm_modem_access_technology_from_qmi_radio_interface (signal_info_radio_interface);
 
         mm_obj_dbg (self, "RSSI: %d dBm --> %u%%", rssi_max, *out_quality);
@@ -1552,7 +1543,7 @@ signal_strength_get_quality_and_access_tech (MMBroadbandModemQmi *self,
 
     if (signal_max < 0) {
         /* This signal strength comes as negative dBms */
-        *o_quality = STRENGTH_TO_QUALITY (signal_max);
+        *o_quality = MM_RSSI_TO_QUALITY (signal_max);
         *o_act = act;
 
         mm_obj_dbg (self, "signal strength: %d dBm --> %u%%", signal_max, *o_quality);
@@ -2080,7 +2071,7 @@ get_sim_lock_status_via_pin_status_ready (QmiClientDms *client,
     LoadEnabledFacilityLocksContext *ctx;
     QmiMessageDmsUimGetPinStatusOutput *output;
     QmiDmsUimPinStatus current_status;
-    GError *error;
+    GError *error = NULL;
     gboolean pin1_enabled;
     gboolean pin2_enabled;
 
@@ -5077,8 +5068,15 @@ common_enable_disable_unsolicited_events_signal_strength (GTask *task)
     g_autoptr(GArray)                            thresholds = NULL;
 
     /* The device doesn't really like to have many threshold values, so don't
-     * grow this array without checking first */
-    static const gint8 thresholds_data[] = { -80, -40, 0, 40, 80 };
+     * grow this array without checking first
+     * The values are chosen towards their results through MM_RSSI_TO_QUALITY
+     *   -106 dBm gives 11%
+     *    -94 dBm gives 30%
+     *    -82 dBm gives 50%
+     *    -69 dBm gives 70%
+     *    -57 dBm gives 90%
+     */
+    static const gint8 thresholds_data[] = { -106, -94, -82, -69, -57 };
 
     ctx = g_task_get_task_data (task);
 
@@ -5384,7 +5382,7 @@ nas_event_report_indication_cb (QmiClientNas                      *client,
             guint8 quality;
 
             /* This signal strength comes as negative dBms */
-            quality = STRENGTH_TO_QUALITY (signal_strength);
+            quality = MM_RSSI_TO_QUALITY (signal_strength);
 
             mm_obj_dbg (self, "signal strength indication (%s): %d dBm --> %u%%",
                         qmi_nas_radio_interface_get_string (signal_strength_radio_interface),
@@ -7410,261 +7408,6 @@ messaging_create_sms (MMIfaceModemMessaging *_self)
     }
 
     return mm_sms_qmi_new (MM_BASE_MODEM (self));
-}
-
-/*****************************************************************************/
-
-/* Check support (SAR interface) */
-
-static gboolean
-sar_check_support_finish (MMIfaceModemSar *self,
-                          GAsyncResult    *res,
-                          GError         **error)
-{
-    return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static void
-sar_check_support (MMIfaceModemSar    *_self,
-                   GAsyncReadyCallback callback,
-                   gpointer            user_data)
-{
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-    GTask *task;
-
-    task = g_task_new (self, NULL, callback, user_data);
-
-
-    /* If SAR service is available, assume sar state is OS */
-    if (!mm_shared_qmi_peek_client (MM_SHARED_QMI (self),
-                                    QMI_SERVICE_SAR,
-                                    MM_PORT_QMI_FLAG_DEFAULT,
-                                    NULL)) {
-        self->priv->is_sar_supported = FALSE;
-    } else {
-        self->priv->is_sar_supported = TRUE;
-    }
-
-    mm_obj_dbg (self, "SAR capabilities %s", self->priv->is_sar_supported ? "supported" : "not supported");
-    g_task_return_boolean (task, self->priv->is_sar_supported);
-    g_object_unref (task);
-}
-
-static gboolean
-sar_load_state_finish (MMIfaceModemSar *self,
-                       GAsyncResult *res,
-                       GError **error)
-{
-    return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static void
-sar_load_state (MMIfaceModemSar *_self,
-                GAsyncReadyCallback callback,
-                gpointer user_data)
-{
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-    GTask *task;
-
-    task = g_task_new (self, NULL, callback, user_data);
-
-    mm_obj_dbg (self, "SAR enabled %s", self->priv->is_sar_supported ? "yes" : "no");
-    g_task_return_boolean (task, self->priv->is_sar_supported);
-    g_object_unref (task);
-}
-
-static gboolean
-sar_load_power_level_finish (MMIfaceModemSar *self,
-                             GAsyncResult    *res,
-                             guint           *out_power_level,
-                             GError          **error)
-{
-    gssize result;
-
-    result = g_task_propagate_int(G_TASK (res), error);
-    if (result < 0)
-        return FALSE;
-
-    *out_power_level = (guint) result;
-    return TRUE;
-}
-
-static void
-sar_load_power_level_ready (QmiClientSar *client,
-                            GAsyncResult *res,
-                            GTask        *task)
-{
-    QmiMessageSarRfGetStateOutput *output;
-    GError *error = NULL;
-    QmiSarRfState rf_state;
-
-    output = qmi_client_sar_rf_get_state_finish (client, res, &error);
-    if (output &&
-        qmi_message_sar_rf_get_state_output_get_result (output, &error) &&
-        qmi_message_sar_rf_get_state_output_get_state (output, &rf_state, &error)) {
-            g_task_return_int (task, rf_state);
-    } else
-        g_task_return_error (task, error);
-
-    g_object_unref (task);
-
-    if (output)
-        qmi_message_sar_rf_get_state_output_unref (output);
-}
-
-static void
-sar_load_power_level (MMIfaceModemSar    *_self,
-                      GAsyncReadyCallback callback,
-                      gpointer            user_data)
-{
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-    GTask *task;
-    QmiClient *client = NULL;
-
-    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_SAR, &client,
-                                      callback, user_data))
-        return;
-
-    task = g_task_new (self, NULL, callback, user_data);
-
-    qmi_client_sar_rf_get_state (
-        QMI_CLIENT_SAR (client),
-        NULL,
-        5,
-        NULL,
-        (GAsyncReadyCallback)sar_load_power_level_ready,
-        task);
-}
-
-static gboolean
-sar_enable_finish (MMIfaceModemSar *self,
-                            GAsyncResult    *res,
-                            GError         **error)
-{
-     return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static void
-sar_enable_ready (QmiClientSar *client,
-                           GAsyncResult *res,
-                           GTask        *task)
-{
-    QmiMessageSarRfSetStateOutput *output;
-    GError *error = NULL;
-
-    output = qmi_client_sar_rf_set_state_finish (client, res, &error);
-    if (output &&
-        qmi_message_sar_rf_set_state_output_get_result (output, &error)) {
-            g_task_return_boolean (task, TRUE);
-    } else
-        g_task_return_error (task, error);
-
-    g_object_unref (task);
-
-    if (output)
-        qmi_message_sar_rf_set_state_output_unref (output);
-}
-
-
-static void
-sar_enable (MMIfaceModemSar    *_self,
-                     gboolean  enable,
-                     GAsyncReadyCallback callback,
-                     gpointer            user_data)
-{
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-    QmiMessageSarRfSetStateInput *input = NULL;
-    GTask *task;
-    QmiClient *client = NULL;
-    GError *error = NULL;
-
-    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_SAR, &client,
-                                      callback, user_data))
-        return;
-
-    task = g_task_new (self, NULL, callback, user_data);
-    input = qmi_message_sar_rf_set_state_input_new ();
-    qmi_message_sar_rf_set_state_input_set_state (
-                input,
-                0,
-                &error);
-
-    qmi_client_sar_rf_set_state (
-        QMI_CLIENT_SAR (client),
-        input,
-        5,
-        NULL,
-        (GAsyncReadyCallback)sar_enable_ready,
-        task);
-
-    qmi_message_sar_rf_set_state_input_unref (input);
-}
-
-
-static gboolean
-sar_set_power_level_finish (MMIfaceModemSar *self,
-                            GAsyncResult    *res,
-                            GError         **error)
-{
-     return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static void
-sar_set_power_level_ready (QmiClientSar *client,
-                           GAsyncResult *res,
-                           GTask        *task)
-{
-    QmiMessageSarRfSetStateOutput *output;
-    GError *error = NULL;
-
-    output = qmi_client_sar_rf_set_state_finish (client, res, &error);
-    if (output &&
-        qmi_message_sar_rf_set_state_output_get_result (output, &error)) {
-            g_task_return_boolean (task, TRUE);
-    } else
-        g_task_return_error (task, error);
-
-    g_object_unref (task);
-
-    if (output)
-        qmi_message_sar_rf_set_state_output_unref (output);
-}
-
-
-static void
-sar_set_power_level (MMIfaceModemSar    *_self,
-                     guint               power_level,
-                     GAsyncReadyCallback callback,
-                     gpointer            user_data)
-{
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-    QmiMessageSarRfSetStateInput *input = NULL;
-    GTask *task;
-    QmiClient *client = NULL;
-    GError *error = NULL;
-
-    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_SAR, &client,
-                                      callback, user_data))
-        return;
-
-    task = g_task_new (self, NULL, callback, user_data);
-    input = qmi_message_sar_rf_set_state_input_new ();
-    qmi_message_sar_rf_set_state_input_set_state (
-                input,
-                power_level,
-                &error);
-    qmi_client_sar_rf_set_state (
-        QMI_CLIENT_SAR (client),
-        input,
-        5,
-        NULL,
-        (GAsyncReadyCallback)sar_set_power_level_ready,
-        task);
-
-    qmi_message_sar_rf_set_state_input_unref (input);
 }
 
 /*****************************************************************************/
@@ -12222,7 +11965,6 @@ static const QmiService qmi_services[] = {
     QMI_SERVICE_LOC,
     QMI_SERVICE_PDC,
     QMI_SERVICE_VOICE,
-    QMI_SERVICE_SAR,
 };
 
 typedef struct {
@@ -12933,21 +12675,6 @@ iface_modem_signal_init (MMIfaceModemSignal *iface)
     iface->check_support_finish = signal_check_support_finish;
     iface->load_values = signal_load_values;
     iface->load_values_finish = signal_load_values_finish;
-}
-
-static void
-iface_modem_sar_init (MMIfaceModemSar *iface)
-{
-    iface->check_support = sar_check_support;
-    iface->check_support_finish  = sar_check_support_finish;
-    iface->load_state = sar_load_state;
-    iface->load_state_finish = sar_load_state_finish;
-    iface->load_power_level = sar_load_power_level;
-    iface->load_power_level_finish = sar_load_power_level_finish;
-    iface->enable = sar_enable;
-    iface->enable_finish = sar_enable_finish;
-    iface->set_power_level = sar_set_power_level;
-    iface->set_power_level_finish = sar_set_power_level_finish;
 }
 
 static void

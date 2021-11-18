@@ -85,6 +85,8 @@ MMBearerApnType               mm_common_get_apn_type_from_string                
                                                                                    GError      **error);
 MMModem3gppFacility           mm_common_get_3gpp_facility_from_string             (const gchar  *str,
                                                                                    GError      **error);
+MMModem3gppPacketServiceState mm_common_get_3gpp_packet_service_state_from_string (const gchar  *str,
+                                                                                   GError      **error);
 
 /******************************************************************************/
 
@@ -190,6 +192,16 @@ gboolean  mm_get_double_from_match_info          (GMatchInfo  *match_info,
                                                   gdouble     *out);
 gchar    *mm_get_string_unquoted_from_match_info (GMatchInfo  *match_info,
                                                   guint32      match_index);
+
+gchar    *mm_new_iso8601_time_from_unix_time     (guint64  timestamp);
+gchar    *mm_new_iso8601_time                    (guint    year,
+                                                  guint    month,
+                                                  guint    day,
+                                                  guint    hour,
+                                                  guint    minute,
+                                                  guint    second,
+                                                  gboolean have_offset,
+                                                  gint     offset_minutes);
 
 /******************************************************************************/
 /* Type checkers and conversion utilities */

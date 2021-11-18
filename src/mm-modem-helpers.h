@@ -71,15 +71,6 @@ guint mm_netmask_to_cidr (const gchar *netmask);
 GArray *mm_filter_current_bands (const GArray *supported_bands,
                                  const GArray *current_bands);
 
-gchar *mm_new_iso8601_time (guint year,
-                            guint month,
-                            guint day,
-                            guint hour,
-                            guint minute,
-                            guint second,
-                            gboolean have_offset,
-                            gint offset_minutes);
-
 GArray *mm_filter_supported_modes (const GArray *all,
                                    const GArray *supported_combinations,
                                    gpointer      log_object);
@@ -417,6 +408,9 @@ gboolean mm_3gpp_parse_ccwa_service_query_response (const gchar  *response,
                                                     gboolean     *status,
                                                     GError      **error);
 
+/* CGATT helpers */
+gchar *mm_3gpp_build_cgatt_set_request (MMModem3gppPacketServiceState state);
+
 
 /* Additional 3GPP-specific helpers */
 
@@ -457,9 +451,6 @@ gboolean mm_3gpp_rsrq_level_to_rsrq   (guint     rsrq_level,
 gboolean mm_3gpp_rsrp_level_to_rsrp   (guint     rsrp_level,
                                        gpointer  log_object,
                                        gdouble  *out_rsrp);
-gboolean mm_3gpp_rssnr_level_to_rssnr (gint      rssnr_level,
-                                       gpointer  log_object,
-                                       gdouble  *out_rssnr);
 
 GStrv mm_3gpp_parse_emergency_numbers (const char *raw, GError **error);
 
@@ -571,6 +562,17 @@ gboolean mm_sim_parse_cpol_test_response (const gchar  *response,
 /* Useful when clamp-ing an unsigned integer with implicit low limit set to 0,
  * and in order to avoid -Wtype-limits warnings. */
 #define MM_CLAMP_HIGH(x, high) (((x) > (high)) ? (high) : (x))
+
+/*****************************************************************************/
+/* Signal quality percentage from different sources */
+
+/* Limit the value betweeen [-113,-51] and scale it to a percentage */
+#define MM_RSSI_TO_QUALITY(rssi)                                   \
+    (guint8)(100 - ((CLAMP (rssi, -113, -51) + 51) * 100 / (-113 + 51)))
+
+/* Limit the value betweeen [-110,-60] and scale it to a percentage */
+#define MM_RSRP_TO_QUALITY(rsrp)                                   \
+    (guint8)(100 - ((CLAMP (rsrp, -110, -60) + 60) * 100 / (-110 + 60)))
 
 /*****************************************************************************/
 

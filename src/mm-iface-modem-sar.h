@@ -55,6 +55,7 @@ struct _MMIfaceModemSar {
                          gpointer            user_data);
     gboolean (* load_state_finish) (MMIfaceModemSar *self,
                                     GAsyncResult    *res,
+                                    gboolean        *out_state,
                                     GError         **error);
 
     /* Get power level (async) */

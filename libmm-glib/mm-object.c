@@ -605,7 +605,7 @@ mm_object_peek_modem_firmware (MMObject *self)
  * Returns: (transfer full): A #MMModemSar that must be freed with
  * g_object_unref() or %NULL if @self does not implement the interface.
  *
- * Since: 1.0
+ * Since: 1.20
  */
 MMModemSar *
 mm_object_get_modem_sar (MMObject *self)
@@ -629,7 +629,7 @@ mm_object_get_modem_sar (MMObject *self)
  * implement the interface. Do not free the returned object, it is owned by
  * @self.
  *
- * Since: 1.0
+ * Since: 1.20
  */
 MMModemSar *
 mm_object_peek_modem_sar (MMObject *self)

@@ -49,9 +49,9 @@
 # include <mm-modem-voice.h>
 # include <mm-modem-time.h>
 # include <mm-modem-firmware.h>
-# include <mm-modem-sar.h>
 # include <mm-modem-signal.h>
 # include <mm-modem-oma.h>
+# include <mm-modem-sar.h>
 #endif
 
 #if defined (_LIBMM_INSIDE_MM) ||    \
@@ -84,6 +84,7 @@
 #include <mm-pco.h>
 #include <mm-sim-preferred-network.h>
 #include <mm-3gpp-profile.h>
+#include <mm-signal-threshold-properties.h>
 #include <mm-compat.h>
 
 /* generated */
