@@ -48,6 +48,7 @@ AC_PROG_CC
 AM_PROG_CC_C_O
 AC_PROG_INSTALL
 AC_PROG_MKDIR_P
+AC_PROG_LN_S
 
 dnl Initialize libtool
 LT_PREREQ([2.2])
@@ -189,6 +190,10 @@ fi
 dnl-----------------------------------------------------------------------------
 dnl System paths
 dnl
+
+dnl ModemManager configuration directory
+pkgsysconfdir="${sysconfdir}/ModemManager"
+AC_SUBST(pkgsysconfdir)
 
 dnl DBus system directory
 AC_ARG_WITH(dbus-sys-dir, AS_HELP_STRING([--with-dbus-sys-dir=DIR], [where D-BUS system.d directory is]))
@@ -563,6 +568,7 @@ Makefile
 data/Makefile
 data/ModemManager.pc
 data/mm-glib.pc
+data/fcc-unlock/Makefile
 data/tests/Makefile
 data/tests/org.freedesktop.ModemManager1.service
 include/Makefile
@@ -618,6 +624,7 @@ echo "
 
     System paths:
       prefix:                  ${prefix}
+      configuration directory: ${pkgsysconfdir}
       D-Bus system directory:  ${DBUS_SYS_DIR}
       udev base directory:     ${UDEV_BASE_DIR}
       systemd unit directory:  ${with_systemdsystemunitdir}
