@@ -377,6 +377,7 @@ ModemManager_SOURCES = \
 	mm-iface-modem-signal.c \
 	mm-iface-modem-oma.h \
 	mm-iface-modem-oma.c \
+	mm-iface-sim-eap.h \
 	mm-broadband-modem.h \
 	mm-broadband-modem.c \
 	mm-port-probe.h \
