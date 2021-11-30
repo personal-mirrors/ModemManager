@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!--
+ ModemManager 1.0 Interface Specification
+
+   Copyright (C) 2011-2013 Red Hat, Inc.
+   Copyright (C) 2011-2013 Google, Inc.
+   Copyright (C) 2011-2013 Lanedo GmbH
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+
+  <!--
+      org.freedesktop.ModemManager1.Sim.Eap:
+      @short_description: The ModemManager SIM Eap interface.
+
+      The SIM Eap interface handles WiFi authentication using EAP-SIM, EAP-AKA, and EAP-AKAP
+  -->
+  <interface name="org.freedesktop.ModemManager1.Sim.Eap">
+
+    <!--
+        SIMAuth:
+        @rands: The random number authentication challenges, with at most 3
+        @skres: An array of tuples consisting of (Response, Encryption key) with at most 3 tuples
+
+        Uses the EAP-SIM authorization algorithm to authenticate the current SIM device.
+
+
+        Since: 1.?
+    -->
+    <method name="SimAuth">
+      <arg name="rands" type="aay" direction="in">
+        <annotation name="org.gtk.GDBus.C.ForceGVariant" value="true"/>
+      </arg>
+      <arg name="skres" type="a(ut)" direction="out" />
+    </method>
+
+
+    <!--
+        AKAAuth:
+        @rand: Random number challenge
+        @autn: Authentication value
+        @results: The response, consisting of res (auth res from peer), reslen (res length),
+                  ik (integrating key), ck (ciphering key), and auts (value on sync failure)
+
+        Uses the EAP-AKA authorization algorithm to authenticate the current SIM device.
+
+        Since: 1.?
+    -->
+    <method name="AkaAuth">
+      <arg name="rand" type="ay" direction="in">
+        <annotation name="org.gtk.GDBus.C.ForceGVariant" value="true"/>
+      </arg>
+      <arg name="autn" type="ay" direction="in">
+        <annotation name="org.gtk.GDBus.C.ForceGVariant" value="true"/>
+      </arg>
+      <arg name="results" type="(uaay)" direction="out" />
+    </method>
+
+    <!--
+        AKAPAuth
+        @rand: Random number challenge
+        @autn: Authentication value
+        @network_name: The network name
+        @results: The response, consisting of res (auth res from peer), reslen (res length),
+                  ik (integrating key), ck (ciphering key), and auts (value on sync failure)
+
+        Change the PIN code.
+
+        Since: 1.0
+    -->
+    <method name="AkapAuth">
+      <arg name="rand" type="ay" direction="in">
+        <annotation name="org.gtk.GDBus.C.ForceGVariant" value="true"/>
+      </arg>
+      <arg name="autn" type="ay" direction="in">
+        <annotation name="org.gtk.GDBus.C.ForceGVariant" value="true"/>
+      </arg>
+      <arg name="network_name" type="s" direction="in" />
+      <arg name="results" type="(uaay)" direction="out" />
+    </method>
+
+  </interface>
+</node>

@@ -4,6 +4,7 @@
 
   <xi:include href="org.freedesktop.ModemManager1.xml"/>
   <xi:include href="org.freedesktop.ModemManager1.Sim.xml"/>
+  <xi:include href="org.freedesktop.ModemManager1.Sim.Eap.xml"/>
   <xi:include href="org.freedesktop.ModemManager1.Bearer.xml"/>
   <xi:include href="org.freedesktop.ModemManager1.Sms.xml"/>
   <xi:include href="org.freedesktop.ModemManager1.Call.xml"/>

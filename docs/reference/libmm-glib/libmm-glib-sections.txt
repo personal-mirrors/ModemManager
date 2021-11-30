@@ -3820,6 +3820,7 @@ mm_gdbus_object_skeleton_set_modem_time
 mm_gdbus_object_skeleton_set_modem_signal
 mm_gdbus_object_skeleton_set_modem_voice
 mm_gdbus_object_skeleton_set_modem_sar
+mm_gdbus_object_skeleton_set_sim_eap
 <SUBSECTION Standard>
 MmGdbusObjectSkeletonClass
 MM_GDBUS_IS_OBJECT_SKELETON
@@ -3964,6 +3965,71 @@ MM_GDBUS_TYPE_SIM_SKELETON
 MmGdbusSimSkeletonPrivate
 mm_gdbus_sim_skeleton_get_type
 </SECTION>
+
+<SECTION>
+<FILE>MmGdbusSimEap</FILE>
+<TITLE>MmGdbusSimEap</TITLE>
+MmGdbusSimEap
+MmGdbusSimEapIface
+<SUBSECTION Methods>
+mm_gdbus_sim_eap_call_sim_auth
+mm_gdbus_sim_eap_call_sim_auth_finish
+mm_gdbus_sim_eap_call_sim_auth_sync
+mm_gdbus_sim_eap_call_aka_auth
+mm_gdbus_sim_eap_call_aka_auth_finish
+mm_gdbus_sim_eap_call_aka_auth_sync
+mm_gdbus_sim_eap_call_akap_auth
+mm_gdbus_sim_eap_call_akap_auth_finish
+mm_gdbus_sim_eap_call_akap_auth_sync
+<SUBSECTION Standard>
+MM_GDBUS_IS_SIM_EAP
+MM_GDBUS_SIM_EAP
+MM_GDBUS_SIM_EAP_GET_IFACE
+MM_GDBUS_TYPE_SIM_EAP
+mm_gdbus_sim_eap_get_type
+</SECTION>
+
+<SECTION>
+<FILE>MmGdbusSimEapProxy</FILE>
+<TITLE>MmGdbusSimProxy</TITLE>
+MmGdbusSimProxy
+<SUBSECTION New>
+mm_gdbus_sim_eap_proxy_new
+mm_gdbus_sim_eap_proxy_new_finish
+mm_gdbus_sim_eap_proxy_new_for_bus
+mm_gdbus_sim_eap_proxy_new_for_bus_finish
+mm_gdbus_sim_eap_proxy_new_for_bus_sync
+mm_gdbus_sim_eap_proxy_new_sync
+<SUBSECTION Standard>
+MmGdbusSimEapProxyClass
+MM_GDBUS_IS_SIM_EAP_PROXY
+MM_GDBUS_IS_SIM_EAP_PROXY_CLASS
+MM_GDBUS_SIM_EAP_PROXY
+MM_GDBUS_SIM_EAP_PROXY_CLASS
+MM_GDBUS_SIM_EAP_PROXY_GET_CLASS
+MM_GDBUS_TYPE_SIM_EAP_PROXY
+MmGdbusSimEapProxyPrivate
+mm_gdbus_sim_eap_proxy_get_type
+</SECTION>
+
+<SECTION>
+<FILE>MmGdbusSimEapSkeleton</FILE>
+<TITLE>MmGdbusSimEapSkeleton</TITLE>
+MmGdbusSimEapSkeleton
+<SUBSECTION New>
+mm_gdbus_sim_eap_skeleton_new
+<SUBSECTION Standard>
+MmGdbusSimEapSkeletonClass
+MM_GDBUS_IS_SIM_EAP_SKELETON
+MM_GDBUS_IS_SIM_EAP_SKELETON_CLASS
+MM_GDBUS_SIM_EAP_SKELETON
+MM_GDBUS_SIM_EAP_SKELETON_CLASS
+MM_GDBUS_SIM_EAP_SKELETON_GET_CLASS
+MM_GDBUS_TYPE_SIM_EAP_SKELETON
+MmGdbusSimEapSkeletonPrivate
+mm_gdbus_sim_eap_skeleton_get_type
+</SECTION>
+
 
 <SECTION>
 <FILE>MmGdbusSms</FILE>

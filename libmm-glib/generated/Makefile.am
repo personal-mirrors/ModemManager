@@ -32,6 +32,7 @@ GENERATED_C = \
 GENERATED_DOC = \
 	mm-gdbus-doc-org.freedesktop.ModemManager1.xml \
 	mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.xml \
+	mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.Eap.xml \
 	mm-gdbus-doc-org.freedesktop.ModemManager1.Sms.xml \
 	mm-gdbus-doc-org.freedesktop.ModemManager1.Call.xml \
 	mm-gdbus-doc-org.freedesktop.ModemManager1.Bearer.xml \
@@ -163,9 +164,11 @@ mm_gdbus_sim_generated = \
 	mm-gdbus-sim.h \
 	mm-gdbus-sim.c \
 	mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.xml \
+	mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.Eap.xml \
 	$(NULL)
 mm_gdbus_sim_deps = \
 	$(top_srcdir)/introspection/org.freedesktop.ModemManager1.Sim.xml \
+	$(top_srcdir)/introspection/org.freedesktop.ModemManager1.Sim.Eap.xml \
 	$(NULL)
 mm-gdbus-sim.c: $(mm_gdbus_sim_deps)
 	$(AM_V_GEN) $(GDBUS_CODEGEN) \
@@ -173,7 +176,7 @@ mm-gdbus-sim.c: $(mm_gdbus_sim_deps)
 		--c-namespace=MmGdbus \
 		--generate-docbook mm-gdbus-doc \
 		--generate-c-code mm-gdbus-sim \
-		$< \
+		$^ \
 		$(NULL)
 $(filter-out mm-gdbus-sim.c, $(mm_gdbus_sim_generated)): $(mm_gdbus_sim_deps) mm-gdbus-sim.c
 	@: # nothing to do, generated as a side-effect of the .c
