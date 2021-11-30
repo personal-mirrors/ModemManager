@@ -27,6 +27,7 @@
 #include <libmm-glib.h>
 
 #include "mm-iface-modem.h"
+#include "mm-iface-sim-eap.h"
 #include "mm-base-sim.h"
 #include "mm-base-modem-at.h"
 #include "mm-base-modem.h"
@@ -35,10 +36,12 @@
 
 static void async_initable_iface_init (GAsyncInitableIface *iface);
 static void log_object_iface_init     (MMLogObjectInterface *iface);
+static void iface_sim_eap_init        (MMIfaceSimEap *iface);
 
 G_DEFINE_TYPE_EXTENDED (MMBaseSim, mm_base_sim, MM_GDBUS_TYPE_SIM_SKELETON, 0,
                         G_IMPLEMENT_INTERFACE (G_TYPE_ASYNC_INITABLE, async_initable_iface_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_LOG_OBJECT, log_object_iface_init))
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_LOG_OBJECT, log_object_iface_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_SIM_EAP, iface_sim_eap_init))
 
 enum {
     PROP_0,
@@ -46,6 +49,7 @@ enum {
     PROP_CONNECTION,
     PROP_MODEM,
     PROP_SLOT_NUMBER,
+    PROP_SIM_EAP_DBUS_SKELETON,
     PROP_LAST
 };
 
@@ -69,6 +73,10 @@ struct _MMBaseSimPrivate {
     /* The SIM slot number, which will be 0 always if the system
      * doesn't support multiple SIMS. */
      guint slot_number;
+
+    /*<--- Sim Eap interface --->*/
+    /* Properties */
+    GObject *sim_eap_dbus_skeleton;
 };
 
 static guint signals[SIGNAL_LAST] = { 0 };
@@ -2847,21 +2855,29 @@ set_property (GObject *object,
     case PROP_PATH:
         g_free (self->priv->path);
         self->priv->path = g_value_dup_string (value);
-
         /* Export when we get a DBus connection AND we have a path */
-        if (self->priv->path &&
-            self->priv->connection)
+        if (!self->priv->connection) {
+            sim_dbus_unexport (self);
+            mm_iface_sim_eap_disable (MM_IFACE_SIM_EAP(self));
+        } else if (self->priv->path) {
             sim_dbus_export (self);
+            mm_obj_dbg (self, "Initializating EAP-SIM interface");
+            mm_iface_sim_eap_initialize (MM_IFACE_SIM_EAP (self));
+        }
         break;
     case PROP_CONNECTION:
         g_clear_object (&self->priv->connection);
         self->priv->connection = g_value_dup_object (value);
 
         /* Export when we get a DBus connection AND we have a path */
-        if (!self->priv->connection)
+        if (!self->priv->connection) {
             sim_dbus_unexport (self);
-        else if (self->priv->path)
+            mm_iface_sim_eap_disable (MM_IFACE_SIM_EAP(self));
+        } else if (self->priv->path) {
             sim_dbus_export (self);
+            mm_obj_dbg (self, "Initializating EAP-SIM interface");
+            mm_iface_sim_eap_initialize (MM_IFACE_SIM_EAP (self));
+        }
         break;
     case PROP_MODEM:
         g_clear_object (&self->priv->modem);
@@ -2878,6 +2894,10 @@ set_property (GObject *object,
         break;
     case PROP_SLOT_NUMBER:
         self->priv->slot_number = g_value_get_uint (value);
+        break;
+    case PROP_SIM_EAP_DBUS_SKELETON:
+        g_clear_object (&self->priv->sim_eap_dbus_skeleton);
+        self->priv->sim_eap_dbus_skeleton = g_value_dup_object (value);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -2905,6 +2925,9 @@ get_property (GObject *object,
         break;
     case PROP_SLOT_NUMBER:
         g_value_set_uint (value, self->priv->slot_number);
+        break;
+    case PROP_SIM_EAP_DBUS_SKELETON:
+        g_value_set_object (value, self->priv->sim_eap_dbus_skeleton);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -2941,8 +2964,9 @@ dispose (GObject *object)
 
     if (self->priv->connection) {
         /* If we arrived here with a valid connection, make sure we unexport
-         * the object */
+         * the object and its interfaces */
         sim_dbus_unexport (self);
+        mm_iface_sim_eap_disable (MM_IFACE_SIM_EAP (self));
         g_clear_object (&self->priv->connection);
     }
 
@@ -2962,6 +2986,11 @@ static void
 log_object_iface_init (MMLogObjectInterface *iface)
 {
     iface->build_id = log_object_build_id;
+}
+
+static void
+iface_sim_eap_init (MMIfaceSimEap *iface)
+{
 }
 
 static void
@@ -2999,6 +3028,11 @@ mm_base_sim_class_init (MMBaseSimClass *klass)
     klass->enable_pin_finish = enable_pin_finish;
     klass->change_pin = change_pin;
     klass->change_pin_finish = change_pin_finish;
+
+    /* Override the Sim Eap interface skeleton */
+    g_object_class_override_property (object_class,
+                                      PROP_SIM_EAP_DBUS_SKELETON,
+                                      MM_IFACE_SIM_EAP_DBUS_SKELETON);
 
     properties[PROP_CONNECTION] =
         g_param_spec_object (MM_BASE_SIM_CONNECTION,
