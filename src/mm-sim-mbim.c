@@ -31,8 +31,12 @@
 #include "mm-log-object.h"
 #include "mm-modem-helpers-mbim.h"
 #include "mm-sim-mbim.h"
+#include "mm-iface-sim-eap.h"
 
-G_DEFINE_TYPE (MMSimMbim, mm_sim_mbim, MM_TYPE_BASE_SIM)
+static void iface_sim_eap_init (MMIfaceSimEap *iface);
+
+G_DEFINE_TYPE_EXTENDED (MMSimMbim, mm_sim_mbim, MM_TYPE_BASE_SIM, 0,
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_SIM_EAP, iface_sim_eap_init))
 
 struct _MMSimMbimPrivate {
     gboolean           preload;
@@ -1216,6 +1220,221 @@ change_pin (MMBaseSim *self,
 }
 
 /*****************************************************************************/
+/* EAP SIM Authentication (Sim EAP interface) */
+
+static gboolean
+sim_eap_sim_auth_finish (MMDevice        *device,
+                         SimAuthResponse *resp,
+                         GAsyncResult    *res,
+                         GError          **error)
+{
+    MbimMessage *response;
+
+    response = mbim_device_command_finish (MBIM_DEVICE(device), res, error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, error) &&
+        mbim_message_auth_sim_response_parse (
+            response,
+            &resp->out_sres1,
+            &resp->out_kc1,
+            &resp->out_sres2,
+            &resp->out_kc2,
+            &resp->out_sres3,
+            &resp->out_kc3,
+            &resp->out_n,
+            error)) {
+      /* All done! Complete GTask and return the SimAuthResponse */
+      mbim_message_unref(response);
+      return TRUE;
+    }
+    else {
+      if (response)
+        mbim_message_unref(response);
+      return FALSE;
+    }
+}
+
+static void
+sim_eap_sim_auth (MMIfaceSimEap       *self,
+                  const guint8        **rands,
+                  guint32             rands_size,
+                  GAsyncReadyCallback callback,
+                  gpointer            user_data)
+{
+    MbimDevice *device;
+    MbimMessage *message;
+    GError *error = NULL;
+
+    if (!peek_device (self, &device, callback, user_data)) {
+      mm_obj_dbg(self, "sim_eap_sim_auth: Error with peeking device");
+      return;
+    }
+
+    mm_obj_dbg (self, "Sending auth SIM request...");
+    /* It is important to note that the rand3 field takes in the value of
+     * rands[1], which is the same as the rand2 field, when rands_size == 2.
+     * This is because mbim_message_auth_sim_query_new expects a valid pointer
+     * to the rand3 field regardless if rand3 is used or not
+     * */
+    message = mbim_message_auth_sim_query_new(rands[0],
+                                              rands[1],
+                                              rands_size == 3? rands[2] : rands[1],
+                                              rands_size,
+                                              &error);
+    if (!message) {
+        mm_obj_dbg (self, "sim_eap_sim_auth: Error with message query");
+        return;
+    }
+
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         callback,
+                         user_data);
+    mbim_message_unref (message);
+    g_free(rands);
+}
+
+/*****************************************************************************/
+/* EAP AKA Authentication (Sim EAP interface) */
+
+static gboolean
+sim_eap_aka_auth_finish (MMDevice         *device,
+                         AkasAuthResponse *resp,
+                         GAsyncResult     *res,
+                         GError           **error)
+{
+    MbimMessage *response;
+
+    response = mbim_device_command_finish (MBIM_DEVICE(device), res, error);
+
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, error) &&
+        mbim_message_auth_aka_response_parse (
+            response,
+            &resp->out_res,
+            &resp->out_res_len,
+            &resp->out_integrating_key,
+            &resp->out_ciphering_key,
+            &resp->out_auts,
+            error)) {
+      /* All done! Complete GTask and return the AkaAuthResponse */
+      mbim_message_unref(response);
+      return TRUE;
+    }
+    else {
+      if (response)
+        mbim_message_unref(response);
+      return FALSE;
+    }
+}
+
+static void
+sim_eap_aka_auth (MMIfaceSimEap       *self,
+                  const guint8        *rand,
+                  const guint8        *autn,
+                  GAsyncReadyCallback callback,
+                  gpointer            user_data)
+{
+    MbimDevice *device;
+    MbimMessage *message;
+    GError *error = NULL;
+
+    if (!peek_device (self, &device, callback, user_data)) {
+      mm_obj_dbg(self, "sim_eap_aka_auth: Error with peeking device");
+      return;
+    }
+
+    mm_obj_dbg (self, "Sending auth AKA request...");
+    message = mbim_message_auth_aka_query_new(rand,
+                                              autn,
+                                              &error);
+    if (!message) {
+        mm_obj_dbg (self, "sim_eap_aka_auth: Error with message query");
+        return;
+    }
+
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         callback,
+                         user_data);
+    mbim_message_unref (message);
+}
+
+/*****************************************************************************/
+/* EAP AKAP Authentication (Sim EAP interface) */
+
+static gboolean
+sim_eap_akap_auth_finish (MMDevice        *device,
+                          AkasAuthResponse *resp,
+                          GAsyncResult    *res,
+                          GError          **error)
+{
+    MbimMessage *response;
+
+    response = mbim_device_command_finish (MBIM_DEVICE(device), res, error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, error) &&
+        mbim_message_auth_akap_response_parse (
+            response,
+            &resp->out_res,
+            &resp->out_res_len,
+            &resp->out_integrating_key,
+            &resp->out_ciphering_key,
+            &resp->out_auts,
+            error)) {
+      /* All done! Complete GTask and return the AkapAuthResponse */
+      mbim_message_unref(response);
+      return TRUE;
+    }
+    else {
+      if (response) {
+        mbim_message_unref(response);
+      }
+      return FALSE;
+    }
+}
+
+static void
+sim_eap_akap_auth (MMIfaceSimEap       *self,
+                   const guint8        *rand,
+                   const guint8        *autn,
+                   const gchar         *network_name,
+                   GAsyncReadyCallback callback,
+                   gpointer            user_data)
+{
+    MbimDevice *device;
+    MbimMessage *message;
+    GError *error = NULL;
+
+    if (!peek_device (self, &device, callback, user_data)) {
+      mm_obj_dbg(self, "sim_eap_aka_auth: Error with peeking device");
+      return;
+    }
+
+    mm_obj_dbg (self, "Sending auth AKAP request...");
+    message = mbim_message_auth_akap_query_new(rand,
+                                               autn,
+                                               network_name,
+                                               &error);
+    if (!message) {
+        mm_obj_dbg (self, "sim_eap_aka_auth: Error with message query");
+        return;
+    }
+
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         callback,
+                         user_data);
+    mbim_message_unref (message);
+}
+
+/*****************************************************************************/
 
 MMBaseSim *
 mm_sim_mbim_new_finish (GAsyncResult  *res,
@@ -1350,4 +1569,15 @@ mm_sim_mbim_class_init (MMSimMbimClass *klass)
     base_sim_class->enable_pin_finish = enable_pin_finish;
     base_sim_class->change_pin = change_pin;
     base_sim_class->change_pin_finish = change_pin_finish;
+}
+
+static void
+iface_sim_eap_init (MMIfaceSimEap *iface)
+{
+  iface->sim_auth = sim_eap_sim_auth;
+  iface->sim_auth_finish = sim_eap_sim_auth_finish;
+  iface->aka_auth = sim_eap_aka_auth;
+  iface->aka_auth_finish = sim_eap_aka_auth_finish;
+  iface->akap_auth = sim_eap_akap_auth;
+  iface->akap_auth_finish = sim_eap_akap_auth_finish;
 }
