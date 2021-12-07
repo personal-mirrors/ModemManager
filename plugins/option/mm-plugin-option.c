@@ -90,7 +90,9 @@ G_MODULE_EXPORT MMPlugin *
 mm_plugin_create (void)
 {
     static const gchar *subsystems[] = { "tty", NULL };
-    static const guint16 vendor_ids[] = { 0x0af0, /* Option USB devices */
+    static const guint16 vendor_ids[] = {
+                                          0x05c6, /* QUALCOMM USB devices */
+                                          0x0af0, /* Option USB devices */
                                           0x1931, /* Nozomi CardBus devices */
                                           0 };
     static const gchar *drivers[] = { "option1", "option", "nozomi", NULL };
