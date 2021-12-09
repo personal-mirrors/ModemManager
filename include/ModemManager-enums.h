@@ -1729,4 +1729,86 @@ typedef enum { /*< underscore_name=mm_modem_3gpp_packet_service_state >*/
     MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED = 2,
 } MMModem3gppPacketServiceState;
 
+/**
+ * MMModem3gppMicoMode:
+ * @MM_MODEM_3GPP_MICO_MODE_UNKNOWN: Unknown or not specified.
+ * @MM_MODEM_3GPP_MICO_MODE_UNSUPPORTED: Unsupported.
+ * @MM_MODEM_3GPP_MICO_MODE_DISABLED: Disabled.
+ * @MM_MODEM_3GPP_MICO_MODE_ENABLED: Enabled.
+ *
+ * Mobile Initiated Connection Only (MICO) mode.
+ *
+ * This is a 5G-specific registration setting.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_modem_3gpp_mico_mode >*/
+    MM_MODEM_3GPP_MICO_MODE_UNKNOWN     = 0,
+    MM_MODEM_3GPP_MICO_MODE_UNSUPPORTED = 1,
+    MM_MODEM_3GPP_MICO_MODE_DISABLED    = 2,
+    MM_MODEM_3GPP_MICO_MODE_ENABLED     = 3,
+} MMModem3gppMicoMode;
+
+/**
+ * MMModem3gppMicoRaai:
+ * @MM_MODEM_3GPP_MICO_RAAI_UNKNOWN: Unknown or not specified.
+ * @MM_MODEM_3GPP_MICO_RAAI_NOT_ALLOCATED: Registration area not allocated.
+ * @MM_MODEM_3GPP_MICO_RAAI_ALLOCATED: Registration area allocated.
+ *
+ * Registration Area Allocation Indication reported by the network
+ * when MICO mode is allowed by the network, see 3GPP TS 24.501 section
+ * 9.11.3.31.
+ *
+ * This is a 5G-specific registration status.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_modem_3gpp_mico_raai >*/
+    MM_MODEM_3GPP_MICO_RAAI_UNKNOWN       = 0,
+    MM_MODEM_3GPP_MICO_RAAI_NOT_ALLOCATED = 1,
+    MM_MODEM_3GPP_MICO_RAAI_ALLOCATED     = 2,
+} MMModem3gppMicoRaai;
+
+/**
+ * MMModem3gppDrxCycle:
+ * @MM_MODEM_3GPP_DRX_CYCLE_UNKNOWN: Unknown or not specified.
+ * @MM_MODEM_3GPP_DRX_CYCLE_UNSUPPORTED: Unsupported.
+ * @MM_MODEM_3GPP_DRX_CYCLE_32: DRX cycle T=32.
+ * @MM_MODEM_3GPP_DRX_CYCLE_64: DRX cycle T=64.
+ * @MM_MODEM_3GPP_DRX_CYCLE_128: DRX cycle T=128.
+ * @MM_MODEM_3GPP_DRX_CYCLE_256: DRX cycle T=256.
+ *
+ * DRX cycle.
+ *
+ * This is a 5G-specific registration setting.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_modem_3gpp_drx_cycle >*/
+    MM_MODEM_3GPP_DRX_CYCLE_UNKNOWN     = 0,
+    MM_MODEM_3GPP_DRX_CYCLE_UNSUPPORTED = 1,
+    MM_MODEM_3GPP_DRX_CYCLE_32          = 2,
+    MM_MODEM_3GPP_DRX_CYCLE_64          = 3,
+    MM_MODEM_3GPP_DRX_CYCLE_128         = 4,
+    MM_MODEM_3GPP_DRX_CYCLE_256         = 5,
+} MMModem3gppDrxCycle;
+
+/**
+ * MMModem3gppNetworkSliceRejectionCause:
+ * @MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNKNOWN:
+ * @MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNAVAILABLE_IN_PLMN:
+ * @MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNAVAILABLE_IN_REGISTRATION_AREA:
+ *
+ * Cause for rejection of a given S-NSSAI.
+ *
+ * This is a 5G-specific registration status.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_modem_3gpp_network_slice_rejection_cause >*/
+    MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNKNOWN,
+    MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNAVAILABLE_IN_PLMN,
+    MM_MODEM_3GPP_NETWORK_SLICE_REJECTION_CAUSE_UNAVAILABLE_IN_REGISTRATION_AREA,
+} MMModem3gppNetworkSliceRejectionCause;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */

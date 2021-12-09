@@ -125,6 +125,24 @@
     </method>
 
     <!--
+        SetNr5gRegistrationSettings:
+        @properties: List of 5G specific registration settings.
+
+        Updates the 5G specific registration settings configured in the device.
+
+        The allowed properties in this method are all the ones specified in the
+        <link linkend="gdbus-property-org-freedesktop-ModemManager1-Modem-Modem3gpp.Nr5gRegistrationSettings">Nr5gRegistrationSettings</link>;
+        i.e.: <literal>"mico-mode"</literal>, <literal>"drx-cycle"</literal>,
+        <literal>"default-configured-nssai-3gpp"</literal> and
+        <literal>"default-configured-nssai-non-3gpp"</literal>.
+
+        Since: 1.20
+    -->
+    <method name="Set5gNrRegistrationSettings">
+      <arg name="properties" type="a{sv}" direction="in" />
+    </method>
+
+    <!--
         Imei:
 
         The <ulink url="http://en.wikipedia.org/wiki/Imei">IMEI</ulink> of the device.
@@ -316,6 +334,152 @@
         Since: 1.20
     -->
     <property name="PacketServiceState" type="u" access="read" />
+
+    <!--
+        Nr5gRegistrationSettings:
+
+        5G specific registration settings.
+
+        This is a read-only property, updating these settings should be done using the
+        <link linkend="gdbus-method-org-freedesktop-ModemManager1-Modem-Modem3gpp.Set5gNrRegistrationSettings">Set5gNrRegistrationSettings()</link>
+        method.
+
+        <variablelist>
+        <varlistentry><term>"mico-mode"</term>
+          <listitem>
+            <para>
+              A <link linkend="MMModem3gppMicoMode">MMModem3gppMicoMode</link> value
+	      representing the Mobile Initiated Connection (MICO) mode requested by the host,
+	      given as an unsigned integer (signature <literal>"u"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"drx-cycle"</term>
+          <listitem>
+            <para>
+              A <link linkend="MMModem3gppDrxCycle">MMModem3gppDrxCycle</link> value,
+	      representing the DRX settings requested by the host, given as an
+	      unsigned integer (signature <literal>"u"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"default-configured-nssai-3gpp"</term>
+          <listitem>
+            <para>
+              The default configured NSSAI for 3GPP access type, given as
+              an array of S-NSSAI elements (signature <literal>"a(ay)"</literal>).
+              See 3GPP TS 23.501, section 5.15.4.
+
+              Each S-NSSAI is defined as an array of bytes encoded as per
+              3GPP TS 24.501 section 9.11.2.8, but without the initial IEI octet
+              (i.e. the first byte in the array specifies already the length of
+              the S-NSSAI contents).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"default-configured-nssai-non-3gpp"</term>
+          <listitem>
+            <para>
+              The default configured NSSAI for non-3GPP access type, given as
+              an array of S-NSSAI elements (signature <literal>"a(ay)"</literal>).
+              See 3GPP TS 23.501, section 5.15.4.
+
+              Each S-NSSAI is defined as an array of bytes encoded as per
+              3GPP TS 24.501 section 9.11.2.8, but without the initial IEI octet
+              (i.e. the first byte in the array specifies already the length of
+              the S-NSSAI contents).
+            </para>
+          </listitem>
+        </varlistentry>
+        </variablelist>
+
+        Since: 1.20
+    -->
+    <property name="Nr5gRegistrationSettings" type="a{sv}" access="read" />
+
+    <!--
+        Nr5gRegistrationStatus:
+
+        5G specific registration status.
+
+        This is a read-only property containing values reported by the network.
+
+        <variablelist>
+        <varlistentry><term>"mico-raai"</term>
+          <listitem>
+            <para>
+              A <link linkend="MMModem3gppMicoRaai">MMModem3gppMicoRaai</link> value
+	      representing the Registration Area Allocation Indication (RAAI),
+              given as an unsigned integer (signature <literal>"u"</literal>).
+            </para>
+          </listitem
+        </varlistentry>
+        <varlistentry><term>"drx-cycle"</term>
+          <listitem>
+            <para>
+              A <link linkend="MMModem3gppDrxCycle">MMModem3gppDrxCycle</link> value
+	      representing the DRX settings negotiated with the network, given as an
+	      unsigned integer (signature <literal>"u"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"allowed-nssai"</term>
+          <listitem>
+            <para>
+              The allowed NSSAI that can be used in the current registration area,
+              given as an array of S-NSSAI elements (signature <literal>"a(ay)"</literal>).
+              See 3GPP TS 23.501.
+
+              Each S-NSSAI is defined as an array of bytes encoded as per
+              3GPP TS 24.501 section 9.11.2.8, but without the initial IEI octet
+              (i.e. the first byte in the array specifies already the length of
+              the S-NSSAI contents).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"configured-nssai"</term>
+          <listitem>
+            <para>
+              The configured NSSAI in the UE for the current serving network,
+              given as an array of S-NSSAI elements (signature <literal>"a(ay)"</literal>).
+              See 3GPP TS 23.501.
+
+              Each S-NSSAI is defined as an array of bytes encoded as per
+              3GPP TS 24.501 section 9.11.2.8, but without the initial IEI octet
+              (i.e. the first byte in the array specifies already the length of
+              the S-NSSAI contents).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"rejected-nssai"</term>
+          <listitem>
+            <para>
+              The rejected NSSAI in the current serving network or registration area,
+              given as an array of rejected S-NSSAI elements
+              (signature <literal>"a(uay)"</literal>). See 3GPP TS 23.501.
+
+              Each rejected S-NSSAI element is defined as a sequence of 2 fields:
+              <orderedlist>
+                <listitem>
+                  The rejection cause is a
+                  <link linkend="MMModem3gppNetworkSliceRejectionCause">MMModem3gppNetworkSliceRejectionCause</link>,
+                  given as an unsigned integer value (signature <literal>"u"</literal>).
+                </listitem>
+                <listitem>
+                  Tge S-NSSAI is defined as an array of bytes (signature
+                  <literal>"ay"</literal>) encoded as per 3GPP TS 24.501 section
+                  9.11.2.8, but without the initial IEI octet (i.e. the first byte
+                  in the array specifies already the length of the S-NSSAI contents).
+                </listitem>
+              </orderedlist>
+            </para>
+          </listitem>
+        </varlistentry>
+        </variablelist>
+
+        Since: 1.20
+    -->
+    <property name="Nr5gRegistrationStatus" type="a{sv}" access="read" />
 
   </interface>
 </node>

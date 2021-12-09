@@ -27,6 +27,10 @@ MMModem3gppRegistrationState
 MMModem3gppUssdSessionState
 MMModem3gppEpsUeModeOperation
 MMModem3gppPacketServiceState
+MMModem3gppMicoMode
+MMModem3gppMicoRaai
+MMModem3gppDrxCycle
+MMModem3gppNetworkSliceRejectionCause
 MMModemAccessTechnology
 MMModemBand
 MMModemCapability
