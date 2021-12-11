@@ -383,6 +383,90 @@ mm_sim_dup_emergency_numbers (MMSim *self)
     return mm_gdbus_sim_dup_emergency_numbers (MM_GDBUS_SIM (self));
 }
 
+/**
+ * mm_sim_get_preferred_networks:
+ * @self: A #MMSim.
+ *
+ * Gets the list of #MMSimPreferredNetwork objects exposed by this
+ * #MMSim.
+ *
+ * Returns: (transfer full) (element-type ModemManager.SimPreferredNetwork): a list of
+ * #MMSimPreferredNetwork objects, or #NULL. The returned value should
+ * be freed with g_list_free_full() using mm_sim_preferred_network_free() as #GDestroyNotify
+ * function.
+ *
+ * Since: 1.18
+ */
+GList *
+mm_sim_get_preferred_networks (MMSim *self)
+{
+    GList *network_list = NULL;
+    GVariant *container;
+
+    g_return_val_if_fail (MM_IS_SIM (self), NULL);
+
+    container = mm_gdbus_sim_get_preferred_networks (MM_GDBUS_SIM (self));
+    network_list = mm_sim_preferred_network_list_new_from_variant (container);
+
+    return network_list;
+}
+
+/**
+ * mm_sim_get_sim_type:
+ * @self: A #MMSim.
+ *
+ * Gets the SIM type.
+ *
+ * Returns: a #MMSimType.
+ *
+ * Since: 1.20
+ */
+MMSimType
+mm_sim_get_sim_type (MMSim *self)
+{
+    g_return_val_if_fail (MM_IS_SIM (self), MM_SIM_TYPE_UNKNOWN);
+
+    return mm_gdbus_sim_get_sim_type (MM_GDBUS_SIM (self));
+}
+
+/**
+ * mm_sim_get_esim_status:
+ * @self: A #MMSim.
+ *
+ * Gets the eSIM status.
+ *
+ * Only applicable if the SIM type is %MM_SIM_TYPE_ESIM.
+ *
+ * Returns: a #MMSimEsimStatus.
+ *
+ * Since: 1.20
+ */
+MMSimEsimStatus
+mm_sim_get_esim_status (MMSim *self)
+{
+    g_return_val_if_fail (MM_IS_SIM (self), MM_SIM_ESIM_STATUS_UNKNOWN);
+
+    return mm_gdbus_sim_get_esim_status (MM_GDBUS_SIM (self));
+}
+
+/**
+ * mm_sim_get_removability:
+ * @self: A #MMSim.
+ *
+ * Gets whether the SIM is removable or not.
+ *
+ * Returns: a #MMSimRemovability.
+ *
+ * Since: 1.20
+ */
+MMSimRemovability
+mm_sim_get_removability (MMSim *self)
+{
+    g_return_val_if_fail (MM_IS_SIM (self), MM_SIM_REMOVABILITY_UNKNOWN);
+
+    return mm_gdbus_sim_get_removability (MM_GDBUS_SIM (self));
+}
+
 /*****************************************************************************/
 
 /**
@@ -860,34 +944,6 @@ mm_sim_change_pin_sync (MMSim *self,
 }
 
 /*****************************************************************************/
-
-/**
- * mm_sim_get_preferred_networks:
- * @self: A #MMSim.
- *
- * Gets the list of #MMSimPreferredNetwork objects exposed by this
- * #MMSim.
- *
- * Returns: (transfer full) (element-type ModemManager.SimPreferredNetwork): a list of
- * #MMSimPreferredNetwork objects, or #NULL. The returned value should
- * be freed with g_list_free_full() using mm_sim_preferred_network_free() as #GDestroyNotify
- * function.
- *
- * Since: 1.18
- */
-GList *
-mm_sim_get_preferred_networks (MMSim *self)
-{
-    GList *network_list = NULL;
-    GVariant *container;
-
-    g_return_val_if_fail (MM_IS_SIM (self), NULL);
-
-    container = mm_gdbus_sim_get_preferred_networks (MM_GDBUS_SIM (self));
-    network_list = mm_sim_preferred_network_list_new_from_variant (container);
-
-    return network_list;
-}
 
 /**
  * mm_sim_set_preferred_networks_finish:
