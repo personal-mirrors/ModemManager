@@ -125,7 +125,7 @@ struct _MMBaseBearerPrivate {
     /* Timer to measure the duration of the connection */
     GTimer *duration_timer;
     /* Flag to specify whether reloading stats is supported or not */
-    gboolean reload_stats_unsupported;
+    gboolean reload_stats_supported;
 };
 
 /*****************************************************************************/
@@ -398,20 +398,9 @@ reload_stats_ready (MMBaseBearer *self,
     guint64  tx_bytes = 0;
 
     if (!MM_BASE_BEARER_GET_CLASS (self)->reload_stats_finish (self, &rx_bytes, &tx_bytes, res, &error)) {
-        /* If reloading stats fails, warn about it and don't update anything */
-        if (!g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED)) {
-            mm_obj_warn (self, "reloading stats failed: %s", error->message);
-            g_error_free (error);
-            return;
-        }
-
-        /* If we're being told that reloading stats is unsupported, just ignore
-         * the error and update oly the duration timer. */
-        mm_obj_dbg (self, "reloading stats is unsupported by the device");
-        self->priv->reload_stats_unsupported = TRUE;
-        rx_bytes = 0;
-        tx_bytes = 0;
+        mm_obj_warn (self, "reloading stats failed: %s", error->message);
         g_error_free (error);
+        return;
     }
 
     /* We only update stats if they were retrieved properly */
@@ -429,9 +418,7 @@ stats_update_cb (MMBaseBearer *self)
         return G_SOURCE_CONTINUE;
 
     /* If the implementation knows how to update stat values, run it */
-    if (!self->priv->reload_stats_unsupported &&
-        MM_BASE_BEARER_GET_CLASS (self)->reload_stats &&
-        MM_BASE_BEARER_GET_CLASS (self)->reload_stats_finish) {
+    if (self->priv->reload_stats_supported) {
         MM_BASE_BEARER_GET_CLASS (self)->reload_stats (
             self,
             (GAsyncReadyCallback)reload_stats_ready,
@@ -538,7 +525,7 @@ bearer_update_status (MMBaseBearer *self,
                                 "connection #%u finished: duration %us",
                                 mm_bearer_stats_get_attempts (self->priv->stats),
                                 mm_bearer_stats_get_duration (self->priv->stats));
-        if (!self->priv->reload_stats_unsupported)
+        if (self->priv->reload_stats_supported)
             g_string_append_printf (report,
                                     ", tx: %" G_GUINT64_FORMAT " bytes, rx: %" G_GUINT64_FORMAT " bytes",
                                     mm_bearer_stats_get_tx_bytes (self->priv->stats),
@@ -849,23 +836,46 @@ reset_signal_handlers (MMBaseBearer *self)
 /* CONNECT */
 
 gboolean
-mm_base_bearer_connect_finish (MMBaseBearer *self,
-                               GAsyncResult *res,
-                               GError **error)
+mm_base_bearer_connect_finish (MMBaseBearer  *self,
+                               GAsyncResult  *res,
+                               GError       **error)
 {
     return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+connect_succeeded (MMBaseBearer *self,
+                   GTask        *task)
+{
+    MMBearerConnectResult *result;
+
+    result = g_task_get_task_data (task);
+
+    /* Update bearer and interface status */
+    bearer_update_status_connected (
+        self,
+        mm_port_get_device (mm_bearer_connect_result_peek_data (result)),
+        mm_bearer_connect_result_get_multiplexed (result),
+        mm_bearer_connect_result_get_profile_id (result),
+        mm_bearer_connect_result_peek_ipv4_config (result),
+        mm_bearer_connect_result_peek_ipv6_config (result),
+        mm_bearer_connect_result_get_uplink_speed (result),
+        mm_bearer_connect_result_get_downlink_speed (result));
+
+    g_clear_object (&self->priv->connect_cancellable);
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
 }
 
 static void
 disconnect_after_cancel_ready (MMBaseBearer *self,
                                GAsyncResult *res)
 {
-    GError *error = NULL;
+    g_autoptr(GError) error = NULL;
 
-    if (!MM_BASE_BEARER_GET_CLASS (self)->disconnect_finish (self, res, &error)) {
+    if (!MM_BASE_BEARER_GET_CLASS (self)->disconnect_finish (self, res, &error))
         mm_obj_warn (self, "error disconnecting: %s; will assume disconnected anyway", error->message);
-        g_error_free (error);
-    }
     else
         mm_obj_dbg (self, "disconnected bearer '%s'", self->priv->path);
 
@@ -878,13 +888,72 @@ disconnect_after_cancel_ready (MMBaseBearer *self,
 }
 
 static void
-connect_ready (MMBaseBearer *self,
-               GAsyncResult *res,
-               GTask *task)
+connect_failed (MMBaseBearer *self,
+                GTask        *task,
+                GError       *error)
+{
+    /* Update failed attempts */
+    mm_bearer_stats_set_failed_attempts (self->priv->stats,
+                                         mm_bearer_stats_get_failed_attempts (self->priv->stats) + 1);
+    bearer_update_interface_stats (self);
+
+    /* Update reported connection error before the status update */
+    bearer_update_connection_error (self, error);
+    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        bearer_update_status (self, MM_BEARER_STATUS_DISCONNECTING);
+        MM_BASE_BEARER_GET_CLASS (self)->disconnect (self,
+                                                     (GAsyncReadyCallback)disconnect_after_cancel_ready,
+                                                     NULL);
+    } else
+        bearer_update_status (self, MM_BEARER_STATUS_DISCONNECTED);
+
+    g_clear_object (&self->priv->connect_cancellable);
+
+    g_task_return_error (task, error);
+    g_object_unref (task);
+}
+
+static gboolean
+connect_check_cancel (MMBaseBearer *self,
+                      GTask        *task)
 {
     GError *error = NULL;
-    gboolean launch_disconnect = FALSE;
-    MMBearerConnectResult *result;
+
+    if (!g_cancellable_is_cancelled (self->priv->connect_cancellable))
+        return FALSE;
+
+    mm_obj_dbg (self, "connected, but need to disconnect");
+    error = g_error_new (G_IO_ERROR, G_IO_ERROR_CANCELLED,
+                         "Bearer got connected, but had to disconnect after cancellation request");
+    connect_failed (self, task, error);
+    return TRUE;
+}
+
+static void
+reload_stats_supported_ready (MMBaseBearer *self,
+                              GAsyncResult *res,
+                              GTask        *task)
+{
+    if (MM_BASE_BEARER_GET_CLASS (self)->reload_stats_finish (self, NULL, NULL, res, NULL)) {
+        mm_obj_info (self, "reloading stats is supported by the device");
+        self->priv->reload_stats_supported = TRUE;
+        mm_gdbus_bearer_set_reload_stats_supported (MM_GDBUS_BEARER (self), self->priv->reload_stats_supported);
+    } else
+        mm_obj_info (self, "reloading stats is not supported by the device");
+
+    if (connect_check_cancel (self, task))
+        return;
+
+    connect_succeeded (self, task);
+}
+
+static void
+connect_ready (MMBaseBearer *self,
+               GAsyncResult *res,
+               GTask        *task)
+{
+    GError                           *error = NULL;
+    g_autoptr(MMBearerConnectResult)  result = NULL;
 
     /* NOTE: connect() implementations *MUST* handle cancellations themselves */
     result = MM_BASE_BEARER_GET_CLASS (self)->connect_finish (self, res, &error);
@@ -892,63 +961,29 @@ connect_ready (MMBaseBearer *self,
         mm_obj_warn (self, "connection attempt #%u failed: %s",
                      mm_bearer_stats_get_attempts (self->priv->stats),
                      error->message);
-
-        /* Update failed attempts */
-        mm_bearer_stats_set_failed_attempts (self->priv->stats,
-                                             mm_bearer_stats_get_failed_attempts (self->priv->stats) + 1);
-        bearer_update_interface_stats (self);
-
-        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
-            /* Will launch disconnection */
-            launch_disconnect = TRUE;
-        } else {
-            /* Update reported connection error before the status update */
-            bearer_update_connection_error (self, error);
-            bearer_update_status (self, MM_BEARER_STATUS_DISCONNECTED);
-        }
+        connect_failed (self, task, error);
+        return;
     }
+
     /* Handle cancellations detected after successful connection */
-    else if (g_cancellable_is_cancelled (self->priv->connect_cancellable)) {
-        mm_obj_dbg (self, "connected, but need to disconnect");
-        mm_bearer_connect_result_unref (result);
-        error = g_error_new (G_IO_ERROR, G_IO_ERROR_CANCELLED,
-                             "Bearer got connected, but had to disconnect after cancellation request");
-        launch_disconnect = TRUE;
-    }
-    else {
-        mm_obj_dbg (self, "connected");
+    if (connect_check_cancel (self, task))
+        return;
 
-        /* Update bearer and interface status */
-        bearer_update_status_connected (
+    mm_obj_dbg (self, "connected");
+    g_task_set_task_data (task, g_steal_pointer (&result), (GDestroyNotify)mm_bearer_connect_result_unref);
+
+    /* Check that reload statistics is supported by the device; we can only do this while
+     * connected. */
+    if (MM_BASE_BEARER_GET_CLASS (self)->reload_stats &&
+        MM_BASE_BEARER_GET_CLASS (self)->reload_stats_finish) {
+        MM_BASE_BEARER_GET_CLASS (self)->reload_stats (
             self,
-            mm_port_get_device (mm_bearer_connect_result_peek_data (result)),
-            mm_bearer_connect_result_get_multiplexed (result),
-            mm_bearer_connect_result_get_profile_id (result),
-            mm_bearer_connect_result_peek_ipv4_config (result),
-            mm_bearer_connect_result_peek_ipv6_config (result),
-            mm_bearer_connect_result_get_uplink_speed (result),
-            mm_bearer_connect_result_get_downlink_speed (result));
-        mm_bearer_connect_result_unref (result);
+            (GAsyncReadyCallback)reload_stats_supported_ready,
+            task);
+        return;
     }
 
-    if (launch_disconnect) {
-        /* Update reported connection error before the status update */
-        bearer_update_connection_error (self, error);
-        bearer_update_status (self, MM_BEARER_STATUS_DISCONNECTING);
-        MM_BASE_BEARER_GET_CLASS (self)->disconnect (
-            self,
-            (GAsyncReadyCallback)disconnect_after_cancel_ready,
-            NULL);
-    }
-
-    g_clear_object (&self->priv->connect_cancellable);
-
-    if (error)
-        g_task_return_error (task, error);
-    else
-        g_task_return_boolean (task, TRUE);
-
-    g_object_unref (task);
+    connect_succeeded (self, task);
 }
 
 void
@@ -1773,6 +1808,7 @@ mm_base_bearer_init (MMBaseBearer *self)
     self->priv->status = MM_BEARER_STATUS_DISCONNECTED;
     self->priv->reason_3gpp = CONNECTION_FORBIDDEN_REASON_NONE;
     self->priv->reason_cdma = CONNECTION_FORBIDDEN_REASON_NONE;
+    self->priv->reload_stats_supported = FALSE;
     self->priv->stats = mm_bearer_stats_new ();
 
     /* Set defaults */
