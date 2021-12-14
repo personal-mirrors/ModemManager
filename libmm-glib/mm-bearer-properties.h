@@ -137,6 +137,7 @@ typedef enum {
     MM_BEARER_PROPERTIES_CMP_FLAGS_NO_APN_TYPE      = 1 << 4,
     MM_BEARER_PROPERTIES_CMP_FLAGS_NO_PROFILE_ID    = 1 << 5,
     MM_BEARER_PROPERTIES_CMP_FLAGS_NO_PROFILE_NAME  = 1 << 6,
+    MM_BEARER_PROPERTIES_CMP_FLAGS_NO_USERNAME      = 1 << 7,
 } MMBearerPropertiesCmpFlags;
 
 gboolean mm_bearer_properties_cmp (MMBearerProperties         *a,

@@ -78,8 +78,8 @@ cmp_str (const gchar *a,
  * mm_3gpp_profile_cmp: (skip)
  */
 gboolean
-mm_3gpp_profile_cmp (MM3gppProfile         *a,
-                     MM3gppProfile         *b,
+mm_3gpp_profile_cmp (const MM3gppProfile   *a,
+                     const MM3gppProfile   *b,
                      GEqualFunc             cmp_apn,
                      MM3gppProfileCmpFlags  flags)
 {
@@ -144,7 +144,7 @@ mm_3gpp_profile_set_profile_id (MM3gppProfile *self,
  * Since: 1.18
  */
 gint
-mm_3gpp_profile_get_profile_id (MM3gppProfile *self)
+mm_3gpp_profile_get_profile_id (const MM3gppProfile *self)
 {
     g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), MM_3GPP_PROFILE_ID_UNKNOWN);
 
@@ -184,7 +184,7 @@ mm_3gpp_profile_set_apn (MM3gppProfile *self,
  * Since: 1.18
  */
 const gchar *
-mm_3gpp_profile_get_apn (MM3gppProfile *self)
+mm_3gpp_profile_get_apn (const MM3gppProfile *self)
 {
     g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), NULL);
 
@@ -224,7 +224,7 @@ mm_3gpp_profile_set_profile_name (MM3gppProfile *self,
  * Since: 1.20
  */
 const gchar *
-mm_3gpp_profile_get_profile_name (MM3gppProfile *self)
+mm_3gpp_profile_get_profile_name (const MM3gppProfile *self)
 {
     g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), NULL);
 
@@ -265,7 +265,7 @@ mm_3gpp_profile_set_allowed_auth (MM3gppProfile       *self,
  * Since: 1.18
  */
 MMBearerAllowedAuth
-mm_3gpp_profile_get_allowed_auth (MM3gppProfile *self)
+mm_3gpp_profile_get_allowed_auth (const MM3gppProfile *self)
 {
     g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), MM_BEARER_ALLOWED_AUTH_UNKNOWN);
 
@@ -305,7 +305,7 @@ mm_3gpp_profile_set_user (MM3gppProfile *self,
  * Since: 1.18
  */
 const gchar *
-mm_3gpp_profile_get_user (MM3gppProfile *self)
+mm_3gpp_profile_get_user (const MM3gppProfile *self)
 {
     g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), NULL);
 
@@ -345,7 +345,7 @@ mm_3gpp_profile_set_password (MM3gppProfile *self,
  * Since: 1.18
  */
 const gchar *
-mm_3gpp_profile_get_password (MM3gppProfile *self)
+mm_3gpp_profile_get_password (const MM3gppProfile *self)
 {
     g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), NULL);
 
@@ -383,7 +383,7 @@ mm_3gpp_profile_set_ip_type (MM3gppProfile    *self,
  * Since: 1.18
  */
 MMBearerIpFamily
-mm_3gpp_profile_get_ip_type (MM3gppProfile *self)
+mm_3gpp_profile_get_ip_type (const MM3gppProfile *self)
 {
     g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), MM_BEARER_IP_FAMILY_NONE);
 
@@ -421,7 +421,7 @@ mm_3gpp_profile_set_apn_type (MM3gppProfile   *self,
  * Since: 1.18
  */
 MMBearerApnType
-mm_3gpp_profile_get_apn_type (MM3gppProfile *self)
+mm_3gpp_profile_get_apn_type (const MM3gppProfile *self)
 {
     g_return_val_if_fail (MM_IS_3GPP_PROFILE (self), MM_BEARER_APN_TYPE_NONE);
 

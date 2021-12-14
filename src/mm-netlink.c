@@ -67,7 +67,7 @@ typedef struct {
 static NetlinkHeader *
 netlink_message_header (NetlinkMessage *msg)
 {
-    return (NetlinkHeader *) (msg->data);
+    return (NetlinkHeader *) (gpointer) (msg->data);
 }
 
 static guint
@@ -352,7 +352,7 @@ netlink_message_cb (GSocket      *socket,
     }
 
     buffer_len = (guint) bytes_received;
-    for (hdr = (struct nlmsghdr *) buf; NLMSG_OK (hdr, buffer_len);
+    for (hdr = (struct nlmsghdr *) (gpointer) buf; NLMSG_OK (hdr, buffer_len);
          NLMSG_NEXT (hdr, buffer_len)) {
         Transaction     *tr;
         struct nlmsgerr *err;

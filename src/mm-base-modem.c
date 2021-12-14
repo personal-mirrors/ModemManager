@@ -1137,7 +1137,7 @@ mm_base_modem_get_port_infos (MMBaseModem *self,
 
     g_assert (*n_port_infos == port_infos->len);
     g_array_sort (port_infos, (GCompareFunc) port_info_cmp);
-    return (MMModemPortInfo *) g_array_free (port_infos, FALSE);
+    return (MMModemPortInfo *) (gpointer) g_array_free (port_infos, FALSE);
 }
 
 static gint

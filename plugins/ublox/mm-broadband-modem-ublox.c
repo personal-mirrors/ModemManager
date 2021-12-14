@@ -26,6 +26,7 @@
 #include "mm-iface-modem.h"
 #include "mm-iface-modem-3gpp.h"
 #include "mm-iface-modem-voice.h"
+#include "mm-iface-modem-3gpp-profile-manager.h"
 #include "mm-base-modem-at.h"
 #include "mm-broadband-bearer.h"
 #include "mm-broadband-modem-ublox.h"
@@ -36,11 +37,20 @@
 
 static void iface_modem_init (MMIfaceModem *iface);
 static void iface_modem_voice_init (MMIfaceModemVoice *iface);
+static void iface_modem_3gpp_init(MMIfaceModem3gpp * iface);
+static void iface_modem_3gpp_profile_manager_init (MMIfaceModem3gppProfileManager *iface);
+
 
 static MMIfaceModemVoice *iface_modem_voice_parent;
+static MMIfaceModem3gpp * iface_modem_3gpp_parent;
+static MMIfaceModem3gppProfileManager *iface_modem_3gpp_profile_manager_parent;
+
+
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemUblox, mm_broadband_modem_ublox, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP, iface_modem_3gpp_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_3GPP_PROFILE_MANAGER, iface_modem_3gpp_profile_manager_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_VOICE, iface_modem_voice_init))
 
 
@@ -1957,6 +1967,599 @@ setup_ports (MMBroadbandModem *_self)
     }
 }
 
+
+
+
+typedef struct {
+    GList *profiles;
+} ListProfilesContext;
+
+static void
+list_profiles_context_free (ListProfilesContext *ctx)
+{
+    mm_3gpp_profile_list_free (ctx->profiles);
+    g_slice_free (ListProfilesContext, ctx);
+}
+
+static gboolean
+modem_3gpp_profile_manager_list_profiles_finish (MMIfaceModem3gppProfileManager  *self,
+                                                 GAsyncResult                    *res,
+                                                 GList                          **out_profiles,
+                                                 GError                         **error)
+{
+    ListProfilesContext *ctx;
+
+    if (!g_task_propagate_boolean (G_TASK (res), error))
+        return FALSE;
+
+    ctx = g_task_get_task_data (G_TASK (res));
+    if (out_profiles)
+        *out_profiles = g_steal_pointer (&ctx->profiles);
+    return TRUE;
+}
+
+static gint
+cmp_prefer_default_EPS_cid (gconstpointer  a, gconstpointer  b) {
+    const MM3gppProfile *p2 = (const MM3gppProfile *) b;
+    (void) a;
+
+    return mm_3gpp_profile_get_profile_id (p2) == 4 ? 1 : -1;
+}
+
+
+static void
+profile_manager_parent_list_profiles_ready (MMIfaceModem3gppProfileManager *self,
+                                            GAsyncResult                   *res,
+                                            GTask                          *task)
+{
+    ListProfilesContext *ctx;
+    GError              *error = NULL;
+
+    ctx = g_slice_new0 (ListProfilesContext);
+    g_task_set_task_data (task, ctx, (GDestroyNotify) list_profiles_context_free);
+
+    if (!iface_modem_3gpp_profile_manager_parent->list_profiles_finish (self, res, &ctx->profiles, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (!ctx->profiles) {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx->profiles = g_list_sort(ctx->profiles, cmp_prefer_default_EPS_cid);
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_profile_manager_list_profiles (MMIfaceModem3gppProfileManager *self,
+                                          GAsyncReadyCallback             callback,
+                                          gpointer                        user_data)
+{
+    GTask *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    iface_modem_3gpp_profile_manager_parent->list_profiles (
+        self,
+        (GAsyncReadyCallback)profile_manager_parent_list_profiles_ready,
+        task);
+}
+
+/*****************************************************************************/
+/* Common initial EPS bearer info loading for both:
+ *   - runtime status
+ *   - configuration settings
+ */
+
+typedef struct {
+    MMBearerProperties       *properties;
+} CommonLoadInitialEpsContext;
+
+static void
+common_load_initial_eps_context_free (CommonLoadInitialEpsContext *ctx)
+{
+    g_clear_object (&ctx->properties);
+    g_slice_free (CommonLoadInitialEpsContext, ctx);
+}
+
+static MMBearerProperties *
+common_load_initial_eps_bearer_finish (MMIfaceModem3gpp  *self,
+                                       GAsyncResult      *res,
+                                       GError           **error)
+{
+    return MM_BEARER_PROPERTIES (g_task_propagate_pointer (G_TASK (res), error));
+}
+
+
+static void
+common_load_initial_eps_cgdcont_ready (MMBaseModem  *_self,
+                                       GAsyncResult *res,
+                                       GTask        *task)
+{
+    MMBroadbandModemUblox *self = MM_BROADBAND_MODEM_UBLOX(_self);
+    const gchar                 *response;
+    CommonLoadInitialEpsContext *ctx;
+    g_autoptr(GError)            error = NULL;
+
+    ctx = (CommonLoadInitialEpsContext *) g_task_get_task_data (task);
+
+    /* errors aren't fatal */
+    response = mm_base_modem_at_command_finish (_self, res, &error);
+    if (!response)
+        mm_obj_dbg (self, "couldn't load context %d status: %s", 4, error->message);
+    else {
+        GList *context_list;
+
+        context_list = mm_3gpp_parse_cgdcont_read_response (response, &error);
+        if (!context_list)
+            mm_obj_dbg (self, "couldn't parse CGDCONT response: %s", error->message);
+        else {
+            GList *l;
+
+            for (l = context_list; l; l = g_list_next (l)) {
+                MM3gppPdpContext *pdp = l->data;
+
+                if (pdp->cid == 4) {
+                    mm_bearer_properties_set_ip_type (ctx->properties, pdp->pdp_type);
+                    mm_bearer_properties_set_apn (ctx->properties, pdp->apn ? pdp->apn : "");
+                    mm_bearer_properties_set_profile_id(ctx->properties, 4);
+                    break;
+                }
+            }
+            if (!l)
+                mm_obj_dbg (self, "no status reported for context 4");
+            mm_3gpp_pdp_context_list_free (context_list);
+        }
+    }
+
+    /* Go to next step */
+    g_task_return_pointer (task, g_steal_pointer (&ctx->properties), g_object_unref);
+	g_object_unref (task);
+}
+
+
+static MMBearerProperties *
+modem_3gpp_load_initial_eps_bearer_finish (MMIfaceModem3gpp  *self,
+                                           GAsyncResult      *res,
+                                           GError           **error)
+{
+    return common_load_initial_eps_bearer_finish (self, res, error);
+}
+
+static void
+modem_3gpp_load_initial_eps_bearer (MMIfaceModem3gpp    *self,
+                                    GAsyncReadyCallback  callback,
+                                    gpointer             user_data)
+{
+	GTask                       *task;
+	CommonLoadInitialEpsContext *ctx;
+
+	task = g_task_new (self, NULL, callback, user_data);
+
+	/* Setup context */
+	ctx = g_slice_new0 (CommonLoadInitialEpsContext);
+	ctx->properties = mm_bearer_properties_new ();
+	g_task_set_task_data (task, ctx, (GDestroyNotify) common_load_initial_eps_context_free);
+
+	mm_base_modem_at_command (
+	                MM_BASE_MODEM (self),
+	                "+CGDCONT?",
+	                20,
+	                FALSE,
+	                (GAsyncReadyCallback)common_load_initial_eps_cgdcont_ready,
+	                task);
+}
+
+/*****************************************************************************/
+/* Set initial EPS bearer settings */
+
+typedef enum {
+    SET_INITIAL_EPS_STEP_FIRST = 0,
+    SET_INITIAL_EPS_STEP_CHECK_MODE,
+    SET_INITIAL_EPS_STEP_RF_OFF,
+    SET_INITIAL_EPS_STEP_APN,
+    SET_INITIAL_EPS_STEP_RF_ON,
+    SET_INITIAL_EPS_STEP_LAST,
+} SetInitialEpsStep;
+
+typedef struct {
+    MMBearerProperties *properties;
+    SetInitialEpsStep   step;
+    guint               initial_cfun_mode;
+    gboolean            supported;
+    GError             *saved_error;
+} SetInitialEpsContext;
+
+static void
+set_initial_eps_context_free (SetInitialEpsContext *ctx)
+{
+    g_assert (!ctx->saved_error);
+    g_object_unref (ctx->properties);
+    g_slice_free (SetInitialEpsContext, ctx);
+}
+
+static void set_initial_eps_step (GTask *task);
+
+static void
+set_initial_eps_rf_on_ready (MMBaseModem  *self,
+                             GAsyncResult *res,
+                             GTask        *task)
+{
+    g_autoptr(GError)     error = NULL;
+    SetInitialEpsContext *ctx;
+
+    ctx = (SetInitialEpsContext *) g_task_get_task_data (task);
+
+    if (!mm_base_modem_at_command_finish (self, res, &error)) {
+        mm_obj_warn (self, "couldn't set RF back on: %s", error->message);
+        if (!ctx->saved_error)
+            ctx->saved_error = g_steal_pointer (&error);
+    }
+
+    /* Go to next step */
+    ctx->step++;
+    set_initial_eps_step (task);
+}
+
+
+static void
+set_initial_eps_ucgdflt_ready (MMBaseModem  *self,
+                               GAsyncResult *res,
+                               GTask        *task)
+{
+    SetInitialEpsContext      *ctx;
+
+    ctx = (SetInitialEpsContext *) g_task_get_task_data (task);
+
+    if (!mm_base_modem_at_command_finish (self, res, &ctx->saved_error)) {
+        mm_obj_warn (self, "couldn't set initial default bearer settings: %s",
+                     ctx->saved_error->message);
+        /* Fallback to recover RF before returning the error */
+        ctx->step = SET_INITIAL_EPS_STEP_RF_ON;
+    } else {
+        /* Go to next step */
+        ctx->step++;
+    }
+    set_initial_eps_step (task);
+}
+
+static void
+set_initial_eps_rf_off_ready (MMBaseModem  *self,
+                              GAsyncResult *res,
+                              GTask        *task)
+{
+    GError               *error = NULL;
+    SetInitialEpsContext *ctx;
+
+    ctx = (SetInitialEpsContext *) g_task_get_task_data (task);
+
+    if (!mm_base_modem_at_command_finish (self, res, &error)) {
+        mm_obj_warn (self, "couldn't set RF off: %s", error->message);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    /* Go to next step */
+    ctx->step++;
+    set_initial_eps_step (task);
+}
+
+static void
+set_initial_eps_cfun_mode_load_ready (MMBaseModem  *self,
+                                      GAsyncResult *res,
+                                      GTask        *task)
+{
+    GError                *error = NULL;
+    const gchar           *response;
+    SetInitialEpsContext  *ctx;
+    guint                  mode;
+
+    ctx = (SetInitialEpsContext *) g_task_get_task_data (task);
+    response = mm_base_modem_at_command_finish (self, res, &error);
+    if (!response || !mm_3gpp_parse_cfun_query_response (response, &mode, &error)) {
+        mm_obj_warn (self, "couldn't load initial functionality mode: %s", error->message);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    mm_obj_dbg (self, "current functionality mode: %u", mode);
+    if (mode != 1 && mode != 4) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_WRONG_STATE,
+                                 "cannot setup the default LTE bearer settings: "
+                                 "the SIM must be powered");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx->initial_cfun_mode = mode;
+    ctx->step++;
+    set_initial_eps_step (task);
+}
+
+static void check_ip_type_supported (MMBearerIpFamily data, SetInitialEpsContext * ctx)
+{
+	MMBearerIpFamily requested_ip_family = mm_bearer_properties_get_ip_type(ctx->properties);
+
+	if ((requested_ip_family == MM_BEARER_IP_FAMILY_NONE || requested_ip_family == MM_BEARER_IP_FAMILY_ANY) && data == MM_BEARER_IP_FAMILY_IPV4) {
+		mm_obj_dbg (NULL, "ucgdflt chooses type ipv4 because requested type is unspecified");
+		ctx->supported = TRUE;
+	} else if (data == requested_ip_family) {
+		mm_obj_dbg (NULL, "ucgdflt type %s supported!",
+                    mm_3gpp_get_pdp_type_from_ip_family(mm_bearer_properties_get_ip_type(ctx->properties)));
+		ctx->supported = TRUE;
+	}
+}
+
+static void
+set_initial_eps_ucgdflt_test_ready (MMBaseModem * self, GAsyncResult * res, GTask * task)
+{
+	SetInitialEpsContext      *ctx;
+    const gchar * response;
+
+    ctx  = g_task_get_task_data (task);
+
+    response = mm_base_modem_at_command_finish (self, res, &ctx->saved_error);
+
+    if (!response) {
+        mm_obj_dbg (self, "ucgdflt command is not supported!: %s", ctx->saved_error->message);
+        ctx->step = SET_INITIAL_EPS_STEP_LAST;
+	} else {
+		GList * types = NULL;
+		mm_obj_dbg (self, "ucgdflt supported!");
+		types = mm_ublox_parse_ucgdflt_test_response(response, &ctx->saved_error);
+		g_list_foreach(types, (GFunc) check_ip_type_supported, ctx);
+		g_list_free(types);
+
+		if (ctx->supported) {
+            ctx->step++;
+		} else {
+			mm_obj_dbg (self, "ucgdflt command is not supported for bearer type '%s'",
+                        mm_3gpp_get_pdp_type_from_ip_family(mm_bearer_properties_get_ip_type(ctx->properties)));
+			ctx->saved_error = g_error_new(MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED, "ip type not supported");
+            ctx->step = SET_INITIAL_EPS_STEP_LAST;
+		}
+    }
+    set_initial_eps_step (task);
+}
+
+static void
+set_initial_eps_step (GTask *task)
+{
+    MMBaseModem * self;
+    SetInitialEpsContext      *ctx;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data (task);
+
+    switch (ctx->step) {
+    case SET_INITIAL_EPS_STEP_FIRST:
+        mm_base_modem_at_command (
+                        MM_BASE_MODEM (self),
+                        "+UCGDFLT=?",
+                        5,
+                        TRUE,
+                        (GAsyncReadyCallback)set_initial_eps_ucgdflt_test_ready,
+                        task);
+        return;
+
+    case SET_INITIAL_EPS_STEP_CHECK_MODE:
+        mm_base_modem_at_command (
+            MM_BASE_MODEM (self),
+            "+CFUN?",
+            5,
+            FALSE,
+            (GAsyncReadyCallback)set_initial_eps_cfun_mode_load_ready,
+            task);
+        return;
+
+    case SET_INITIAL_EPS_STEP_RF_OFF:
+        if (ctx->initial_cfun_mode != 4) {
+            mm_base_modem_at_command (
+                MM_BASE_MODEM (self),
+                "+CFUN=4",
+                5,
+                FALSE,
+                (GAsyncReadyCallback)set_initial_eps_rf_off_ready,
+                task);
+            return;
+        }
+        ctx->step++;
+        /* fall through */
+
+    case SET_INITIAL_EPS_STEP_APN: {
+        const gchar        *apn;
+        g_autofree gchar   *quoted_apn = NULL;
+        const gchar        *user;
+        g_autofree gchar   *quoted_user = NULL;
+        const gchar        *password;
+        g_autofree gchar   *quoted_password = NULL;
+        g_autofree gchar   *apn_cmd = NULL;
+        const gchar        *ip_family_str;
+        g_autofree gchar   *quoted_ip_family = NULL;
+        MMBearerIpFamily    ip_family;
+
+        ip_family = mm_bearer_properties_get_ip_type (ctx->properties);
+        if (ip_family == MM_BEARER_IP_FAMILY_NONE || ip_family == MM_BEARER_IP_FAMILY_ANY)
+            ip_family = MM_BEARER_IP_FAMILY_IPV4;
+
+        ip_family_str = mm_3gpp_get_pdp_type_from_ip_family (ip_family);
+
+        apn = mm_bearer_properties_get_apn (ctx->properties);
+        user = mm_bearer_properties_get_user(ctx->properties);
+        password = mm_bearer_properties_get_password(ctx->properties);
+
+        mm_obj_dbg (self, "context with APN '%s' and PDP type '%s', user '%s' and password '%s'",
+                    apn, ip_family_str, user, password);
+        quoted_apn = mm_port_serial_at_quote_string (apn);
+        quoted_user = mm_port_serial_at_quote_string(user);
+        quoted_password = mm_port_serial_at_quote_string(password);
+        quoted_ip_family = mm_port_serial_at_quote_string(ip_family_str);
+
+        apn_cmd = g_strdup_printf ("+UCGDFLT=1,%s,%s,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,%s,%s",
+                                   quoted_ip_family, quoted_apn, quoted_user, quoted_password);
+        mm_base_modem_at_command (
+            MM_BASE_MODEM (self),
+            apn_cmd,
+            20,
+            FALSE,
+            (GAsyncReadyCallback)set_initial_eps_ucgdflt_ready,
+            task);
+        return;
+    }
+
+    case SET_INITIAL_EPS_STEP_RF_ON:
+        if (ctx->initial_cfun_mode == 1) {
+            mm_base_modem_at_command (
+                MM_BASE_MODEM (self),
+                "+CFUN=1",
+                5,
+                FALSE,
+                (GAsyncReadyCallback)set_initial_eps_rf_on_ready,
+                task);
+            return;
+        }
+        ctx->step++;
+        /* fall through */
+
+    case SET_INITIAL_EPS_STEP_LAST:
+        if (ctx->saved_error)
+            g_task_return_error (task, g_steal_pointer (&ctx->saved_error));
+        else
+            g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+
+    default:
+        g_assert_not_reached ();
+    }
+}
+
+static void
+modem_3gpp_set_initial_eps_bearer_settings (MMIfaceModem3gpp    *self,
+                                            MMBearerProperties  *properties,
+                                            GAsyncReadyCallback  callback,
+                                            gpointer             user_data)
+{
+    GTask                *task;
+    SetInitialEpsContext *ctx;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    /* Setup context */
+    ctx = g_slice_new0 (SetInitialEpsContext);
+    ctx->properties = g_object_ref (properties);
+    ctx->step = SET_INITIAL_EPS_STEP_FIRST;
+    g_task_set_task_data (task, ctx, (GDestroyNotify) set_initial_eps_context_free);
+
+    set_initial_eps_step (task);
+}
+
+static gboolean
+modem_3gpp_set_initial_eps_bearer_settings_finish(MMIfaceModem3gpp  *_self,
+                                                  GAsyncResult      *res,
+                                                  GError           **error)
+{
+    mm_obj_dbg(_self, "Call set_initial_eps_bearer_settings_finish");
+    return g_task_propagate_boolean(G_TASK(res), error);
+}
+
+
+static MMBearerProperties *
+load_initial_eps_bearer_finish (MMIfaceModem3gpp *self,
+                                GAsyncResult     *res,
+                                GError           **error)
+{
+    return g_task_propagate_pointer (G_TASK(res), error);
+}
+
+
+static void
+load_initial_eps_bearer_ucgdflt_ready(MMBaseModem * self, GAsyncResult * res, GTask * task)
+{
+    GError * error = NULL;
+    const gchar * response;
+    MMBearerProperties * props;
+
+    response = mm_base_modem_at_command_finish (self, res, &error);
+    props = (MMBearerProperties *) g_task_get_task_data (task);
+
+    if (!response) {
+        mm_obj_dbg (self, "couldn't load default bearer: %s", error->message);
+        g_error_free (error);
+        g_task_return_pointer(task, NULL, g_object_unref);
+	} else {
+        gchar * out_apn;
+        MMBearerIpFamily out_ip_type;
+        GError * inner_error = NULL;
+
+        if (mm_ublox_parse_ucgdflt_response(response, &out_apn, &out_ip_type, &inner_error)) {
+            mm_bearer_properties_set_apn(props, out_apn);
+            mm_bearer_properties_set_ip_type(props, out_ip_type);
+            g_task_return_pointer(task, props, g_object_unref);
+        } else {
+            mm_obj_dbg(self, "Failed to get apn");
+            g_task_return_error(task, inner_error);
+        }
+    }
+    g_object_unref(task);
+}
+
+static void
+load_initial_eps_bearer_ucgdflt_test_ready(MMBaseModem * self, GAsyncResult * res, GTask * task)
+{
+    GError * error = NULL;
+    const gchar * response;
+
+    response = mm_base_modem_at_command_finish (self, res, &error);
+
+    if (!response) {
+        mm_obj_dbg (self, "ucgdflt command is not supported!: %s", error->message);
+        g_error_free (error);
+        g_task_return_pointer(task, NULL, g_object_unref);
+	} else {
+		mm_obj_dbg (self, "ucgdflt supported!");
+
+        mm_base_modem_at_command(self, "+UCGDFLT?", 5, FALSE, (GAsyncReadyCallback) load_initial_eps_bearer_ucgdflt_ready, task);
+    }
+}
+
+
+static void
+load_initial_eps_bearer(MMIfaceModem3gpp    *_self,
+                        GAsyncReadyCallback callback,
+                        gpointer            user_data)
+{
+    GTask *task;
+    MMBearerProperties * props;
+
+    mm_obj_dbg(_self, "Call load_initial_eps_bearer_settings");
+
+    props = mm_bearer_properties_new();
+    task = g_task_new(_self, NULL, callback, user_data);
+    g_task_set_task_data(task, props, (GDestroyNotify) g_clear_object);
+
+    mm_base_modem_at_command (
+                MM_BASE_MODEM (_self),
+                "+UCGDFLT=?",
+                5,
+                TRUE,
+                (GAsyncReadyCallback)load_initial_eps_bearer_ucgdflt_test_ready,
+                task);
+
+    return;
+}
+
+
+
 /*****************************************************************************/
 
 MMBroadbandModemUblox *
@@ -1978,6 +2581,15 @@ mm_broadband_modem_ublox_new (const gchar  *device,
                          MM_BASE_MODEM_DATA_NET_SUPPORTED, TRUE,
                          MM_BASE_MODEM_DATA_TTY_SUPPORTED, TRUE,
                          NULL);
+}
+
+static void
+iface_modem_3gpp_profile_manager_init (MMIfaceModem3gppProfileManager *iface)
+{
+    iface_modem_3gpp_profile_manager_parent = g_type_interface_peek_parent (iface);
+
+    iface->list_profiles = modem_3gpp_profile_manager_list_profiles;
+    iface->list_profiles_finish = modem_3gpp_profile_manager_list_profiles_finish;
 }
 
 static void
@@ -2032,6 +2644,19 @@ iface_modem_init (MMIfaceModem *iface)
     iface->set_current_bands_finish = common_set_current_modes_bands_finish;
     iface->setup_sim_hot_swap = modem_setup_sim_hot_swap;
     iface->setup_sim_hot_swap_finish = modem_setup_sim_hot_swap_finish;
+}
+
+static void
+iface_modem_3gpp_init(MMIfaceModem3gpp * iface)
+{
+    iface_modem_3gpp_parent = g_type_interface_peek_parent(iface);
+
+    iface->set_initial_eps_bearer_settings = modem_3gpp_set_initial_eps_bearer_settings;
+    iface->set_initial_eps_bearer_settings_finish = modem_3gpp_set_initial_eps_bearer_settings_finish;
+    iface->load_initial_eps_bearer_settings = load_initial_eps_bearer;
+    iface->load_initial_eps_bearer_settings_finish = load_initial_eps_bearer_finish;
+    iface->load_initial_eps_bearer = modem_3gpp_load_initial_eps_bearer;
+    iface->load_initial_eps_bearer_finish = modem_3gpp_load_initial_eps_bearer_finish;
 }
 
 static void

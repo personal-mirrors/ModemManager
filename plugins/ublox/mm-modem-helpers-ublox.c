@@ -317,6 +317,120 @@ out:
     return TRUE;
 }
 
+static MMBearerIpFamily
+ip_family_from_string(const gchar * family_str)
+{
+    if (strcmp(family_str, "IP") == 0) {
+		return MM_BEARER_IP_FAMILY_IPV4;
+	} else if (strcmp(family_str, "IPV6") == 0) {
+		return MM_BEARER_IP_FAMILY_IPV6;
+	} else if (strcmp(family_str, "NONIP") == 0) {
+		return MM_BEARER_IP_FAMILY_NONE;
+	} else if (strcmp(family_str, "IPV4V6") == 0) {
+		return MM_BEARER_IP_FAMILY_IPV4V6;
+	} else {
+		return MM_BEARER_IP_FAMILY_NONE;
+	}
+}
+
+/*****************************************************************************/
+/* UCGDFLT=? response parser */
+GList *
+mm_ublox_parse_ucgdflt_test_response (const gchar       *response,
+                                      GError           **error)
+{
+	GRegex     *r;
+	GMatchInfo *match_info;
+	GError     *inner_error = NULL;
+	gchar      *pdp_type_str = NULL;
+	GList      *info_list = NULL;
+
+	/*
+	 * e.g.
+	 *  +UCGDFLT: (0-1),"IP",,(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-1),(0-2),,,
+	 */
+
+	r = g_regex_new("\\+UCGDFLT:\\s*(\\(\\d+-\\d+\\)),\\s*([^,]*)",
+					 G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW, 0, NULL);
+	g_regex_match_full(r, response, strlen(response), 0, 0, &match_info, &inner_error);
+
+	while (!inner_error && g_match_info_matches (match_info)) {
+        pdp_type_str = mm_get_string_unquoted_from_match_info (match_info, 2);
+        info_list = g_list_prepend(info_list,  GINT_TO_POINTER(ip_family_from_string(pdp_type_str)));
+        g_match_info_next (match_info, &inner_error);
+	}
+	g_match_info_free (match_info);
+	g_regex_unref (r);
+
+	if (inner_error) {
+		g_error_free (inner_error);
+	}
+
+	return info_list;
+}
+
+/*****************************************************************************/
+/* UCGDFLT? response parser */
+
+gboolean
+mm_ublox_parse_ucgdflt_response( const gchar       *response,
+                                 gchar            **out_apn,
+                                 MMBearerIpFamily  *out_ip_type,
+                                 GError           **error)
+{
+    GRegex     *r;
+    GMatchInfo *match_info;
+    GError     *inner_error = NULL;
+    gchar      *apn = NULL;
+
+    /*
+     *           1           2      3          4           5          6           7         8          9            10             11              12            13             14         15
+     * +UCGDFLT: <pdp_type>, <APN>, <emg_ind>, <ipcp_reg>, <pcsf_v6>, <imcn_sig>, <dns_v6>, <nw_bear>, <dsm_v6_ha>, <dsm_v6_pref>, <dsm_b6_ha_v4>, <ip_via_nas>, <ip_via_dhcp>, <pcsf_v6>, <dns_v4>,
+     *           16        17      18       19              20                 21
+     *           <msisdn>, <ifom>, <v4mtu>, <local_tft> ,,, <vendor_specific>, <NSLPI>
+     *
+     *  +UCGDFLT: "IP","jtmtm",0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,,,""
+     */
+
+    r = g_regex_new("\\+UCGDFLT:\\s*([^,]*),\\s*([^,]*),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),"
+                    "\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),,,\\s*([^,]*)",
+                     G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW, 0, NULL);
+
+    g_regex_match_full(r, response, strlen(response), 0, 0, &match_info, &inner_error);
+    if (inner_error) {
+        goto out;
+    }
+
+    if (!g_match_info_matches(match_info)) {
+        inner_error = g_error_new(MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't match response");
+        goto out;
+    }
+
+    if (out_apn) {
+        apn = mm_get_string_unquoted_from_match_info (match_info, 2);
+    }
+
+    if (out_ip_type) {
+        gchar * siptype = mm_get_string_unquoted_from_match_info (match_info, 1);
+        *out_ip_type = ip_family_from_string(siptype);
+    }
+
+out:
+    g_clear_pointer(&match_info, g_match_info_free);
+    g_regex_unref(r);
+
+    if (inner_error) {
+        g_propagate_error(error, inner_error);
+        return FALSE;
+    }
+
+    if (out_apn)
+        *out_apn = apn;
+
+    return TRUE;
+}
+
+
 /*****************************************************************************/
 /* CFUN? response parser */
 
