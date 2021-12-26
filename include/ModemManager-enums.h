@@ -1821,4 +1821,63 @@ typedef enum { /*< underscore_name=mm_modem_3gpp_drx_cycle >*/
     MM_MODEM_3GPP_DRX_CYCLE_256         = 5,
 } MMModem3gppDrxCycle;
 
+/**
+ * MMBearerAccessTypePreference:
+ * @MM_BEARER_ACCESS_TYPE_PREFERENCE_NONE: No access type preference, or unknown.
+ * @MM_BEARER_ACCESS_TYPE_PREFERENCE_3GPP_ONLY: 3GPP access type only.
+ * @MM_BEARER_ACCESS_TYPE_PREFERENCE_3GPP_PREFERRED: All access types allowed but 3GPP preferred.
+ * @MM_BEARER_ACCESS_TYPE_PREFERENCE_NON_3GPP_ONLY: Non-3GPP access type only.
+ *
+ * 5G network access type preference, such as 3GPP (NR, E-UTRA) or
+ * non-3GPP (untrusted WiFi, trusted WiFi, wireline).
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_bearer_access_type_preference >*/
+    MM_BEARER_ACCESS_TYPE_PREFERENCE_NONE           = 0,
+    MM_BEARER_ACCESS_TYPE_PREFERENCE_3GPP_ONLY      = 1,
+    MM_BEARER_ACCESS_TYPE_PREFERENCE_3GPP_PREFERRED = 2,
+    MM_BEARER_ACCESS_TYPE_PREFERENCE_NON_3GPP_ONLY  = 3,
+} MMBearerAccessTypePreference;
+
+/**
+ * MMBearerRoamingAllowance:
+ * @MM_BEARER_ROAMING_ALLOWANCE_NONE: No explicit roaming allowance rules.
+ * @MM_BEARER_ROAMING_ALLOWANCE_HOME: Home network allowed.
+ * @MM_BEARER_ROAMING_ALLOWANCE_PARTNER: Partner network allowed.
+ * @MM_BEARER_ROAMING_ALLOWANCE_NON_PARTNER: Non-parter network allowed.
+ *
+ * Bitmask specifying roaming allowance rules for different network types.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_bearer_roaming_allowance >*/
+    MM_BEARER_ROAMING_ALLOWANCE_NONE        = 0,
+    MM_BEARER_ROAMING_ALLOWANCE_HOME        = 1 << 0,
+    MM_BEARER_ROAMING_ALLOWANCE_PARTNER     = 1 << 1,
+    MM_BEARER_ROAMING_ALLOWANCE_NON_PARTNER = 1 << 2,
+} MMBearerRoamingAllowance;
+
+/**
+ * MMBearerProfileSource:
+ * @MM_BEARER_PROFILE_SOURCE_UNKNOWN: Unknown.
+ * @MM_BEARER_PROFILE_SOURCE_ADMIN: Profile created by an enterprise IT admin from the OS.
+ * @MM_BEARER_PROFILE_SOURCE_USER: Profile created by the user.
+ * @MM_BEARER_PROFILE_SOURCE_OPERATOR: Profile created by the operator through OMA-DM or similar.
+ * @MM_BEARER_PROFILE_SOURCE_MODEM: Profile created by the OEM that was included with the modem firmware.
+ * @MM_BEARER_PROFILE_SOURCE_DEVICE: Profile created by the OS APN database.
+ *
+ * Value specifying how a given context was created, mostly for informative purposes.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_bearer_profile_source >*/
+    MM_BEARER_PROFILE_SOURCE_UNKNOWN  = 0,
+    MM_BEARER_PROFILE_SOURCE_ADMIN    = 1,
+    MM_BEARER_PROFILE_SOURCE_USER     = 2,
+    MM_BEARER_PROFILE_SOURCE_OPERATOR = 3,
+    MM_BEARER_PROFILE_SOURCE_MODEM    = 4,
+    MM_BEARER_PROFILE_SOURCE_DEVICE   = 5,
+} MMBearerProfileSource;
+
 #endif /*  _MODEMMANAGER_ENUMS_H_ */

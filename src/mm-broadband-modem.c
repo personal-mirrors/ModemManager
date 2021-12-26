@@ -10184,9 +10184,15 @@ modem_signal_load_values (MMIfaceModemSignal  *self,
 static gboolean
 modem_3gpp_profile_manager_check_support_finish (MMIfaceModem3gppProfileManager  *self,
                                                  GAsyncResult                    *res,
+                                                 gchar                          **index_field,
                                                  GError                         **error)
 {
-    return g_task_propagate_boolean (G_TASK (res), error);
+    if (g_task_propagate_boolean (G_TASK (res), error)) {
+        *index_field = g_strdup ("profile-id");;
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 static void
@@ -10352,7 +10358,11 @@ modem_3gpp_profile_manager_check_format_finish (MMIfaceModem3gppProfileManager  
     if (apn_cmp)
         *apn_cmp = (GEqualFunc) mm_3gpp_cmp_apn_name;
     if (profile_cmp_flags)
-        *profile_cmp_flags = (MM_3GPP_PROFILE_CMP_FLAGS_NO_AUTH | MM_3GPP_PROFILE_CMP_FLAGS_NO_APN_TYPE);
+        *profile_cmp_flags = (MM_3GPP_PROFILE_CMP_FLAGS_NO_AUTH |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_APN_TYPE |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_ACCESS_TYPE_PREFERENCE |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_ROAMING_ALLOWANCE |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_PROFILE_SOURCE);
     return TRUE;
 }
 
@@ -10487,14 +10497,17 @@ profile_manager_cgdel_set_ready (MMBaseModem  *self,
 }
 
 static void
-modem_3gpp_profile_manager_delete_profile (MMIfaceModem3gppProfileManager  *self,
-                                           MM3gppProfile                   *profile,
-                                           GAsyncReadyCallback              callback,
-                                           gpointer                         user_data)
+modem_3gpp_profile_manager_delete_profile (MMIfaceModem3gppProfileManager *self,
+                                           MM3gppProfile                  *profile,
+                                           const gchar                    *index_field,
+                                           GAsyncReadyCallback             callback,
+                                           gpointer                        user_data)
 {
     g_autofree gchar *cmd = NULL;
     GTask            *task;
     gint              profile_id;
+
+    g_assert (g_strcmp0 (index_field, "profile-id") == 0);
 
     task = g_task_new (self, NULL, callback, user_data);
 
@@ -10659,15 +10672,21 @@ modem_3gpp_profile_manager_deactivate_profile (MMIfaceModem3gppProfileManager *s
 /*****************************************************************************/
 /* Store profile (3GPP profile management interface) */
 
-static gint
+static gboolean
 modem_3gpp_profile_manager_store_profile_finish (MMIfaceModem3gppProfileManager  *self,
                                                  GAsyncResult                    *res,
+                                                 gint                            *out_profile_id,
+                                                 MMBearerApnType                 *out_apn_type,
                                                  GError                         **error)
 {
     if (!g_task_propagate_boolean (G_TASK (res), error))
-        return MM_3GPP_PROFILE_ID_UNKNOWN;
+        return FALSE;
 
-    return GPOINTER_TO_INT (g_task_get_task_data (G_TASK (res)));
+    if (out_profile_id)
+        *out_profile_id = GPOINTER_TO_INT (g_task_get_task_data (G_TASK (res)));
+    if (out_apn_type)
+        *out_apn_type = MM_BEARER_APN_TYPE_NONE;
+    return TRUE;
 }
 
 static void
@@ -10687,6 +10706,7 @@ store_profile_cgdcont_set_ready (MMBaseModem  *self,
 static void
 modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager *self,
                                           MM3gppProfile                  *profile,
+                                          const gchar                    *index_field,
                                           GAsyncReadyCallback             callback,
                                           gpointer                        user_data)
 {
@@ -10698,6 +10718,8 @@ modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager *self,
     g_autofree gchar  *ip_type_str = NULL;
     g_autofree gchar  *quoted_apn = NULL;
     g_autofree gchar  *cmd = NULL;
+
+    g_assert (g_strcmp0 (index_field, "profile-id") == 0);
 
     task = g_task_new (self, NULL, callback, user_data);
 

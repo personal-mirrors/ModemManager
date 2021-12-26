@@ -706,6 +706,26 @@ mm_common_get_3gpp_drx_cycle_from_string (const gchar  *str,
                               error);
 }
 
+MMBearerAccessTypePreference
+mm_common_get_access_type_preference_from_string (const gchar  *str,
+                                                  GError      **error)
+{
+    return _enum_from_string (MM_TYPE_BEARER_ACCESS_TYPE_PREFERENCE,
+                              str,
+                              MM_BEARER_ACCESS_TYPE_PREFERENCE_NONE,
+                              error);
+}
+
+MMBearerProfileSource
+mm_common_get_profile_source_from_string (const gchar  *str,
+                                          GError      **error)
+{
+    return _enum_from_string (MM_TYPE_BEARER_PROFILE_SOURCE,
+                              str,
+                              MM_BEARER_PROFILE_SOURCE_UNKNOWN,
+                              error);
+}
+
 /******************************************************************************/
 /* MMModemPortInfo array management */
 
