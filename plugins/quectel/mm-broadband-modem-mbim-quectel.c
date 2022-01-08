@@ -46,9 +46,9 @@ firmware_load_update_settings_finish (MMIfaceModemFirmware  *self,
 }
 
 static void
-quectel_get_firmware_version_ready (MMBaseModem  *modem,
-                                    GAsyncResult *res,
-                                    GTask        *task)
+quectel_at_port_get_firmware_version_ready (MMBaseModem  *modem,
+                                            GAsyncResult *res,
+                                            GTask        *task)
 {
     MMFirmwareUpdateSettings *update_settings;
     const gchar              *version;
@@ -63,20 +63,86 @@ quectel_get_firmware_version_ready (MMBaseModem  *modem,
 }
 
 static void
+quectel_mbim_port_get_firmware_version_ready (MbimDevice   *device,
+                                              GAsyncResult *res,
+                                              GTask        *task)
+{
+    g_autoptr(MbimMessage)    response = NULL;
+    g_autoptr(GString)        version_str = NULL;
+    const guint8             *version = NULL;
+    guint32                   sz;
+    MMFirmwareUpdateSettings *update_settings;
+
+    response = mbim_device_command_finish (device, res, NULL);
+    if (response && mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, NULL) &&
+        mbim_message_qdu_quectel_read_version_response_parse (response, &sz, &version, NULL)) {
+        guint i;
+        version_str = g_string_new("");
+        for (i = 0; i < sz; ++i) {
+            if (g_ascii_isalnum(version[i]) || version[i] == '.' || version[i] == '_')
+                g_string_append_printf(version_str, "%c", version[i]);
+        }
+    }
+
+    update_settings = mm_firmware_update_settings_new (MM_MODEM_FIRMWARE_UPDATE_METHOD_FIREHOSE);
+
+    /* For some reason the version string starts with '.' symbol, e.g. .EM05GFAR07A05M1G_01.001
+     * Omit it and start from 'E'*/
+    if (version_str && version_str->len)
+        mm_firmware_update_settings_set_version (update_settings, &version_str->str[1]);
+
+    g_task_return_pointer (task, update_settings, g_object_unref);
+    g_object_unref (task);
+}
+
+static void
 firmware_load_update_settings (MMIfaceModemFirmware *self,
                                GAsyncReadyCallback   callback,
                                gpointer              user_data)
 {
     GTask *task;
+    MMPortMbim *mbim;
+    MMPortSerialAt *at_port;
 
     task = g_task_new (self, NULL, callback, user_data);
 
-    mm_base_modem_at_command (MM_BASE_MODEM (self),
-                              "+QGMR?",
-                              3,
-                              FALSE,
-                              (GAsyncReadyCallback) quectel_get_firmware_version_ready,
-                              task);
+    at_port = mm_base_modem_peek_best_at_port (MM_BASE_MODEM (self), NULL);
+    if (at_port) {
+        mm_base_modem_at_command_full (MM_BASE_MODEM (self),
+                                       at_port,
+                                       "+QGMR?",
+                                       3,
+                                       FALSE,
+                                       FALSE,
+                                       FALSE,
+                                       (GAsyncReadyCallback) quectel_at_port_get_firmware_version_ready,
+                                       task);
+        return;
+    }
+
+    mbim = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
+    if (mbim) {
+        guint8 buffer[] = { 0x00, 0x01 };
+        g_autoptr(MbimMessage)  message = NULL;
+
+        message = mbim_message_qdu_quectel_read_version_set_new (sizeof(buffer), buffer, NULL);
+        mbim_device_command (mm_port_mbim_peek_device (mbim),
+                             message,
+                             5,
+                             NULL,
+                             (GAsyncReadyCallback) quectel_mbim_port_get_firmware_version_ready,
+                             task);
+        return;
+    }
+
+    g_task_report_new_error (self,
+                             callback,
+                             user_data,
+                             firmware_load_update_settings,
+                             MM_CORE_ERROR,
+                             MM_CORE_ERROR_FAILED,
+                             "Couldn't find a port to fetch firmware info");
+    g_object_unref (task);
 }
 
 /*****************************************************************************/
