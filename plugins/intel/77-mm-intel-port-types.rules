@@ -1,0 +1,13 @@
+ACTION!="add|change|move|bind", GOTO="mm_intel_port_types_end"
+SUBSYSTEM=="wwan", ENV{ID_MM_CANDIDATE}="1"
+SUBSYSTEM=="net", ENV{ID_MM_CANDIDATE}="1"
+SUBSYSTEM=="wwan", GOTO="mm_intel_port_types"
+GOTO="mm_intel_port_types_end"
+
+LABEL="mm_intel_port_types"
+#Intel M.2 7560 R+
+SUBSYSTEM=="wwan", ATTRS{vendor}=="0x8086", KERNEL=="wwan0at0", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1"
+SUBSYSTEM=="wwan", ATTRS{vendor}=="0x8086", KERNEL=="wwan0at1", ENV{ID_MM_PORT_IGNORE}="1"
+SUBSYSTEM=="wwan", ATTRS{vendor}=="0x8086", KERNEL=="wwan0at2", ENV{ID_MM_PORT_IGNORE}="1"
+
+LABEL="mm_intel_port_types_end"

@@ -424,6 +424,28 @@ TELIT_COMMON_COMPILER_FLAGS = \
 endif
 
 ################################################################################
+# plugin: intel
+################################################################################
+
+if ENABLE_PLUGIN_INTEL
+
+pkglib_LTLIBRARIES += libmm-plugin-intel.la
+libmm_plugin_intel_la_SOURCES = \
+    intel/mm-plugin-intel.c \
+    intel/mm-plugin-intel.h \
+    intel/mm-intel-main.h \
+    intel/mm-intel-main.c \
+    intel/mm-intel-location-core.h \
+    intel/mm-intel-location-core.c \
+    $(NULL)
+libmm_plugin_intel_la_CPPFLAGS = $(PLUGIN_COMMON_COMPILER_FLAGS)
+libmm_plugin_intel_la_LDFLAGS  = $(PLUGIN_COMMON_LINKER_FLAGS)
+
+dist_udevrules_DATA += intel/77-mm-intel-port-types.rules
+
+endif
+
+################################################################################
 # common foxconn support
 ################################################################################
 
