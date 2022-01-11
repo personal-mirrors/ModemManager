@@ -254,4 +254,7 @@ gchar       *mm_base_sim_load_sim_identifier_finish (MMBaseSim *self,
 gboolean     mm_base_sim_is_emergency_number (MMBaseSim   *self,
                                               const gchar *number);
 
+void         mm_base_sim_set_esim_status (MMBaseSim   *self,
+                                          MMSimEsimStatus status);
+
 #endif /* MM_BASE_SIM_H */

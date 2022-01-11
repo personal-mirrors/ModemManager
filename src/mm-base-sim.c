@@ -1609,6 +1609,25 @@ mm_base_sim_is_emergency_number (MMBaseSim   *self,
 
 /*****************************************************************************/
 
+void
+mm_base_sim_set_esim_status (MMBaseSim   *self,
+                             MMSimEsimStatus status)
+{
+    MMSimEsimStatus  old_status;
+
+    old_status = mm_gdbus_sim_get_esim_status (MM_GDBUS_SIM (self));
+
+    /* Update the Esim status only if there is a change in status */
+    if (old_status != status) {
+        mm_gdbus_sim_set_esim_status (MM_GDBUS_SIM (self), status);
+        mm_obj_dbg (self, "ESIM status updated from %s -> %s",
+                                        mm_sim_esim_status_get_string(old_status),
+                                        mm_sim_esim_status_get_string(status));
+    }
+}
+
+/*****************************************************************************/
+
 #undef STR_REPLY_READY_FN
 #define STR_REPLY_READY_FN(NAME)                                        \
     static void                                                         \
