@@ -105,6 +105,19 @@
     <method name="Reset" />
 
     <!--
+        ResetExt:
+
+        Clear non-persistent configuration and state, and return the device to
+        a newly-powered-on state.
+
+        This command may power-cycle the device.
+    -->
+    <method name="ResetExt">
+      <arg name="BootMode" type="u" direction="in" />
+      <arg name="Timeout"  type="u" direction="in" />
+    </method>
+
+    <!--
         FactoryReset:
         @code: Carrier-supplied code required to reset the modem.
 

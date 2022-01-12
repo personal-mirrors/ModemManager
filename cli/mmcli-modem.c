@@ -55,6 +55,7 @@ static gboolean set_power_state_on_flag;
 static gboolean set_power_state_low_flag;
 static gboolean set_power_state_off_flag;
 static gboolean reset_flag;
+static gchar *reset_ext_str;
 static gchar *factory_reset_str;
 static gchar *command_str;
 static gchar *create_bearer_str;
@@ -94,6 +95,10 @@ static GOptionEntry entries[] = {
     { "reset", 'r', 0, G_OPTION_ARG_NONE, &reset_flag,
       "Reset a given modem",
       NULL
+    },
+    { "reset-ext", 0, 0, G_OPTION_ARG_STRING, &reset_ext_str,
+      "Reset a given modem",
+      "[Bootmode] [Timeout]"
     },
     { "factory-reset", 0, 0, G_OPTION_ARG_STRING, &factory_reset_str,
       "Reset a given modem to its factory state",
@@ -170,6 +175,7 @@ mmcli_modem_options_enabled (void)
                  set_power_state_low_flag +
                  set_power_state_off_flag +
                  reset_flag +
+                 !!reset_ext_str +
                  !!create_bearer_str +
                  !!delete_bearer_str +
                  !!factory_reset_str +
@@ -628,6 +634,33 @@ reset_ready (MMModem      *modem,
 }
 
 static void
+reset_ext_process_reply (gboolean      result,
+                         const GError *error)
+{
+    if (!result) {
+        g_printerr ("error: couldn't call reset ext : '%s'\n",
+                    error ? error->message : "unknown error");
+        exit (EXIT_FAILURE);
+    }
+
+    g_print ("successfully called reset ext command\n");
+}
+
+static void
+reset_ext_ready (MMModem      *modem,
+                 GAsyncResult *result,
+                 gpointer      nothing)
+{
+    gboolean operation_result;
+    GError *error = NULL;
+
+    operation_result = mm_modem_reset_ext_finish (modem, result, &error);
+    reset_ext_process_reply (operation_result, error);
+
+    mmcli_async_operation_done ();
+}
+
+static void
 factory_reset_process_reply (gboolean      result,
                              const GError *error)
 {
@@ -1077,6 +1110,42 @@ get_modem_ready (GObject      *source,
         return;
     }
 
+    /* Request to reset the modem? */
+    if (reset_ext_str) {
+        g_auto(GStrv)  split = NULL;
+        guint          boot_mode = 0;
+        guint          timeout = 0;
+
+        split = g_strsplit (reset_ext_str, ",", -1);
+        if (g_strv_length (split) > 2) {
+            g_printerr ("error: couldn't parse input string, too many arguments\n");
+            return;
+        }
+
+        if (g_strv_length (split) < 1) {
+            g_printerr ("error: couldn't parse input string, missing arguments\n");
+            return;
+        }
+
+        mm_get_uint_from_str (split[0], &boot_mode);
+        if (split[1]) {
+            mm_get_uint_from_str (split[1], &timeout);
+        }
+
+        if (boot_mode > 5) {
+            g_printerr ("error: boot mode value cannot be greater than 5\n");
+            return;
+        }
+        g_debug ("Asynchronously resetting modem...");
+        mm_modem_reset_ext (ctx->modem,
+                            boot_mode,
+                            timeout,
+                            ctx->cancellable,
+                            (GAsyncReadyCallback)reset_ext_ready,
+                            NULL);
+        return;
+    }
+
     /* Request to reset the modem to factory state? */
     if (factory_reset_str) {
         g_debug ("Asynchronously factory-reseting modem...");
@@ -1316,6 +1385,39 @@ mmcli_modem_run_synchronous (GDBusConnection *connection)
         g_debug ("Synchronously reseting modem...");
         result = mm_modem_reset_sync (ctx->modem, NULL, &error);
         reset_process_reply (result, error);
+        return;
+    }
+    /* Request to reset the modem? */
+    if (reset_ext_str) {
+        gboolean       result;
+        g_auto(GStrv)  split = NULL;
+        guint          boot_mode = 0;
+        guint          timeout = 0;
+
+        split = g_strsplit (reset_ext_str, ",", -1);
+        if (g_strv_length (split) > 2) {
+            g_printerr ("error: couldn't parse input string, too many arguments\n");
+            return;
+        }
+
+        if (g_strv_length (split) < 1) {
+            g_printerr ("error: couldn't parse input string, missing arguments\n");
+            return;
+        }
+
+        mm_get_uint_from_str (split[0], &boot_mode);
+        if (split[1]) {
+            mm_get_uint_from_str (split[1], &timeout);
+        }
+
+        if (boot_mode > 5) {
+            g_printerr ("error: boot mode value cannot be greater than 5\n");
+            return;
+        }
+
+        g_debug ("Synchronously reseting modem...");
+        result = mm_modem_reset_ext_sync (ctx->modem, boot_mode, timeout, NULL, &error);
+        reset_ext_process_reply (result, error);
         return;
     }
 
