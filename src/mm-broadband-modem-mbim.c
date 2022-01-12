@@ -2200,10 +2200,11 @@ modem_reset (MMIfaceModem        *_self,
              GAsyncReadyCallback  callback,
              gpointer             user_data)
 {
-    MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
-    GTask                *task;
-    MbimDevice           *device;
-    MbimMessage          *message;
+    MMBroadbandModemMbim       *self = MM_BROADBAND_MODEM_MBIM (_self);
+    GTask                      *task;
+    MbimDevice                 *device;
+    MbimMessage                *message;
+    g_autoptr(MbimModemReboot)  modem_reboot = NULL;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
@@ -2221,14 +2222,98 @@ modem_reset (MMIfaceModem        *_self,
         return;
     }
 
+    /* This message is defined in the Intel firmware update service, but it
+     * really is just a standard modem reboot.Hence the value are reset to 0,0 */ 
+    modem_reboot             = g_new0 (MbimModemReboot, 1);
+    modem_reboot->boot_mode  = 0;
+    modem_reboot->timeout    = 0;
+    
+    if(mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+       message = mbim_message_intel_firmware_update_extensions_modem_reboot_set_new (modem_reboot,NULL);
+       mbim_device_command (device,
+                            message,
+                            10,
+                            NULL,
+                            (GAsyncReadyCallback)intel_firmware_update_modem_reboot_set_ready,
+                            task);
+    } else {
+       message = mbim_message_intel_firmware_update_modem_reboot_set_new (NULL);
+       mbim_device_command (device,
+                            message,
+                            10,
+                            NULL,
+                            (GAsyncReadyCallback)intel_firmware_update_modem_reboot_set_ready,
+                            task);
+    }
+     
+    mbim_message_unref (message);
+}
+
+/*****************************************************************************/
+/* Reset Ext */
+
+static gboolean
+modem_reset_ext_finish (MMIfaceModem  *self,
+                        GAsyncResult  *res,
+                        GError       **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+intel_firmware_update_modem_reboot_ext_set_ready (MbimDevice   *device,
+                                                  GAsyncResult *res,
+                                                  GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                 *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+    } else {
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+    }
+}
+
+static void
+modem_reset_ext (MMIfaceModem        *_self,
+                 guint                boot_mode,
+                 guint                timeout,
+                 GAsyncReadyCallback  callback,
+                 gpointer             user_data)
+{
+    MMBroadbandModemMbim       *self = MM_BROADBAND_MODEM_MBIM (_self);
+    GTask                      *task;
+    MbimDevice                 *device;
+    MbimMessage                *message;
+    g_autoptr(MbimModemReboot)  modem_reboot_ext = NULL;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    if ((!self->priv->is_intel_reset_supported) || (!mbim_device_check_ms_mbimex_version (device, 2, 0))) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                 "couldn't call reset ext operation, because operation is not supported");
+        g_object_unref (task);
+        return;
+    }
+
     /* This message is defined in the Intel Firmware Update service, but it
      * really is just a standard modem reboot. */
-    message = mbim_message_intel_firmware_update_modem_reboot_set_new (NULL);
+    modem_reboot_ext             = g_new0 (MbimModemReboot, 1);
+    modem_reboot_ext->boot_mode  = boot_mode;
+    modem_reboot_ext->timeout    = timeout;
+    message = mbim_message_intel_firmware_update_extensions_modem_reboot_set_new (modem_reboot_ext,NULL);
     mbim_device_command (device,
                          message,
                          10,
                          NULL,
-                         (GAsyncReadyCallback)intel_firmware_update_modem_reboot_set_ready,
+                         (GAsyncReadyCallback)intel_firmware_update_modem_reboot_ext_set_ready,
                          task);
     mbim_message_unref (message);
 }
@@ -8656,6 +8741,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface->modem_power_down_finish = power_down_finish;
     iface->reset = modem_reset;
     iface->reset_finish = modem_reset_finish;
+    iface->reset_ext = modem_reset_ext;
+    iface->reset_ext_finish = modem_reset_ext_finish;
     iface->load_supported_ip_families = modem_load_supported_ip_families;
     iface->load_supported_ip_families_finish = modem_load_supported_ip_families_finish;
 

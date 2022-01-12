@@ -214,6 +214,16 @@ struct _MMIfaceModem {
                               GAsyncResult *res,
                               GError **error);
 
+    /* Asynchronous reset_ext operation */
+    void (*reset_ext) (MMIfaceModem *self,
+                       guint boot_mode,
+                       guint timeout,
+                       GAsyncReadyCallback callback,
+                       gpointer user_data);
+    gboolean (*reset_ext_finish) (MMIfaceModem *self,
+                                  GAsyncResult *res,
+                                  GError **error);
+
     /* Asynchronous factory-reset operation */
     void (*factory_reset) (MMIfaceModem *self,
                            const gchar *code,
