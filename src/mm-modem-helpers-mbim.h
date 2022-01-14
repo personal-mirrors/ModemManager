@@ -19,9 +19,6 @@
 #include <config.h>
 
 #include <ModemManager.h>
-#define _LIBMM_INSIDE_MM
-#include <libmm-glib.h>
-
 #include <libmbim-glib.h>
 
 /*****************************************************************************/
@@ -34,12 +31,6 @@ MMModemCapability mm_modem_capability_from_mbim_device_caps (MbimCellularClass  
 MMModemLock mm_modem_lock_from_mbim_pin_type (MbimPinType pin_type);
 
 MMModem3gppRegistrationState mm_modem_3gpp_registration_state_from_mbim_register_state (MbimRegisterState state);
-
-MMModemMode mm_modem_mode_from_mbim_data_class (MbimDataClass data_class);
-
-MbimDataClass mm_mbim_data_class_from_modem_mode (MMModemMode modem_mode,
-                                                  gboolean    is_3gpp,
-                                                  gboolean    is_cdma);
 
 MMModemAccessTechnology mm_modem_access_technology_from_mbim_data_class (MbimDataClass data_class);
 
@@ -64,46 +55,9 @@ MbimContextType     mm_bearer_apn_type_to_mbim_context_type        (MMBearerApnT
                                                                     gpointer              log_object,
                                                                     GError              **error);
 
-gboolean mm_signal_error_rate_percentage_from_coded_value (guint      coded_value,
-                                                           gdouble   *out_percentage,
-                                                           gboolean   is_gsm,
-                                                           GError   **error);
-
-gboolean mm_signal_rssi_from_coded_value (guint      coded_value,
-                                          gdouble   *out_rssi,
-                                          GError   **error);
-
-gboolean mm_signal_rsrp_from_coded_value (guint      coded_value,
-                                          gdouble   *out_rsrp,
-                                          GError   **error);
-
-gboolean mm_signal_snr_from_coded_value (guint      coded_value,
-                                         gdouble   *out_snr,
-                                         GError   **error);
-
 /*****************************************************************************/
 /* MBIM/SMS to MM translations */
 
 MMSmsState mm_sms_state_from_mbim_message_status (MbimSmsStatus status);
-
-/*****************************************************************************/
-
-guint mm_signal_quality_from_mbim_signal_state (guint                 rssi,
-                                                MbimRsrpSnrInfoArray *rsrp_snr,
-                                                guint32               rsrp_snr_count,
-                                                gpointer              log_object);
-
-gboolean mm_signal_from_mbim_signal_state (MbimDataClass          data_class,
-                                           guint                  coded_rssi,
-                                           guint                  coded_error_rate,
-                                           MbimRsrpSnrInfoArray  *rsrp_snr,
-                                           guint32                rsrp_snr_count,
-                                           gpointer               log_object,
-                                           MMSignal             **out_cdma,
-                                           MMSignal             **out_evdo,
-                                           MMSignal             **out_gsm,
-                                           MMSignal             **out_umts,
-                                           MMSignal             **out_lte,
-                                           MMSignal             **out_nr5g);
 
 #endif  /* MM_MODEM_HELPERS_MBIM_H */

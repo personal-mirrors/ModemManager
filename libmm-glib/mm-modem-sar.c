@@ -35,10 +35,15 @@
  * The #MMModemSar is an object providing access to the methods, signals and
  * properties of the SAR interface.
  *
- * The SAR interface is exposed whenever a modem has SAR capabilities.
+ * The SAR interface is exposed whenever a modem has sar capabilities.
  */
 
 G_DEFINE_TYPE (MMModemSar, mm_modem_sar, MM_GDBUS_TYPE_MODEM_SAR_PROXY)
+
+struct _MMModemSarPrivate {
+    GMutex supported_levels_mutex;
+    guint supported_levels_id;
+};
 
 /*****************************************************************************/
 
@@ -50,7 +55,7 @@ G_DEFINE_TYPE (MMModemSar, mm_modem_sar, MM_GDBUS_TYPE_MODEM_SAR_PROXY)
  *
  * Returns: (transfer none): The DBus path of the #MMObject object.
  *
- * Since: 1.20
+ * Since: 1.18
  */
 const gchar *
 mm_modem_sar_get_path (MMModemSar *self)
@@ -71,7 +76,7 @@ mm_modem_sar_get_path (MMModemSar *self)
  * Returns: (transfer full): The DBus path of the #MMObject. The returned value
  * should be freed with g_free().
  *
- * Since: 1.20
+ * Since: 1.18
  */
 gchar *
 mm_modem_sar_dup_path (MMModemSar *self)
@@ -98,7 +103,7 @@ mm_modem_sar_dup_path (MMModemSar *self)
  *
  * Returns: %TRUE if the enable was successful, %FALSE if @error is set.
  *
- * Since: 1.20
+ * Since: 1.18
  */
 gboolean
 mm_modem_sar_enable_finish (MMModemSar   *self,
@@ -129,7 +134,7 @@ mm_modem_sar_enable_finish (MMModemSar   *self,
  * See mm_modem_sar_enable_sync() for the synchronous, blocking version of
  * this method.
  *
- * Since: 1.20
+ * Since: 1.18
  */
 void
 mm_modem_sar_enable (MMModemSar          *self,
@@ -157,7 +162,7 @@ mm_modem_sar_enable (MMModemSar          *self,
  *
  * Returns: %TRUE if the enable was successful, %FALSE if @error is set.
  *
- * Since: 1.20
+ * Since: 1.18
  */
 gboolean
 mm_modem_sar_enable_sync (MMModemSar   *self,
@@ -183,7 +188,7 @@ mm_modem_sar_enable_sync (MMModemSar   *self,
  *
  * Returns: %TRUE if set power level was successful, %FALSE if @error is set.
  *
- * Since: 1.20
+ * Since: 1.18
  */
 gboolean
 mm_modem_sar_set_power_level_finish (MMModemSar   *self,
@@ -214,7 +219,7 @@ mm_modem_sar_set_power_level_finish (MMModemSar   *self,
  * See mm_modem_sar_set_power_level_sync() for the synchronous, blocking version of
  * this method.
  *
- * Since: 1.20
+ * Since: 1.18
  */
 void
 mm_modem_sar_set_power_level (MMModemSar         *self,
@@ -242,7 +247,7 @@ mm_modem_sar_set_power_level (MMModemSar         *self,
  *
  * Returns: %TRUE if set power level was successful, %FALSE if @error is set.
  *
- * Since: 1.20
+ * Since: 1.18
  */
 gboolean
 mm_modem_sar_set_power_level_sync (MMModemSar   *self,
@@ -255,23 +260,21 @@ mm_modem_sar_set_power_level_sync (MMModemSar   *self,
     return mm_gdbus_modem_sar_call_set_power_level_sync (MM_GDBUS_MODEM_SAR (self), level, cancellable, error);
 }
 
+
 /*****************************************************************************/
 /**
  * mm_modem_sar_get_state:
  * @self: A #MMModem.
+ * Returns: %TRUE if dynamic sar are enabled, %FALSE otherwise.
  *
- * Gets the state of dynamic SAR.
- *
- * Returns: %TRUE if dynamic SAR is enabled, %FALSE otherwise.
- *
- * Since: 1.20
+ * Since: 1.18
  */
 gboolean
 mm_modem_sar_get_state (MMModemSar *self)
 {
     g_return_val_if_fail (MM_IS_MODEM_SAR (self), FALSE);
 
-    return mm_gdbus_modem_sar_get_state (MM_GDBUS_MODEM_SAR (self));
+    return (gboolean) mm_gdbus_modem_sar_get_state (MM_GDBUS_MODEM_SAR (self));
 }
 
 /*****************************************************************************/
@@ -279,18 +282,16 @@ mm_modem_sar_get_state (MMModemSar *self)
  * mm_modem_sar_get_power_level:
  * @self: A #MMModem.
  *
- * Gets the index of the SAR power level mapping table.
+ * Returns: Index of the SAR power level mapping table.
  *
- * Returns: the index.
- *
- * Since: 1.20
+ * Since: 1.18
  */
 guint
 mm_modem_sar_get_power_level (MMModemSar *self)
 {
     g_return_val_if_fail (MM_IS_MODEM_SAR (self), FALSE);
 
-    return mm_gdbus_modem_sar_get_power_level (MM_GDBUS_MODEM_SAR (self));
+    return (guint) mm_gdbus_modem_sar_get_power_level(MM_GDBUS_MODEM_SAR (self));
 }
 
 /*****************************************************************************/

@@ -2,8 +2,8 @@
 # Copyright (C) 2021 Aleksander Morgado <aleksander@aleksander.es>
 
 example_units = [
-  'sms-c-async',
   'sms-c-sync',
+  'sms-c-async',
 ]
 
 foreach example_unit: example_units

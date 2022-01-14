@@ -48,22 +48,22 @@ static Context *ctx;
 static gboolean status_flag;
 static gboolean sar_enable_flag;
 static gboolean sar_disable_flag;
-static gint power_level_int = -1;
+static gchar *power_level_str;
 
 static GOptionEntry entries[] = {
     { "sar-status", 0, 0, G_OPTION_ARG_NONE, &status_flag,
       "Current status of the SAR",
       NULL
     },
-    { "sar-enable", 0, 0, G_OPTION_ARG_NONE, &sar_enable_flag,
+    { "set-enable", 0, 0, G_OPTION_ARG_NONE, &sar_enable_flag,
       "Enable dynamic SAR",
       NULL
     },
-    { "sar-disable", 0, 0, G_OPTION_ARG_NONE, &sar_disable_flag,
+    { "set-disable", 0, 0, G_OPTION_ARG_NONE, &sar_disable_flag,
       "Disable dynamic SAR",
       NULL
     },
-    { "sar-set-power-level", 0, 0, G_OPTION_ARG_INT, &power_level_int,
+    { "sar-set-power-level", 0, 0, G_OPTION_ARG_STRING, &power_level_str,
       "Set current dynamic SAR power level for all antennas on the device",
       "[power level]"
     },
@@ -97,7 +97,7 @@ mmcli_modem_sar_options_enabled (void)
     n_actions = (status_flag +
                  sar_enable_flag +
                  sar_disable_flag +
-                 (power_level_int >= 0));
+                 !!power_level_str);
 
     if (n_actions > 1) {
         g_printerr ("error: too many SAR actions requested\n");
@@ -152,9 +152,13 @@ print_sar_status (void)
     gboolean sar_state;
 
     sar_state = mm_modem_sar_get_state (ctx->modem_sar);
-    power_level = mm_modem_sar_get_power_level (ctx->modem_sar);
 
-    mmcli_output_string      (MMC_F_SAR_STATE, sar_state ? "yes" : "no");
+    /* Current state */
+    if (sar_state) {
+        power_level = mm_modem_sar_get_power_level (ctx->modem_sar);
+    }
+
+    mmcli_output_string      (MMC_F_SAR_STATE, sar_state ? "enable" : "disable");
     mmcli_output_string_take (MMC_F_SAR_POWER_LEVEL, g_strdup_printf ("%d", power_level));
     mmcli_output_dump ();
 }
@@ -169,20 +173,7 @@ enable_process_reply (gboolean      result,
         exit (EXIT_FAILURE);
     }
 
-    g_print ("Successfully enabled SAR\n");
-}
-
-static void
-disable_process_reply (gboolean      result,
-                       const GError *error)
-{
-    if (!result) {
-        g_printerr ("error: couldn't disable SAR: '%s'\n",
-                    error ? error->message : "unknown error");
-        exit (EXIT_FAILURE);
-    }
-
-    g_print ("Successfully disabled SAR\n");
+    g_print ("Successfully enable SAR\n");
 }
 
 static void
@@ -199,40 +190,27 @@ enable_ready (MMModemSar   *modem,
 }
 
 static void
-disable_ready (MMModemSar   *modem,
-               GAsyncResult *result)
-{
-    gboolean res;
-    GError *error = NULL;
-
-    res = mm_modem_sar_enable_finish (modem, result, &error);
-    disable_process_reply (res, error);
-
-    mmcli_async_operation_done ();
-}
-
-static void
-set_power_level_process_reply (gboolean      result,
-                               const GError *error)
+power_level_process_reply (gboolean      result,
+                           const GError *error)
 {
     if (!result) {
-        g_printerr ("error: couldn't set the SAR power level: '%s'\n",
+        g_printerr ("error: couldn't get the SAR power level: '%s'\n",
                     error ? error->message : "unknown error");
         exit (EXIT_FAILURE);
     }
 
-    g_print ("Successfully set the SAR power level\n");
+    g_print ("Successfully get the SAR power level\n");
 }
 
 static void
-set_power_level_ready (MMModemSar   *modem,
-                       GAsyncResult *result)
+power_level_ready (MMModemSar   *modem,
+                   GAsyncResult *result)
 {
     gboolean res;
     GError *error = NULL;
 
     res = mm_modem_sar_set_power_level_finish (modem, result, &error);
-    set_power_level_process_reply (res, error);
+    power_level_process_reply (res, error);
 
     mmcli_async_operation_done ();
 }
@@ -253,34 +231,32 @@ get_modem_ready (GObject      *source,
     g_assert (!status_flag);
 
     /* Request to enable SAR */
-    if (sar_enable_flag) {
-        g_debug ("Asynchronously enabling SAR ...");
+    if (sar_enable_flag || sar_disable_flag) {
+        gboolean sar_enable = sar_enable_flag ? TRUE : FALSE;
+
+        g_debug ("Asynchronously %s SAR",sar_enable ? "enabling" : "disabling");
         mm_modem_sar_enable (ctx->modem_sar,
-                             TRUE,
+                             sar_enable,
                              ctx->cancellable,
                              (GAsyncReadyCallback)enable_ready,
                              NULL);
         return;
     }
 
-    /* Request to disable SAR */
-    if (sar_disable_flag) {
-        g_debug ("Asynchronously disabling SAR ...");
-        mm_modem_sar_enable (ctx->modem_sar,
-                             FALSE,
-                             ctx->cancellable,
-                             (GAsyncReadyCallback)disable_ready,
-                             NULL);
-        return;
-    }
-
     /* Request to set power level of SAR */
-    if (power_level_int >= 0) {
-        g_debug ("Asynchronously starting set sar power level to %u ...", power_level_int);
+    if (power_level_str) {
+        guint power_level;
+
+        if (!mm_get_uint_from_str (power_level_str, &power_level)) {
+            g_printerr ("Error parsing power level string: '%s'\n", power_level_str);
+            exit (EXIT_FAILURE);
+        }
+
+        g_debug ("Asynchronously starting set sar power level to %u ...",power_level);
         mm_modem_sar_set_power_level (ctx->modem_sar,
-                                      power_level_int,
+                                      power_level,
                                       ctx->cancellable,
-                                      (GAsyncReadyCallback)set_power_level_ready,
+                                      (GAsyncReadyCallback)power_level_ready,
                                       NULL);
         return;
     }
@@ -330,39 +306,36 @@ mmcli_modem_sar_run_synchronous (GDBusConnection *connection)
         return;
     }
 
-    /* Request to enable SAR */
-    if (sar_enable_flag) {
+    /* Request to enable SAR? */
+    if (sar_enable_flag || sar_disable_flag) {
         gboolean result;
-        g_debug ("Synchronously enabling SAR ...");
-        result = mm_modem_sar_enable_sync (ctx->modem_sar,
-                                           TRUE,
-                                           ctx->cancellable,
-                                           &error);
-        enable_process_reply (result, error);
-        return;
-    }
+        gboolean sar_enable = sar_enable_flag ? TRUE : FALSE;
 
-    /* Request to disable SAR */
-    if (sar_disable_flag) {
-        gboolean result;
-        g_debug ("Synchronously disabling SAR ...");
+        g_debug ("Synchronously %s SAR",sar_enable ? "enabling" : "disabling");
         result = mm_modem_sar_enable_sync (ctx->modem_sar,
-                                           FALSE,
+                                           sar_enable,
                                            ctx->cancellable,
                                            &error);
-        disable_process_reply (result, error);
+        enable_process_reply (result,error);
         return;
     }
 
     /* Request to set power level of SAR */
-    if (power_level_int >=0 ) {
+    if (power_level_str) {
         gboolean result;
-        g_debug ("Synchronously starting set power level to %u ...", power_level_int);
+        guint power_level;
+
+        if (!mm_get_uint_from_str (power_level_str, &power_level)) {
+            g_printerr ("Error parsing power level string: '%s'\n", power_level_str);
+            exit (EXIT_FAILURE);
+        }
+
+        g_debug ("Synchronously starting set power level to %u ...",power_level);
         result = mm_modem_sar_set_power_level_sync (ctx->modem_sar,
-                                                    power_level_int,
+                                                    power_level,
                                                     ctx->cancellable,
                                                     &error);
-        set_power_level_process_reply (result, error);
+        power_level_process_reply (result,error);
         return;
     }
 

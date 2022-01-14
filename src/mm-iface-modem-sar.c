@@ -21,54 +21,42 @@
 #include "mm-iface-modem-sar.h"
 #include "mm-log-object.h"
 
-#define SUPPORT_CHECKED_TAG "sar-support-checked-tag"
-#define SUPPORTED_TAG       "sar-supported-tag"
+#define SUPPORT_CHECKED_TAG               "sar-support-checked-tag"
+#define SUPPORTED_TAG                     "sar-supported-tag"
 
 static GQuark support_checked_quark;
 static GQuark supported_quark;
 
 /*****************************************************************************/
-
 void
 mm_iface_modem_sar_bind_simple_status (MMIfaceModemSar *self,
                                        MMSimpleStatus  *status)
 {
 }
 
-gboolean
-mm_iface_modem_get_sar_state (MMIfaceModemSar *self)
+/*****************************************************************************/
+typedef struct _InitializationContext InitializationContext;
+static void interface_initialization_step (GTask *task);
+
+typedef enum {
+    INITIALIZATION_STEP_FIRST,
+    INITIALIZATION_STEP_CHECK_SUPPORT,
+    INITIALIZATION_STEP_FAIL_IF_UNSUPPORTED,
+    INITIALIZATION_STEP_LOAD_STATE,
+    INITIALIZATION_STEP_LOAD_POWER_LEVEL,
+    INITIALIZATION_STEP_LAST
+} InitializationStep;
+
+struct _InitializationContext {
+    MmGdbusModemSar   *skeleton;
+    InitializationStep step;
+};
+
+static void
+initialization_context_free (InitializationContext *ctx)
 {
-    MmGdbusModemSar *skeleton = NULL;
-    gboolean         state;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_SAR_DBUS_SKELETON, &skeleton,
-                  NULL);
-
-    if (!skeleton)
-        return FALSE;
-
-    state  = mm_gdbus_modem_sar_get_state (skeleton);
-    g_object_unref (skeleton);
-    return state;
-}
-
-guint
-mm_iface_modem_sar_get_power_level (MMIfaceModemSar *self)
-{
-    MmGdbusModemSar *skeleton = NULL;
-    guint            level;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_SAR_DBUS_SKELETON, &skeleton,
-                  NULL);
-
-    if (!skeleton)
-        return 0;
-
-    level = mm_gdbus_modem_sar_get_power_level (skeleton);
-    g_object_unref (skeleton);
-    return level;
+    g_object_unref (ctx->skeleton);
+    g_free (ctx);
 }
 
 /*****************************************************************************/
@@ -141,10 +129,10 @@ handle_enable_auth_ready (MMBaseModem         *self,
 }
 
 static gboolean
-handle_enable (MmGdbusModemSar       *skeleton,
-               GDBusMethodInvocation *invocation,
-               gboolean               enable,
-               MMIfaceModemSar       *self)
+handle_enable (MmGdbusModemSar      *skeleton,
+              GDBusMethodInvocation *invocation,
+              gboolean               enable,
+              MMIfaceModemSar       *self)
 {
     HandleEnableContext *ctx;
 
@@ -161,7 +149,6 @@ handle_enable (MmGdbusModemSar       *skeleton,
                              ctx);
     return TRUE;
 }
-
 /*****************************************************************************/
 /* Handle Set Power Level() */
 
@@ -188,9 +175,9 @@ set_power_level_ready (MMIfaceModemSar            *self,
 {
     GError *error = NULL;
 
-    if (!MM_IFACE_MODEM_SAR_GET_INTERFACE (ctx->self)->enable_finish (self, res, &error)) {
+    if (!MM_IFACE_MODEM_SAR_GET_INTERFACE (ctx->self)->enable_finish (self, res, &error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
-    } else {
+    else {
         mm_gdbus_modem_sar_set_power_level (ctx->skeleton, ctx->power_level);
         mm_gdbus_modem_sar_complete_set_power_level (ctx->skeleton, ctx->invocation);
     }
@@ -216,7 +203,7 @@ handle_set_power_level_auth_ready (MMBaseModem                *self,
         g_dbus_method_invocation_return_error (ctx->invocation,
                                                MM_CORE_ERROR,
                                                MM_CORE_ERROR_UNSUPPORTED,
-                                               "Cannot set SAR power level: "
+                                               "Cannot setup Sar: "
                                                "operation not supported");
         handle_set_power_level_context_free (ctx);
         return;
@@ -253,88 +240,6 @@ handle_set_power_level (MmGdbusModemSar       *skeleton,
     return TRUE;
 }
 
-/*****************************************************************************/
-
-typedef struct _InitializationContext InitializationContext;
-static void interface_initialization_step (GTask *task);
-
-typedef enum {
-    INITIALIZATION_STEP_FIRST,
-    INITIALIZATION_STEP_CHECK_SUPPORT,
-    INITIALIZATION_STEP_FAIL_IF_UNSUPPORTED,
-    INITIALIZATION_STEP_LOAD_STATE,
-    INITIALIZATION_STEP_LOAD_POWER_LEVEL,
-    INITIALIZATION_STEP_LAST
-} InitializationStep;
-
-struct _InitializationContext {
-    MmGdbusModemSar   *skeleton;
-    InitializationStep step;
-};
-
-static void
-initialization_context_free (InitializationContext *ctx)
-{
-    g_object_unref (ctx->skeleton);
-    g_free (ctx);
-}
-
-gboolean
-mm_iface_modem_sar_initialize_finish (MMIfaceModemSar  *self,
-                                      GAsyncResult     *res,
-                                      GError          **error)
-{
-    return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static void
-load_power_level_ready (MMIfaceModemSar *self,
-                        GAsyncResult    *res,
-                        GTask           *task)
-{
-    InitializationContext *ctx;
-    GError *error = NULL;
-    guint   level;
-
-    if (!MM_IFACE_MODEM_SAR_GET_INTERFACE (self)->load_power_level_finish (self, res, &level, &error)) {
-        mm_obj_dbg (self, "SAR load power level failed: %s", error->message);
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
-    }
-
-    ctx = g_task_get_task_data (task);
-    mm_gdbus_modem_sar_set_power_level (ctx->skeleton, level);
-
-    /* Go on to next step */
-    ctx->step++;
-    interface_initialization_step (task);
-}
-
-static void
-load_state_ready (MMIfaceModemSar *self,
-                  GAsyncResult    *res,
-                  GTask           *task)
-{
-    InitializationContext *ctx;
-    gboolean state;
-    GError *error = NULL;
-
-    if (!MM_IFACE_MODEM_SAR_GET_INTERFACE (self)->load_state_finish (self, res, &state, &error)) {
-        mm_obj_dbg (self, "SAR load state failed: %s", error->message);
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
-    }
-
-    ctx = g_task_get_task_data (task);
-    mm_gdbus_modem_sar_set_state (ctx->skeleton, state);
-
-    /* Go on to next step */
-    ctx->step++;
-    interface_initialization_step (task);
-}
-
 static void
 check_support_ready (MMIfaceModemSar *self,
                      GAsyncResult    *res,
@@ -358,6 +263,55 @@ check_support_ready (MMIfaceModemSar *self,
 
     /* Go on to next step */
     ctx = g_task_get_task_data (task);
+    ctx->step++;
+    interface_initialization_step (task);
+}
+
+static void
+load_state_ready (MMIfaceModemSar *self,
+                  GAsyncResult    *res,
+                  GTask           *task)
+{
+    InitializationContext *ctx;
+    gboolean state;
+    GError *error = NULL;
+
+    state = MM_IFACE_MODEM_SAR_GET_INTERFACE (self)->load_state_finish (self, res, &error);
+    if (error) {
+        mm_obj_dbg (self, "SAR load state failed: %s", error->message);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+    }
+
+    ctx = g_task_get_task_data (task);
+    mm_gdbus_modem_sar_set_state (ctx->skeleton, state);
+
+    /* Go on to next step */
+    ctx->step++;
+    interface_initialization_step (task);
+}
+
+static void
+load_power_level_ready (MMIfaceModemSar *self,
+                        GAsyncResult    *res,
+                        GTask           *task)
+{
+    InitializationContext *ctx;
+    GError *error = NULL;
+    guint   level;
+
+    if (!MM_IFACE_MODEM_SAR_GET_INTERFACE (self)->load_power_level_finish (self, res, &level, &error)) {
+        if (error) {
+            mm_obj_dbg (self, "SAR load power level failed: %s", error->message);
+            g_task_return_error (task, error);
+            g_object_unref (task);
+        }
+    }
+
+    ctx = g_task_get_task_data (task);
+    mm_gdbus_modem_sar_set_power_level (ctx->skeleton,level);
+
+    /* Go on to next step */
     ctx->step++;
     interface_initialization_step (task);
 }
@@ -480,6 +434,14 @@ interface_initialization_step (GTask *task)
     g_assert_not_reached ();
 }
 
+gboolean
+mm_iface_modem_sar_initialize_finish (MMIfaceModemSar  *self,
+                                      GAsyncResult     *res,
+                                      GError          **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
 void
 mm_iface_modem_sar_initialize (MMIfaceModemSar      *self,
                                GCancellable         *cancellable,
@@ -513,11 +475,11 @@ mm_iface_modem_sar_initialize (MMIfaceModemSar      *self,
     interface_initialization_step (task);
 }
 
-/*****************************************************************************/
-
 void
 mm_iface_modem_sar_shutdown (MMIfaceModemSar *self)
 {
+    g_return_if_fail (MM_IS_IFACE_MODEM_SAR (self));
+
     /* Unexport DBus interface and remove the skeleton */
     mm_gdbus_object_skeleton_set_modem_sar (MM_GDBUS_OBJECT_SKELETON (self), NULL);
     g_object_set (self,
@@ -567,4 +529,40 @@ mm_iface_modem_sar_get_type (void)
     }
 
     return iface_modem_sar_type;
+}
+
+gboolean
+mm_iface_modem_get_sar_state (MMIfaceModemSar *self)
+{
+    MmGdbusModemSar *skeleton = NULL;
+    gboolean         state;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_SAR_DBUS_SKELETON, &skeleton,
+                  NULL);
+
+    if (!skeleton)
+        return FALSE;
+
+    state  = mm_gdbus_modem_sar_get_state (skeleton);
+    g_object_unref (skeleton);
+    return state;
+}
+
+guint
+mm_iface_modem_sar_get_power_level (MMIfaceModemSar *self)
+{
+    MmGdbusModemSar        *skeleton = NULL;
+    guint                   level;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_SAR_DBUS_SKELETON, &skeleton,
+                  NULL);
+
+    if (!skeleton)
+        return 0;
+
+    level = mm_gdbus_modem_sar_get_power_level (skeleton);
+    g_object_unref (skeleton);
+    return level;
 }

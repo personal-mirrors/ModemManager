@@ -146,8 +146,6 @@ foxconn_get_firmware_version_ready (QmiClientDms *client,
     MMFirmwareUpdateSettings                     *update_settings = NULL;
     const gchar                                  *str;
     MMIfaceModemFirmware                         *self;
-    guint                                         vendor_id;
-    guint                                         product_id;
 
     output = qmi_client_dms_foxconn_get_firmware_version_finish (client, res, &error);
     if (!output || !qmi_message_dms_foxconn_get_firmware_version_output_get_result (output, &error))
@@ -155,13 +153,10 @@ foxconn_get_firmware_version_ready (QmiClientDms *client,
 
     /* Create update settings now:
      * 0x105b is the T99W175 module, T99W175 supports QDU,
-     * T99W265(0x0489:0xe0da ; 0x0489:0xe0db): supports QDU
      * else support FASTBOOT and QMI PDC.
      */
     self = g_task_get_source_object (task);
-    vendor_id = mm_base_modem_get_vendor_id (MM_BASE_MODEM (self));
-    product_id = mm_base_modem_get_product_id (MM_BASE_MODEM (self));
-    if (vendor_id == 0x105b || (vendor_id == 0x0489 && (product_id  == 0xe0da || product_id == 0xe0db)))
+    if (mm_base_modem_get_vendor_id (MM_BASE_MODEM (self)) == 0x105b)
         update_settings = mm_firmware_update_settings_new (MM_MODEM_FIRMWARE_UPDATE_METHOD_MBIM_QDU);
     else {
         update_settings = mm_firmware_update_settings_new (MM_MODEM_FIRMWARE_UPDATE_METHOD_FASTBOOT |
@@ -192,8 +187,6 @@ firmware_load_update_settings (MMIfaceModemFirmware *self,
     GTask                                       *task;
     QmiMessageDmsFoxconnGetFirmwareVersionInput *input = NULL;
     QmiClient                                   *client = NULL;
-    guint                                        vendor_id;
-    guint                                        product_id;
 
     task = g_task_new (self, NULL, callback, user_data);
 
@@ -208,11 +201,9 @@ firmware_load_update_settings (MMIfaceModemFirmware *self,
         return;
     }
 
-    vendor_id = mm_base_modem_get_vendor_id (MM_BASE_MODEM (self));
-    product_id = mm_base_modem_get_product_id (MM_BASE_MODEM (self));
     input = qmi_message_dms_foxconn_get_firmware_version_input_new ();
-    /* 0x105b is the T99W175 module, T99W175/T99W265 need to compare the apps version. */
-    if (vendor_id == 0x105b || (vendor_id == 0x0489 && (product_id  == 0xe0da || product_id == 0xe0db)))
+    /* 0x105b is the T99W175 module, T99W175 needs to compare the apps version. */
+    if (mm_base_modem_get_vendor_id (MM_BASE_MODEM (self)) == 0x105b)
         qmi_message_dms_foxconn_get_firmware_version_input_set_version_type (
             input,
             QMI_DMS_FOXCONN_FIRMWARE_VERSION_TYPE_FIRMWARE_MCFG_APPS,
@@ -509,10 +500,13 @@ mm_broadband_modem_mbim_foxconn_new (const gchar  *device,
 {
     const gchar *carrier_config_mapping = NULL;
 
-    /* T77W968 (DW5821e is also T77W968) modules use t77w968 carrier mapping table. */
+    /* T77W968 (DW5821e is also T77W968) modules use t77w968 carrier mapping table,
+     * T99W175 modules use t99w175 carrier mapping table. */
     if ((vendor_id == 0x0489 && (product_id == 0xe0b4 || product_id == 0xe0b5)) ||
         (vendor_id == 0x413c && (product_id == 0x81d7 || product_id == 0x81e0)))
         carrier_config_mapping = PKGDATADIR "/mm-foxconn-t77w968-carrier-mapping.conf";
+    else if (vendor_id == 0x105b && (product_id == 0xe0ab || product_id == 0xe0b0 || product_id == 0xe0b1))
+        carrier_config_mapping = PKGDATADIR "/mm-foxconn-t99w175-carrier-mapping.conf";
 
     return g_object_new (MM_TYPE_BROADBAND_MODEM_MBIM_FOXCONN,
                          MM_BASE_MODEM_DEVICE,     device,

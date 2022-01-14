@@ -270,6 +270,7 @@ struct _MMBroadbandModemPrivate {
     /* Properties */
     GObject  *modem_firmware_dbus_skeleton;
 
+
     /*<--- Modem Sar interface --->*/
     /* Properties */
     GObject  *modem_sar_dbus_skeleton;
@@ -2068,13 +2069,16 @@ modem_load_signal_quality_finish (MMIfaceModem *self,
 static guint
 signal_quality_evdo_pilot_sets (MMBroadbandModem *self)
 {
+    gint dbm;
+
     if (self->priv->modem_cdma_evdo_registration_state == MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN)
         return 0;
 
     if (self->priv->evdo_pilot_rssi >= 0)
         return 0;
 
-    return MM_RSSI_TO_QUALITY (self->priv->evdo_pilot_rssi);
+    dbm = CLAMP (self->priv->evdo_pilot_rssi, -113, -51);
+    return 100 - ((dbm + 51) * 100 / (-113 + 51));
 }
 
 static void
@@ -4614,34 +4618,6 @@ modem_3gpp_set_eps_ue_mode_operation (MMIfaceModem3gpp              *self,
                               callback,
                               user_data);
     g_free (cmd);
-}
-
-/*****************************************************************************/
-/* Set packet service state (3GPP interface) */
-
-static gboolean
-modem_3gpp_set_packet_service_state_finish (MMIfaceModem3gpp  *self,
-                                            GAsyncResult      *res,
-                                            GError          **error)
-{
-    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
-}
-
-static void
-modem_3gpp_set_packet_service_state (MMIfaceModem3gpp              *self,
-                                     MMModem3gppPacketServiceState  state,
-                                     GAsyncReadyCallback            callback,
-                                     gpointer                       user_data)
-{
-    g_autofree gchar *cmd = NULL;
-
-    cmd = mm_3gpp_build_cgatt_set_request (state);
-    mm_base_modem_at_command (MM_BASE_MODEM (self),
-                              cmd,
-                              10,
-                              FALSE,
-                              callback,
-                              user_data);
 }
 
 /*****************************************************************************/
@@ -12828,8 +12804,6 @@ mm_broadband_modem_create_device_identifier (MMBroadbandModem  *self,
                                              const gchar       *ati1,
                                              GError           **error)
 {
-    gchar *device_identifier;
-
     /* do nothing if device has gone already */
     if (!self->priv->modem_dbus_skeleton) {
         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
@@ -12837,7 +12811,7 @@ mm_broadband_modem_create_device_identifier (MMBroadbandModem  *self,
         return NULL;
     }
 
-    device_identifier = mm_create_device_identifier (
+    return (mm_create_device_identifier (
                 mm_base_modem_get_vendor_id (MM_BASE_MODEM (self)),
                 mm_base_modem_get_product_id (MM_BASE_MODEM (self)),
                 self,
@@ -12850,15 +12824,7 @@ mm_broadband_modem_create_device_identifier (MMBroadbandModem  *self,
                 mm_gdbus_modem_get_model (
                     MM_GDBUS_MODEM (self->priv->modem_dbus_skeleton)),
                 mm_gdbus_modem_get_manufacturer (
-                    MM_GDBUS_MODEM (self->priv->modem_dbus_skeleton)));
-
-    if (!device_identifier) {
-        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                     "Unable to generate a device identifier");
-        return NULL;
-    }
-
-    return device_identifier;
+                    MM_GDBUS_MODEM (self->priv->modem_dbus_skeleton))));
 }
 
 /*****************************************************************************/
@@ -13455,8 +13421,6 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->set_eps_ue_mode_operation = modem_3gpp_set_eps_ue_mode_operation;
     iface->set_eps_ue_mode_operation_finish = modem_3gpp_set_eps_ue_mode_operation_finish;
     iface->create_initial_eps_bearer = modem_3gpp_create_initial_eps_bearer;
-    iface->set_packet_service_state = modem_3gpp_set_packet_service_state;
-    iface->set_packet_service_state_finish = modem_3gpp_set_packet_service_state_finish;
 }
 
 static void
@@ -13652,7 +13616,6 @@ iface_modem_firmware_init (MMIfaceModemFirmware *iface)
 static void
 iface_modem_sar_init (MMIfaceModemSar *iface)
 {
-
 }
 
 static void

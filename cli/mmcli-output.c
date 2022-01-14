@@ -131,7 +131,6 @@ static FieldInfo field_infos[] = {
     [MMC_F_3GPP_OPERATOR_ID]                       = { "modem.3gpp.operator-code",                        "operator id",              MMC_S_MODEM_3GPP,                 },
     [MMC_F_3GPP_OPERATOR_NAME]                     = { "modem.3gpp.operator-name",                        "operator name",            MMC_S_MODEM_3GPP,                 },
     [MMC_F_3GPP_REGISTRATION]                      = { "modem.3gpp.registration-state",                   "registration",             MMC_S_MODEM_3GPP,                 },
-    [MMC_F_3GPP_PACKET_SERVICE_STATE]              = { "modem.3gpp.packet-service-state",                 "packet service state",     MMC_S_MODEM_3GPP,                 },
     [MMC_F_3GPP_PCO]                               = { "modem.3gpp.pco",                                  "pco",                      MMC_S_MODEM_3GPP,                 },
     [MMC_F_3GPP_EPS_UE_MODE]                       = { "modem.3gpp.eps.ue-mode-operation",                "ue mode of operation",     MMC_S_MODEM_3GPP_EPS,             },
     [MMC_F_3GPP_EPS_INITIAL_BEARER_PATH]           = { "modem.3gpp.eps.initial-bearer.dbus-path",         "initial bearer path",      MMC_S_MODEM_3GPP_EPS,             },
@@ -163,31 +162,23 @@ static FieldInfo field_infos[] = {
     [MMC_F_MESSAGING_SUPPORTED_STORAGES]           = { "modem.messaging.supported-storages",              "supported storages",       MMC_S_MODEM_MESSAGING,            },
     [MMC_F_MESSAGING_DEFAULT_STORAGES]             = { "modem.messaging.default-storages",                "default storages",         MMC_S_MODEM_MESSAGING,            },
     [MMC_F_SIGNAL_REFRESH_RATE]                    = { "modem.signal.refresh.rate",                       "refresh rate",             MMC_S_MODEM_SIGNAL,               },
-    [MMC_F_SIGNAL_RSSI_THRESHOLD]                  = { "modem.signal.threshold.rssi",                     "rssi threshold",           MMC_S_MODEM_SIGNAL,               },
-    [MMC_F_SIGNAL_ERROR_RATE_THRESHOLD]            = { "modem.signal.threshold.error-rate",               "error rate threshold",     MMC_S_MODEM_SIGNAL,               },
     [MMC_F_SIGNAL_CDMA1X_RSSI]                     = { "modem.signal.cdma1x.rssi",                        "rssi",                     MMC_S_MODEM_SIGNAL_CDMA1X,        },
     [MMC_F_SIGNAL_CDMA1X_ECIO]                     = { "modem.signal.cdma1x.ecio",                        "ecio",                     MMC_S_MODEM_SIGNAL_CDMA1X,        },
-    [MMC_F_SIGNAL_CDMA1X_ERROR_RATE]               = { "modem.signal.cdma1x.error-rate",                  "error rate",               MMC_S_MODEM_SIGNAL_CDMA1X,        },
     [MMC_F_SIGNAL_EVDO_RSSI]                       = { "modem.signal.evdo.rssi",                          "rssi",                     MMC_S_MODEM_SIGNAL_EVDO,          },
     [MMC_F_SIGNAL_EVDO_ECIO]                       = { "modem.signal.evdo.ecio",                          "ecio",                     MMC_S_MODEM_SIGNAL_EVDO,          },
     [MMC_F_SIGNAL_EVDO_SINR]                       = { "modem.signal.evdo.sinr",                          "sinr",                     MMC_S_MODEM_SIGNAL_EVDO,          },
     [MMC_F_SIGNAL_EVDO_IO]                         = { "modem.signal.evdo.io",                            "io",                       MMC_S_MODEM_SIGNAL_EVDO,          },
-    [MMC_F_SIGNAL_EVDO_ERROR_RATE]                 = { "modem.signal.evdo.error-rate",                    "error rate",               MMC_S_MODEM_SIGNAL_EVDO,          },
     [MMC_F_SIGNAL_GSM_RSSI]                        = { "modem.signal.gsm.rssi",                           "rssi",                     MMC_S_MODEM_SIGNAL_GSM,           },
-    [MMC_F_SIGNAL_GSM_ERROR_RATE]                  = { "modem.signal.gsm.error-rate",                     "error rate",               MMC_S_MODEM_SIGNAL_GSM,           },
     [MMC_F_SIGNAL_UMTS_RSSI]                       = { "modem.signal.umts.rssi",                          "rssi",                     MMC_S_MODEM_SIGNAL_UMTS,          },
     [MMC_F_SIGNAL_UMTS_RSCP]                       = { "modem.signal.umts.rscp",                          "rscp",                     MMC_S_MODEM_SIGNAL_UMTS,          },
     [MMC_F_SIGNAL_UMTS_ECIO]                       = { "modem.signal.umts.ecio",                          "ecio",                     MMC_S_MODEM_SIGNAL_UMTS,          },
-    [MMC_F_SIGNAL_UMTS_ERROR_RATE]                 = { "modem.signal.umts.error-rate",                    "error rate",               MMC_S_MODEM_SIGNAL_UMTS,          },
     [MMC_F_SIGNAL_LTE_RSSI]                        = { "modem.signal.lte.rssi",                           "rssi",                     MMC_S_MODEM_SIGNAL_LTE,           },
     [MMC_F_SIGNAL_LTE_RSRQ]                        = { "modem.signal.lte.rsrq",                           "rsrq",                     MMC_S_MODEM_SIGNAL_LTE,           },
     [MMC_F_SIGNAL_LTE_RSRP]                        = { "modem.signal.lte.rsrp",                           "rsrp",                     MMC_S_MODEM_SIGNAL_LTE,           },
     [MMC_F_SIGNAL_LTE_SNR]                         = { "modem.signal.lte.snr",                            "s/n",                      MMC_S_MODEM_SIGNAL_LTE,           },
-    [MMC_F_SIGNAL_LTE_ERROR_RATE]                  = { "modem.signal.lte.error-rate",                     "error rate",               MMC_S_MODEM_SIGNAL_LTE,           },
     [MMC_F_SIGNAL_5G_RSRQ]                         = { "modem.signal.5g.rsrq",                            "rsrq",                     MMC_S_MODEM_SIGNAL_5G,            },
     [MMC_F_SIGNAL_5G_RSRP]                         = { "modem.signal.5g.rsrp",                            "rsrp",                     MMC_S_MODEM_SIGNAL_5G,            },
     [MMC_F_SIGNAL_5G_SNR]                          = { "modem.signal.5g.snr",                             "s/n",                      MMC_S_MODEM_SIGNAL_5G,            },
-    [MMC_F_SIGNAL_5G_ERROR_RATE]                   = { "modem.signal.5g.error-rate",                      "error rate",               MMC_S_MODEM_SIGNAL_5G,            },
     [MMC_F_OMA_FEATURES]                           = { "modem.oma.features",                              "features",                 MMC_S_MODEM_OMA,                  },
     [MMC_F_OMA_CURRENT_TYPE]                       = { "modem.oma.current.type",                          "type",                     MMC_S_MODEM_OMA_CURRENT,          },
     [MMC_F_OMA_CURRENT_STATE]                      = { "modem.oma.current.state",                         "state",                    MMC_S_MODEM_OMA_CURRENT,          },
@@ -249,10 +240,7 @@ static FieldInfo field_infos[] = {
     [MMC_F_BEARER_IPV6_CONFIG_GATEWAY]             = { "bearer.ipv6-config.gateway",                      "gateway",                  MMC_S_BEARER_IPV6_CONFIG,         },
     [MMC_F_BEARER_IPV6_CONFIG_DNS]                 = { "bearer.ipv6-config.dns",                          "dns",                      MMC_S_BEARER_IPV6_CONFIG,         },
     [MMC_F_BEARER_IPV6_CONFIG_MTU]                 = { "bearer.ipv6-config.mtu",                          "mtu",                      MMC_S_BEARER_IPV6_CONFIG,         },
-    [MMC_F_BEARER_STATS_START_DATE]                = { "bearer.stats.start-date",                         "start date",               MMC_S_BEARER_STATS,               },
     [MMC_F_BEARER_STATS_DURATION]                  = { "bearer.stats.duration",                           "duration",                 MMC_S_BEARER_STATS,               },
-    [MMC_F_BEARER_STATS_UPLINK_SPEED]              = { "bearer.stats.uplink-speed",                       "uplink-speed",             MMC_S_BEARER_STATS,               },
-    [MMC_F_BEARER_STATS_DOWNLINK_SPEED]            = { "bearer.stats.downlink-speed",                     "downlink-speed",           MMC_S_BEARER_STATS,               },
     [MMC_F_BEARER_STATS_BYTES_RX]                  = { "bearer.stats.bytes-rx",                           "bytes rx",                 MMC_S_BEARER_STATS,               },
     [MMC_F_BEARER_STATS_BYTES_TX]                  = { "bearer.stats.bytes-tx",                           "bytes tx",                 MMC_S_BEARER_STATS,               },
     [MMC_F_BEARER_STATS_ATTEMPTS]                  = { "bearer.stats.attempts",                           "attempts",                 MMC_S_BEARER_STATS,               },
@@ -296,7 +284,7 @@ static FieldInfo field_infos[] = {
     [MMC_F_SIM_PROPERTIES_OPERATOR_NAME]           = { "sim.properties.operator-name",                    "operator name",            MMC_S_SIM_PROPERTIES,             },
     [MMC_F_SIM_PROPERTIES_EMERGENCY_NUMBERS]       = { "sim.properties.emergency-numbers",                "emergency numbers",        MMC_S_SIM_PROPERTIES,             },
     [MMC_F_SIM_PROPERTIES_PREFERRED_NETWORKS]      = { "sim.properties.preferred-networks",               "preferred networks",       MMC_S_SIM_PROPERTIES,             },
-    [MMC_F_SAR_STATE]                              = { "modem.sar.state",                                 "enabled",                  MMC_S_MODEM_SAR,                  },
+    [MMC_F_SAR_STATE]                              = { "modem.sar.state",                                 "state",                    MMC_S_MODEM_SAR,                  },
     [MMC_F_SAR_POWER_LEVEL]                        = { "modem.sar.power-level",                           "power level",              MMC_S_MODEM_SAR,                  },
     [MMC_F_MODEM_LIST_DBUS_PATH]                   = { "modem-list",                                      "modems",                   MMC_S_UNKNOWN,                    },
     [MMC_F_SMS_LIST_DBUS_PATH]                     = { "modem.messaging.sms",                             "sms messages",             MMC_S_UNKNOWN,                    },
@@ -596,22 +584,6 @@ mmcli_output_signal_quality (guint    value,
                                  g_strdup_printf ("%u", value));
     output_item_new_take_single (MMC_F_STATUS_SIGNAL_QUALITY_RECENT,
                                  g_strdup_printf ("%s", recent ? "yes" : "no"));
-}
-
-/******************************************************************************/
-/* (Custom) Bearer start date output */
-
-void
-mmcli_output_start_date (guint64    value)
-{
-    /* Merge value and recent flag in a single item in human output */
-    if (selected_type == MMC_OUTPUT_TYPE_HUMAN) {
-        output_item_new_take_single (MMC_F_BEARER_STATS_START_DATE, mm_new_iso8601_time_from_unix_time (value));
-        return;
-    }
-
-    output_item_new_take_single (MMC_F_BEARER_STATS_START_DATE,
-                                 g_strdup_printf ("%" G_GUINT64_FORMAT, value));
 }
 
 /******************************************************************************/

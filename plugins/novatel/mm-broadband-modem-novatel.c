@@ -33,7 +33,6 @@
 #include "mm-broadband-modem-novatel.h"
 #include "mm-errors-types.h"
 #include "mm-modem-helpers.h"
-#include "mm-common-helpers.h"
 #include "libqcdm/src/commands.h"
 #include "libqcdm/src/result.h"
 #include "mm-log-object.h"
@@ -768,8 +767,10 @@ get_one_quality (const gchar *reply,
         }
     }
 
-    if (success)
-        quality = MM_RSSI_TO_QUALITY (dbm);
+    if (success) {
+        dbm = CLAMP (dbm, -113, -51);
+        quality = 100 - ((dbm + 51) * 100 / (-113 + 51));
+    }
 
     g_free (temp);
     return quality;

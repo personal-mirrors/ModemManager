@@ -594,7 +594,7 @@ disable_location_gathering_parent_ready (MMIfaceModemLocation *self,
                                          GAsyncResult         *res,
                                          GTask                *task)
 {
-    GError  *error = NULL;
+    GError  *error;
     Private *priv;
 
     priv = get_private (MM_SHARED_QUECTEL (self));

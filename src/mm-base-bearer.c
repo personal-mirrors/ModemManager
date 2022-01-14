@@ -314,9 +314,6 @@ bearer_reset_ongoing_interface_stats (MMBaseBearer *self)
     mm_bearer_stats_set_duration (self->priv->stats, 0);
     mm_bearer_stats_set_tx_bytes (self->priv->stats, 0);
     mm_bearer_stats_set_rx_bytes (self->priv->stats, 0);
-    mm_bearer_stats_set_start_date (self->priv->stats, 0);
-    mm_bearer_stats_set_uplink_speed (self->priv->stats, 0);
-    mm_bearer_stats_set_downlink_speed (self->priv->stats, 0);
     bearer_update_interface_stats (self);
 }
 
@@ -448,9 +445,7 @@ stats_update_cb (MMBaseBearer *self)
 }
 
 static void
-bearer_stats_start (MMBaseBearer *self,
-                    guint64       uplink_speed,
-                    guint64       downlink_speed)
+bearer_stats_start (MMBaseBearer *self)
 {
     /* Start duration timer */
     g_assert (!self->priv->duration_timer);
@@ -461,29 +456,8 @@ bearer_stats_start (MMBaseBearer *self,
     self->priv->stats_update_id = g_timeout_add_seconds (BEARER_STATS_UPDATE_TIMEOUT,
                                                          (GSourceFunc) stats_update_cb,
                                                          self);
-
-    mm_bearer_stats_set_start_date (self->priv->stats, (guint64)(g_get_real_time() / G_USEC_PER_SEC));
-    mm_bearer_stats_set_uplink_speed (self->priv->stats, uplink_speed);
-    mm_bearer_stats_set_downlink_speed (self->priv->stats, downlink_speed);
-    bearer_update_interface_stats (self);
-
     /* Load initial values */
     stats_update_cb (self);
-}
-
-/*****************************************************************************/
-
-void
-mm_base_bearer_report_speeds (MMBaseBearer *self,
-                              guint64       uplink_speed,
-                              guint64       downlink_speed)
-{
-    /* Ignore speeds update if we're not connected */
-    if (self->priv->status != MM_BEARER_STATUS_CONNECTED)
-        return;
-    mm_bearer_stats_set_uplink_speed (self->priv->stats, uplink_speed);
-    mm_bearer_stats_set_downlink_speed (self->priv->stats, downlink_speed);
-    bearer_update_interface_stats (self);
 }
 
 /*****************************************************************************/
@@ -553,9 +527,7 @@ bearer_update_status_connected (MMBaseBearer     *self,
                                 gboolean          multiplexed,
                                 gint              profile_id,
                                 MMBearerIpConfig *ipv4_config,
-                                MMBearerIpConfig *ipv6_config,
-                                guint64           uplink_speed,
-                                guint64           downlink_speed)
+                                MMBearerIpConfig *ipv6_config)
 {
     mm_gdbus_bearer_set_profile_id (MM_GDBUS_BEARER (self), profile_id);
     mm_gdbus_bearer_set_multiplexed (MM_GDBUS_BEARER (self), multiplexed);
@@ -584,7 +556,7 @@ bearer_update_status_connected (MMBaseBearer     *self,
     g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_STATUS]);
 
     /* Start statistics */
-    bearer_stats_start (self, uplink_speed, downlink_speed);
+    bearer_stats_start (self);
 
     /* Start connection monitor, if supported */
     connection_monitor_start (self);
@@ -925,9 +897,7 @@ connect_ready (MMBaseBearer *self,
             mm_bearer_connect_result_get_multiplexed (result),
             mm_bearer_connect_result_get_profile_id (result),
             mm_bearer_connect_result_peek_ipv4_config (result),
-            mm_bearer_connect_result_peek_ipv6_config (result),
-            mm_bearer_connect_result_get_uplink_speed (result),
-            mm_bearer_connect_result_get_downlink_speed (result));
+            mm_bearer_connect_result_peek_ipv6_config (result));
         mm_bearer_connect_result_unref (result);
     }
 
@@ -1897,8 +1867,6 @@ struct _MMBearerConnectResult {
     MMBearerIpConfig *ipv6_config;
     gboolean          multiplexed;
     gint              profile_id;
-    guint64           uplink_speed;
-    guint64           downlink_speed;
 };
 
 MMBearerConnectResult *
@@ -1964,32 +1932,6 @@ gint
 mm_bearer_connect_result_get_profile_id (MMBearerConnectResult *result)
 {
     return result->profile_id;
-}
-
-void
-mm_bearer_connect_result_set_uplink_speed (MMBearerConnectResult *result,
-                                           guint64                speed)
-{
-    result->uplink_speed = speed;
-}
-
-guint64
-mm_bearer_connect_result_get_uplink_speed (MMBearerConnectResult *result)
-{
-    return result->uplink_speed;
-}
-
-void
-mm_bearer_connect_result_set_downlink_speed (MMBearerConnectResult *result,
-                                             guint64                speed)
-{
-    result->downlink_speed = speed;
-}
-
-guint64
-mm_bearer_connect_result_get_downlink_speed (MMBearerConnectResult *result)
-{
-    return result->downlink_speed;
 }
 
 MMBearerConnectResult *
