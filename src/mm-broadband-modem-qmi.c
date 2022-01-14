@@ -12,7 +12,7 @@
  *
  * Copyright (C) 2012 Google Inc.
  * Copyright (C) 2014 Aleksander Morgado <aleksander@aleksander.es>
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <config.h>
@@ -161,6 +161,9 @@ struct _MMBroadbandModemQmiPrivate {
 
     /* For notifying when the qmi-proxy connection is dead */
     guint qmi_device_removed_id;
+
+    /* Power Set Operating Mode Helper */
+    GTask *set_operating_mode_task;
 };
 
 /*****************************************************************************/
@@ -1699,7 +1702,23 @@ load_signal_quality (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Powering up the modem (Modem interface) */
+/* Powering up/down/off the modem (Modem interface) */
+
+typedef struct {
+    QmiDmsOperatingMode  mode;
+    QmiClientDms        *client;
+    guint                indication_id;
+    guint                timeout_id;
+} SetOperatingModeContext;
+
+static void
+set_operating_mode_context_free (SetOperatingModeContext *ctx)
+{
+    g_assert (ctx->indication_id == 0);
+    g_assert (ctx->timeout_id == 0);
+    g_clear_object (&ctx->client);
+    g_slice_free (SetOperatingModeContext, ctx);
+}
 
 static gboolean
 modem_power_up_down_off_finish (MMIfaceModem  *self,
@@ -1710,28 +1729,99 @@ modem_power_up_down_off_finish (MMIfaceModem  *self,
 }
 
 static void
-dms_set_operating_mode_ready (QmiClientDms *client,
-                              GAsyncResult *res,
-                              GTask        *task)
+set_operating_mode_complete (MMBroadbandModemQmi *self,
+                             GError              *error)
 {
-    MMBroadbandModemQmi                            *self;
-    QmiDmsOperatingMode                             mode;
-    GError                                         *error = NULL;
-    g_autoptr(QmiMessageDmsSetOperatingModeOutput)  output = NULL;
+    GTask                   *task;
+    SetOperatingModeContext *ctx;
 
-    self = g_task_get_source_object (task);
-    mode = GPOINTER_TO_UINT (g_task_get_task_data (task));
+    g_assert (self->priv->set_operating_mode_task);
+    task = g_steal_pointer (&self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (task);
+
+    if (ctx->timeout_id) {
+        g_source_remove (ctx->timeout_id);
+        ctx->timeout_id = 0;
+    }
+
+    if (ctx->indication_id) {
+        g_autoptr(QmiMessageDmsSetEventReportInput) input = NULL;
+
+        g_signal_handler_disconnect (ctx->client, ctx->indication_id);
+        ctx->indication_id = 0;
+
+        input = qmi_message_dms_set_event_report_input_new ();
+        qmi_message_dms_set_event_report_input_set_operating_mode_reporting (input, FALSE, NULL);
+        qmi_client_dms_set_event_report (ctx->client, input, 5, NULL, NULL, NULL);
+    }
+
+    if (error)
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+dms_set_operating_mode_timeout_cb (MMBroadbandModemQmi *self)
+{
+    GError *error = NULL;
+
+    error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Power update operation timed out");
+    set_operating_mode_complete (self, error);
+}
+
+static void
+power_event_report_indication_cb (QmiClientDms                      *client,
+                                  QmiIndicationDmsEventReportOutput *output,
+                                  MMBroadbandModemQmi               *self)
+{
+    QmiDmsOperatingMode      state;
+    GError                  *error = NULL;
+    SetOperatingModeContext *ctx;
+
+    if (!qmi_indication_dms_event_report_output_get_operating_mode (output, &state, NULL)) {
+        error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Invalid power indication received");
+        set_operating_mode_complete (self, error);
+        return;
+    }
+
+    g_assert (self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
+
+    if (ctx->mode == state) {
+        mm_obj_dbg (self, "Power state successfully updated: '%s'", qmi_dms_operating_mode_get_string (state));
+        set_operating_mode_complete (self, NULL);
+        return;
+    }
+
+    error = g_error_new (MM_CORE_ERROR,
+                         MM_CORE_ERROR_FAILED,
+                         "Requested mode (%s) and mode received (%s) did not match",
+                         qmi_dms_operating_mode_get_string (ctx->mode),
+                         qmi_dms_operating_mode_get_string (state));
+    set_operating_mode_complete (self, error);
+}
+
+static void
+dms_set_operating_mode_ready (QmiClientDms        *client,
+                              GAsyncResult        *res,
+                              MMBroadbandModemQmi *self) /* full reference */
+{
+    g_autoptr (QmiMessageDmsSetOperatingModeOutput)  output = NULL;
+    GError                                          *error = NULL;
+    SetOperatingModeContext                         *ctx;
+
+    if (!self->priv->set_operating_mode_task) {
+        /* We completed the operation already via indication */
+        g_object_unref (self);
+        return;
+    }
+
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
 
     output = qmi_client_dms_set_operating_mode_finish (client, res, &error);
-    if (!output) {
-        g_prefix_error (&error, "QMI operation failed: ");
-        /* If unsupported, just complete without errors */
-        if (g_error_matches (error, QMI_CORE_ERROR, QMI_CORE_ERROR_UNSUPPORTED)) {
-            mm_obj_dbg (self, "device doesn't support operating mode setting: ignoring power update");
-            g_clear_error (&error);
-        }
-    } else if (!qmi_message_dms_set_operating_mode_output_get_result (output, &error)) {
-        g_prefix_error (&error, "Couldn't set operating mode: ");
+    if (!output || !qmi_message_dms_set_operating_mode_output_get_result (output, &error)) {
         /*
          * Some new devices, like the Dell DW5770, will return an internal error when
          * trying to bring the power mode to online.
@@ -1743,47 +1833,142 @@ dms_set_operating_mode_ready (QmiClientDms *client,
          * retrying. Notify this to upper layers with the special MM_CORE_ERROR_RETRY
          * error.
          */
-        if ((mode == QMI_DMS_OPERATING_MODE_ONLINE) &&
+        if ((ctx->mode == QMI_DMS_OPERATING_MODE_ONLINE) &&
             ((g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_INTERNAL) ||
               g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_INVALID_TRANSITION)))) {
             g_clear_error (&error);
             error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_RETRY, "Invalid transition");
-        }
+        } else
+            g_prefix_error (&error, "Couldn't set operating mode: ");
     }
 
-    if (error)
-        g_task_return_error (task, error);
+    /* If unsupported, just complete without errors */
+    if (g_error_matches (error, QMI_CORE_ERROR, QMI_CORE_ERROR_UNSUPPORTED)) {
+        mm_obj_dbg (self, "device doesn't support operating mode setting: ignoring power update");
+        g_clear_error (&error);
+        set_operating_mode_complete (self, NULL);
+    } else if (error)
+        set_operating_mode_complete (self, error);
     else
-        g_task_return_boolean (task, TRUE);
-    g_object_unref (task);
+        mm_obj_dbg (self, "operating mode request sent, waiting for power update indication");
+
+    g_object_unref (self);
 }
 
 static void
-common_power_up_down_off (MMIfaceModem        *self,
-                          QmiDmsOperatingMode  mode,
-                          GAsyncReadyCallback  callback,
-                          gpointer             user_data)
+dms_set_operating_mode (MMBroadbandModemQmi *self)
 {
-    GTask                                         *task;
-    QmiClient                                     *client = NULL;
-    g_autoptr(QmiMessageDmsSetOperatingModeInput)  input = NULL;
+    g_autoptr (QmiMessageDmsSetOperatingModeInput)  input = NULL;
+    SetOperatingModeContext                        *ctx;
 
-    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_DMS, &client,
-                                      callback, user_data))
-        return;
-
-    task = g_task_new (self, NULL, callback, user_data);
-    g_task_set_task_data (task, GUINT_TO_POINTER (mode), NULL);
+    g_assert (self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
 
     input = qmi_message_dms_set_operating_mode_input_new ();
-    qmi_message_dms_set_operating_mode_input_set_mode (input, mode, NULL);
-    qmi_client_dms_set_operating_mode (QMI_CLIENT_DMS (client),
+    qmi_message_dms_set_operating_mode_input_set_mode (input, ctx->mode, NULL);
+    qmi_client_dms_set_operating_mode (ctx->client,
                                        input,
                                        20,
                                        NULL,
                                        (GAsyncReadyCallback)dms_set_operating_mode_ready,
-                                       task);
+                                       g_object_ref (self));
+
+    mm_obj_dbg (self, "Starting timeout for indication receiving for 10 seconds");
+    ctx->timeout_id = g_timeout_add_seconds (10,
+                                             (GSourceFunc) dms_set_operating_mode_timeout_cb,
+                                             self);
+}
+
+static void
+dms_set_event_report_operating_mode_activate_ready (QmiClientDms        *client,
+                                                    GAsyncResult        *res,
+                                                    MMBroadbandModemQmi *self) /* full reference */
+{
+    g_autoptr(QmiMessageDmsSetEventReportOutput)  output = NULL;
+    GError                                       *error = NULL;
+    SetOperatingModeContext                      *ctx;
+
+    g_assert (self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
+
+    output = qmi_client_dms_set_event_report_finish (client, res, &error);
+    if (!output || !qmi_message_dms_set_event_report_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't register for power indications: ");
+        set_operating_mode_complete (self, error);
+        g_object_unref (self);
+        return;
+    }
+
+    g_assert (ctx->indication_id == 0);
+    ctx->indication_id = g_signal_connect (client,
+                                           "event-report",
+                                           G_CALLBACK (power_event_report_indication_cb),
+                                           self);
+
+    mm_obj_dbg (self, "Power operation is pending");
+    dms_set_operating_mode (self);
+    g_object_unref (self);
+}
+
+static void
+modem_power_indication_register (MMBroadbandModemQmi *self)
+{
+    g_autoptr(QmiMessageDmsSetEventReportInput)  input = NULL;
+    SetOperatingModeContext                     *ctx;
+
+    g_assert (self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
+
+    input = qmi_message_dms_set_event_report_input_new ();
+    qmi_message_dms_set_event_report_input_set_operating_mode_reporting (input, TRUE, NULL);
+    mm_obj_dbg (self, "Power indication registration request is sent");
+    qmi_client_dms_set_event_report (
+        ctx->client,
+        input,
+        5,
+        NULL,
+        (GAsyncReadyCallback)dms_set_event_report_operating_mode_activate_ready,
+        g_object_ref (self));
+}
+
+static void
+common_power_up_down_off (MMIfaceModem        *_self,
+                          QmiDmsOperatingMode  mode,
+                          GAsyncReadyCallback  callback,
+                          gpointer             user_data)
+{
+    MMBroadbandModemQmi     *self = MM_BROADBAND_MODEM_QMI (_self);
+    GError                  *error = NULL;
+    GTask                   *task;
+    SetOperatingModeContext *ctx;
+    QmiClient               *client;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    if (self->priv->set_operating_mode_task) {
+        error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_IN_PROGRESS, "Another operation in progress");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    client = mm_shared_qmi_peek_client (MM_SHARED_QMI (self),
+                                        QMI_SERVICE_DMS,
+                                        MM_PORT_QMI_FLAG_DEFAULT,
+                                        &error);
+    if (!client) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx = g_slice_new0 (SetOperatingModeContext);
+    ctx->mode = mode;
+    ctx->client = QMI_CLIENT_DMS (g_object_ref (client));
+    g_task_set_task_data (task, ctx, (GDestroyNotify)set_operating_mode_context_free);
+
+    self->priv->set_operating_mode_task = task;
+    modem_power_indication_register (self);
 }
 
 static void
