@@ -246,6 +246,13 @@ mm_device_grab_port (MMDevice       *self,
     if (!self->priv->subsystem_vendor)
         self->priv->subsystem_vendor  = mm_kernel_device_get_physdev_subsystem_vid (kernel_port);
 
+    /* If the modem already exists, trigger a full device reprobe */
+    if (self->priv->modem) {
+        mm_obj_warn (self, "new port addition triggers full device reprobe");
+        mm_base_modem_trigger_reprobe (self->priv->modem);
+        return;
+    }
+
     /* Add new port driver */
     add_port_driver (self, kernel_port);
 

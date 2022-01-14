@@ -1683,6 +1683,29 @@ mm_base_modem_get_subsystem_vendor_id (MMBaseModem *self)
 
 /*****************************************************************************/
 
+static void
+trigger_reprobe_disable_ready (MMBaseModem  *self,
+                               GAsyncResult *res)
+{
+    g_autoptr(GError) error = NULL;
+
+    mm_base_modem_disable_finish (self, res, &error);
+    if (error)
+        mm_obj_err (self, "failed to disable before triggering reprobe: %s", error->message);
+
+    /* set invalid either way, so that it's reprobed */
+    mm_base_modem_set_valid (self, FALSE);
+}
+
+void
+mm_base_modem_trigger_reprobe (MMBaseModem *self)
+{
+    mm_base_modem_set_reprobe (self, TRUE);
+    mm_base_modem_disable (self, (GAsyncReadyCallback) trigger_reprobe_disable_ready, NULL);
+}
+
+/*****************************************************************************/
+
 static gboolean
 base_modem_invalid_idle (MMBaseModem *self)
 {

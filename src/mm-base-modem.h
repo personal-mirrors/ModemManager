@@ -256,4 +256,6 @@ gboolean mm_base_modem_sync_finish    (MMBaseModem *self,
 
 #endif
 
+void mm_base_modem_trigger_reprobe   (MMBaseModem *self);
+
 #endif /* MM_BASE_MODEM_H */
