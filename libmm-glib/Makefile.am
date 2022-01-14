@@ -32,8 +32,6 @@ libmm_glib_la_SOURCES = \
 	mm-modem-time.c \
 	mm-modem-firmware.h \
 	mm-modem-firmware.c \
-	mm-modem-sar.h \
-	mm-modem-sar.c \
 	mm-modem-signal.h \
 	mm-modem-signal.c \
 	mm-modem-oma.h \
@@ -142,7 +140,6 @@ include_HEADERS = \
 	mm-modem-location.h \
 	mm-modem-time.h \
 	mm-modem-firmware.h \
-	mm-modem-sar.h \
 	mm-modem-signal.h \
 	mm-modem-oma.h \
 	mm-modem-simple.h \

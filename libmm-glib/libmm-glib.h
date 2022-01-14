@@ -49,7 +49,6 @@
 # include <mm-modem-voice.h>
 # include <mm-modem-time.h>
 # include <mm-modem-firmware.h>
-# include <mm-modem-sar.h>
 # include <mm-modem-signal.h>
 # include <mm-modem-oma.h>
 #endif
