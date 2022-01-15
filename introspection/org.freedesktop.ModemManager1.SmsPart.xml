@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!--
+ ModemManager 1.0 (FIXME) Interface Specification
+   Copyright (C) 2022 Raphaël Jakse
+   Copyright (C) 2011-2013 Red Hat, Inc.
+   Copyright (C) 2011-2013 Google, Inc.
+   Copyright (C) 2011-2013 Lanedo GmbH
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+
+  <!--
+      org.freedesktop.ModemManager1.SmsPart:
+      @short_description: The ModemManager SMS Part interface.
+
+      The SMSPart interface defines operations and properties of a single SMS message part.
+  -->
+  <interface name="org.freedesktop.ModemManager1.SmsPart">
+
+    <!--
+        DeleteFromModem:
+
+        Delete this part from the modem.
+        This lets the modem free a slot so another part can be retrieved. This
+        helps receiving long messages which don't fit in the modem's limited
+        number of available slots.
+
+        Note: sms parts will be deleted whenever an <link linkend="Sms">Sms</link>
+        is deleted.
+
+        Note: The sms part remains available as long as the related sms is not
+        deleted.
+
+        Note: user applications should delete parts they handled to avoid the
+        risk of clogging the modem.
+
+        Since: 1.0 FIXME
+    -->
+    <method name="DeleteFromModem" />
+
+
+    <!--
+        SmsPath:
+
+        A path to the <link linkend="Sms">Sms</link> object this part relates to.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="SmsPath" type="o" access="read" />
+
+    <!--
+        Index:
+
+        The index of this part, among the parts composing the <link linkend="Sms">Sms</link>
+        to which it relates.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="Index" type="u" access="read" />
+
+    <!--
+        Count:
+
+        The number of parts which compose the related <link linkend="Sms">Sms</link>.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="Count" type="u" access="read" />
+
+    <!--
+        PduType:
+
+        A <link linkend="MMSmsPduType">MMSmsPduType</link> value,
+        describing the type of PDU used in this SMS Part.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="PduType" type="u" access="read" />
+
+    <!--
+        Number:
+
+        Number to which the message related to this part is addressed.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="Number" type="s" access="read" />
+
+    <!--
+        Text:
+
+        Message text part, in UTF-8.
+
+        Note that Text and Data are never given at the same time.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="Text" type="s" access="read" />
+
+    <!--
+        Data:
+
+        Message data contained in this part.
+
+        Note that Text and Data are never given at the same time.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="Data" type="ay" access="read" />
+
+    <!--
+        SMSC:
+
+        Indicates the SMS service center number.
+
+        Always empty for 3GPP2/CDMA.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="SMSC" type="s" access="read" />
+
+    <!--
+        Validity:
+
+        Indicates when the SMS expires in the SMSC.
+
+        This value is composed of a
+        <link linkend="MMSmsValidityType">MMSmsValidityType</link>
+        key, with an associated data which contains type-specific validity
+        information:
+
+        <variablelist>
+         <varlistentry><term><link linkend="MM-SMS-VALIDITY-TYPE-RELATIVE:CAPS">MM_SMS_VALIDITY_TYPE_RELATIVE</link></term>
+          <listitem>
+           <para>
+             The value is the length of the validity period in minutes, given
+             as an unsigned integer (D-Bus signature <literal>'u'</literal>).
+            </para>
+          </listitem>
+         </varlistentry>
+        </variablelist>
+
+        Since: 1.0 FIXME
+    -->
+    <property name="Validity" type="(uv)" access="read" />
+
+    <!--
+        Class:
+
+        3GPP message class (-1..3).  -1 means class is not available or
+        is not used for the message related to this part, otherwise the 3GPP SMS message class.
+
+        Always -1 for 3GPP2/CDMA.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="Class" type="i" access="read" />
+
+    <!--
+        TeleserviceId:
+
+        A <link linkend="MMSmsCdmaTeleserviceId">MMSmsCdmaTeleserviceId</link> value.
+
+        Always <link linkend="MM-SMS-CDMA-TELESERVICE-ID-UNKNOWN:CAPS">MM_SMS_CDMA_TELESERVICE_ID_UNKNOWN</link> for 3GPP.
+
+        Since: 1.2 FIXME
+    -->
+    <property name="TeleserviceId" type="u" access="read" />
+
+    <!--
+        ServiceCategory:
+
+        A <link linkend="MMSmsCdmaServiceCategory">MMSmsCdmaServiceCategory</link> value.
+
+        Always <link linkend="MM-SMS-CDMA-SERVICE-CATEGORY-UNKNOWN:CAPS">MM_SMS_CDMA_SERVICE_CATEGORY_UNKNOWN</link> for 3GPP.
+
+        Since: 1.2 FIXME
+    -->
+    <property name="ServiceCategory" type="u" access="read" />
+
+    <!--
+        Timestamp:
+
+        Time when this part (PDU) arrived the SMSC, in
+        <ulink url="http://en.wikipedia.org/wiki/ISO_8601">ISO8601</ulink>
+        format.
+        This field is only applicable if the PDU type is
+        <link linkend="MM-SMS-PDU-TYPE-DELIVER:CAPS"><constant>MM_SMS_PDU_TYPE_DELIVER</constant></link>.
+        or
+        <link linkend="MM-SMS-PDU-TYPE-STATUS-REPORT:CAPS"><constant>MM_SMS_PDU_TYPE_STATUS_REPORT</constant></link>.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="Timestamp" type="s" access="read" />
+
+    <!--
+        DischargeTimestamp:
+
+        Time when this part (PDU) left the SMSC, in
+        <ulink url="http://en.wikipedia.org/wiki/ISO_8601">ISO8601</ulink>
+        format.
+
+        This field is only applicable if the PDU type is
+        <link linkend="MM-SMS-PDU-TYPE-STATUS-REPORT:CAPS"><constant>MM_SMS_PDU_TYPE_STATUS_REPORT</constant></link>.
+
+        Since: 1.0 FIXME
+    -->
+    <property name="DischargeTimestamp" type="s" access="read" />
+
+    <!--
+        Storage:
+
+        A <link linkend="MMSmsStorage">MMSmsStorage</link> value,
+        describing the storage where this message is kept.
+
+        Since: 1.0
+    -->
+    <property name="Storage" type="u" access="read" />
+
+  </interface>
+</node>
