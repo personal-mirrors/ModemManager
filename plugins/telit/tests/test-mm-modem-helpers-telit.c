@@ -171,6 +171,22 @@ static BndResponseTest supported_band_mapping_tests [] = {
           MM_MODEM_BAND_EUTRAN_41,
           MM_MODEM_BAND_EUTRAN_66,
           MM_MODEM_BAND_EUTRAN_71 }
+    },
+    /* 4G bands in HEX format: e.g. LE910C1-EUX */
+    {
+        "#BND: (0),(0,5,6,13,15,23),(80800C5)", TRUE, TRUE, TRUE, FALSE, FALSE, 11,
+        { 
+          MM_MODEM_BAND_EGSM,
+          MM_MODEM_BAND_DCS,
+          MM_MODEM_BAND_UTRAN_1,
+          MM_MODEM_BAND_UTRAN_3,
+          MM_MODEM_BAND_UTRAN_8,
+          MM_MODEM_BAND_EUTRAN_1,
+          MM_MODEM_BAND_EUTRAN_3,
+          MM_MODEM_BAND_EUTRAN_7,
+          MM_MODEM_BAND_EUTRAN_8,
+          MM_MODEM_BAND_EUTRAN_20,
+          MM_MODEM_BAND_EUTRAN_28 }
     }
 };
 

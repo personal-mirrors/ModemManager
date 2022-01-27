@@ -576,9 +576,12 @@ telit_get_4g_mm_bands (GMatchInfo  *match_info,
 
     /* If this is a range, get upper threshold, which contains the total supported mask */
     if (!mm_get_u64_from_str (tokens[1] ? tokens[1] : tokens[0], &value)) {
-        g_set_error (&inner_error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                     "Could not parse 4G band mask from string: '%s'", match_str);
-        goto out;
+        /* Some modems return LTE supported bands in HEX format (e.g. LE910-EUX) */
+        if (!mm_get_u64_from_hex_str (tokens[1] ? tokens[1] : tokens[0], &value)) {
+            g_set_error (&inner_error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                        "Could not parse 4G band mask from string: '%s'", match_str);
+            goto out;
+        }
     }
 
     for (band = MM_MODEM_BAND_TELIT_4G_FIRST; band <= MM_MODEM_BAND_TELIT_4G_LAST; band++) {
@@ -685,7 +688,7 @@ common_parse_bnd_response (const gchar    *response,
 
     if (!modem_ext_4g_bands) {
         static const gchar *load_bands_regex[] = {
-            [LOAD_BANDS_TYPE_SUPPORTED] = "#BND:\\s*\\((?P<Bands2G>[0-9\\-,]*)\\)(,\\s*\\((?P<Bands3G>[0-9\\-,]*)\\))?(,\\s*\\((?P<Bands4G>[0-9\\-,]*)\\))?",
+            [LOAD_BANDS_TYPE_SUPPORTED] = "#BND:\\s*\\((?P<Bands2G>[0-9\\-,]*)\\)(,\\s*\\((?P<Bands3G>[0-9\\-,]*)\\))?(,\\s*\\((?P<Bands4G>[0-9A-F\\-,]*)\\))?",
             [LOAD_BANDS_TYPE_CURRENT]   = "#BND:\\s*(?P<Bands2G>\\d+)(,\\s*(?P<Bands3G>\\d+))?(,\\s*(?P<Bands4G>\\d+))?",
         };
 
