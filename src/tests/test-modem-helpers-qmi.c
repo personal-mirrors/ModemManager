@@ -20,28 +20,65 @@
 #include <stdlib.h>
 #include <locale.h>
 
+#include <ModemManager.h>
+#define _LIBMM_INSIDE_MM
+#include <libmm-glib.h>
+
 #include "mm-enums-types.h"
 #include "mm-modem-helpers-qmi.h"
 #include "mm-log-test.h"
 
 static void
-test_capabilities_expected (MMQmiCapabilitiesContext *ctx,
-                            MMModemCapability expected)
+test_current_capabilities_expected (MMQmiCurrentCapabilitiesContext *ctx,
+                                    MMModemCapability                expected)
 {
-    MMModemCapability built;
-    gchar *expected_str;
-    gchar *built_str;
+    MMModemCapability  built;
+    g_autofree gchar  *expected_str = NULL;
+    g_autofree gchar  *built_str = NULL;
 
-    built = mm_modem_capability_from_qmi_capabilities_context (ctx, NULL);
+    built = mm_current_capability_from_qmi_current_capabilities_context (ctx, NULL);
 
     expected_str = mm_modem_capability_build_string_from_mask (expected);
     built_str = mm_modem_capability_build_string_from_mask (built);
 
     /* compare strings, so that the error shows the string values as well */
     g_assert_cmpstr (built_str, ==, expected_str);
+}
 
-    g_free (expected_str);
-    g_free (built_str);
+static void
+test_supported_capabilities_expected (MMQmiSupportedCapabilitiesContext *ctx,
+                                      const MMModemCapability           *expected_capabilities,
+                                      guint                              n_expected_capabilities)
+{
+    g_autoptr(GArray)  built = NULL;
+    g_autofree gchar  *expected_str = NULL;
+    g_autofree gchar  *built_str = NULL;
+
+    built = mm_supported_capabilities_from_qmi_supported_capabilities_context (ctx, NULL);
+
+    expected_str = mm_common_build_capabilities_string (expected_capabilities, n_expected_capabilities);
+    built_str = mm_common_build_capabilities_string ((MMModemCapability *)built->data, built->len);
+
+    /* compare strings, so that the error shows the string values as well */
+    g_assert_cmpstr (built_str, ==, expected_str);
+}
+
+static void
+test_supported_modes_expected (MMQmiSupportedModesContext   *ctx,
+                               const MMModemModeCombination *expected_modes,
+                               guint                         n_expected_modes)
+{
+    g_autoptr(GArray)  built = NULL;
+    g_autofree gchar  *expected_str = NULL;
+    g_autofree gchar  *built_str = NULL;
+
+    built = mm_supported_modes_from_qmi_supported_modes_context (ctx, NULL);
+
+    expected_str = mm_common_build_mode_combinations_string (expected_modes, n_expected_modes);
+    built_str = mm_common_build_mode_combinations_string ((MMModemModeCombination *)built->data, built->len);
+
+    /* compare strings, so that the error shows the string values as well */
+    g_assert_cmpstr (built_str, ==, expected_str);
 }
 
 /*****************************************************************************/
@@ -58,9 +95,11 @@ test_capabilities_expected (MMQmiCapabilitiesContext *ctx,
 */
 
 static void
-test_uml290 (void)
+test_current_capabilities_uml290 (void)
 {
-    MMQmiCapabilitiesContext ctx;
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = TRUE;
 
     /* QCDM -> CDMA/EVDO */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1X |
@@ -69,9 +108,9 @@ test_uml290 (void)
     ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_CDMA_EVDO |
-                                 MM_MODEM_CAPABILITY_LTE));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE));
 
     /* QCDM -> GSM/UMTS */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_GSM |
@@ -80,9 +119,9 @@ test_uml290 (void)
     ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_GSM_UMTS |
-                                 MM_MODEM_CAPABILITY_LTE));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_LTE));
 
     /* QCDM -> Automatic */
     ctx.nas_ssp_mode_preference_mask = 0;
@@ -90,10 +129,147 @@ test_uml290 (void)
     ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_GSM_UMTS |
-                                 MM_MODEM_CAPABILITY_CDMA_EVDO |
-                                 MM_MODEM_CAPABILITY_LTE));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE));
+}
+
+static void
+test_supported_capabilities_uml290 (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_LTE,
+        MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_LTE,
+        MM_MODEM_CAPABILITY_LTE,
+        MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_LTE,
+    };
+
+    ctx.multimode = TRUE;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = FALSE;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                            MM_MODEM_CAPABILITY_CDMA_EVDO |
+                            MM_MODEM_CAPABILITY_LTE);
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_uml290_cdma_evdo_gsm_umts_lte (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        /* we MUST not have 4G-only in multimode devices */
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_2G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_2G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_2G },
+    };
+
+    ctx.multimode = TRUE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = FALSE;
+    ctx.current_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                MM_MODEM_CAPABILITY_LTE);
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
+}
+
+static void
+test_supported_modes_uml290_cdma_evdo_lte (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        /* we MUST not have 4G-only in multimode devices */
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_2G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_2G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_2G },
+    };
+
+    ctx.multimode = TRUE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = FALSE;
+    ctx.current_capabilities = (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                MM_MODEM_CAPABILITY_LTE);
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
+}
+
+static void
+test_supported_modes_uml290_gsm_umts_lte (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        /* we MUST not have 4G-only in multimode devices */
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_2G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_2G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_2G },
+    };
+
+    ctx.multimode = TRUE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = FALSE;
+    ctx.current_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                MM_MODEM_CAPABILITY_LTE);
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
+}
+
+static void
+test_supported_modes_uml290_lte (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        /* we MUST only have 4G-only in a multimode device with only LTE capability */
+        { .allowed = MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_NONE },
+    };
+
+    ctx.multimode = TRUE;
+    ctx.all = MM_MODEM_MODE_4G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = FALSE;
+    ctx.current_capabilities = MM_MODEM_CAPABILITY_LTE;
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
 }
 
 /*****************************************************************************/
@@ -107,19 +283,60 @@ test_uml290 (void)
  */
 
 static void
-test_adu960s (void)
+test_current_capabilities_adu960s (void)
 {
-    MMQmiCapabilitiesContext ctx;
+    MMQmiCurrentCapabilitiesContext ctx;
 
-    ctx.nas_ssp_mode_preference_mask = 0;
+    ctx.multimode = TRUE;
+    ctx.nas_ssp_mode_preference_mask = 0; /* Unsupported */
     ctx.nas_tp_mask = 0; /* Unsupported */
     ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_GSM_UMTS |
-                                 MM_MODEM_CAPABILITY_CDMA_EVDO |
-                                 MM_MODEM_CAPABILITY_LTE));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE));
+}
+
+static void
+test_supported_capabilities_adu960s (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_LTE,
+    };
+
+    ctx.multimode = TRUE;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = FALSE;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                            MM_MODEM_CAPABILITY_CDMA_EVDO |
+                            MM_MODEM_CAPABILITY_LTE);
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_adu960s (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_NONE },
+    };
+
+    ctx.multimode = TRUE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = FALSE;
+    ctx.current_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                MM_MODEM_CAPABILITY_LTE);
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
 }
 
 /*****************************************************************************/
@@ -132,14 +349,54 @@ test_adu960s (void)
  */
 
 static void
-test_gobi1k_gsm (void)
+test_current_capabilities_gobi1k_gsm (void)
 {
-    MMQmiCapabilitiesContext ctx;
+    MMQmiCurrentCapabilitiesContext ctx;
 
+    ctx.multimode = FALSE;
     ctx.nas_ssp_mode_preference_mask = 0; /* Unsupported */
     ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+}
+
+static void
+test_supported_capabilities_gobi1k_gsm (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_GSM_UMTS,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_gobi1k_gsm (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
 }
 
 /*****************************************************************************/
@@ -152,14 +409,54 @@ test_gobi1k_gsm (void)
  */
 
 static void
-test_gobi1k_cdma (void)
+test_current_capabilities_gobi1k_cdma (void)
 {
-    MMQmiCapabilitiesContext ctx;
+    MMQmiCurrentCapabilitiesContext ctx;
 
+    ctx.multimode = FALSE;
     ctx.nas_ssp_mode_preference_mask = 0; /* Unsupported */
     ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+}
+
+static void
+test_supported_capabilities_gobi1k_cdma (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_CDMA_EVDO,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_gobi1k_cdma (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
 }
 
 /*****************************************************************************/
@@ -174,27 +471,68 @@ test_gobi1k_cdma (void)
  */
 
 static void
-test_gobi2k_gsm (void)
+test_current_capabilities_gobi2k_gsm (void)
 {
-    MMQmiCapabilitiesContext ctx;
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = FALSE;
 
     /* QCDM -> Automatic */
     ctx.nas_ssp_mode_preference_mask = 0; /* Unsupported */
     ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
 
     /* QCDM -> UMTS only */
     ctx.nas_ssp_mode_preference_mask = 0; /* Unsupported */
     ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_CDMA_OR_WCDMA);
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
 
     /* QCDM -> GPRS only */
     ctx.nas_ssp_mode_preference_mask = 0; /* Unsupported */
     ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AMPS_OR_GSM);
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+}
+
+static void
+test_supported_capabilities_gobi2k_gsm (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_GSM_UMTS,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_gobi2k_gsm (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
 }
 
 /*****************************************************************************/
@@ -209,27 +547,68 @@ test_gobi2k_gsm (void)
  */
 
 static void
-test_gobi2k_cdma (void)
+test_current_capabilities_gobi2k_cdma (void)
 {
-    MMQmiCapabilitiesContext ctx;
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = FALSE;
 
     /* QCDM -> Automatic */
     ctx.nas_ssp_mode_preference_mask = 0; /* Unsupported */
     ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
 
     /* QCDM -> CDMA only */
     ctx.nas_ssp_mode_preference_mask = 0; /* Unsupported */
     ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP2 | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_CDMA_OR_WCDMA);
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
 
     /* QCDM -> EVDO only */
     ctx.nas_ssp_mode_preference_mask = 0; /* Unsupported */
     ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP2 | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_HDR);
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+}
+
+static void
+test_supported_capabilities_gobi2k_cdma (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_CDMA_EVDO,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_gobi2k_cdma (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+    ctx.nas_ssp_supported = FALSE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
 }
 
 /*****************************************************************************/
@@ -246,9 +625,11 @@ test_gobi2k_cdma (void)
  */
 
 static void
-test_gobi3k_gsm (void)
+test_current_capabilities_gobi3k_gsm (void)
 {
-    MMQmiCapabilitiesContext ctx;
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = FALSE;
 
     /* QCDM -> Automatic */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1X |
@@ -257,19 +638,59 @@ test_gobi3k_gsm (void)
                                         QMI_NAS_RAT_MODE_PREFERENCE_UMTS);
     ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
 
     /* QCDM -> GSM only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_GSM);
     ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AMPS_OR_GSM);
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
 
     /* QCDM -> UMTS only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_UMTS);
     ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_CDMA_OR_WCDMA);
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_GSM_UMTS);
+}
+
+static void
+test_supported_capabilities_gobi3k_gsm (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_GSM_UMTS,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_gobi3k_gsm (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_2G },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = MM_MODEM_CAPABILITY_GSM_UMTS;
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
 }
 
 /*****************************************************************************/
@@ -286,9 +707,11 @@ test_gobi3k_gsm (void)
  */
 
 static void
-test_gobi3k_cdma (void)
+test_current_capabilities_gobi3k_cdma (void)
 {
-    MMQmiCapabilitiesContext ctx;
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = FALSE;
 
     /* QCDM -> Automatic */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1X |
@@ -297,19 +720,59 @@ test_gobi3k_cdma (void)
                                         QMI_NAS_RAT_MODE_PREFERENCE_UMTS);
     ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
 
     /* QCDM -> CDMA only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1X);
     ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP2 | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_CDMA_OR_WCDMA);
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
 
     /* QCDM -> EVDO only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1XEVDO);
     ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP2 | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_HDR);
     ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
-    test_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_CDMA_EVDO);
+}
+
+static void
+test_supported_capabilities_gobi3k_cdma (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_CDMA_EVDO,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_gobi3k_cdma (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_2G },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = MM_MODEM_CAPABILITY_CDMA_EVDO;
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
 }
 
 /*****************************************************************************/
@@ -334,9 +797,11 @@ test_gobi3k_cdma (void)
  */
 
 static void
-test_generic_nr5g (void)
+test_current_capabilities_generic_nr5g_multimode (void)
 {
-    MMQmiCapabilitiesContext ctx;
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = TRUE;
 
     /* QMI -> Automatic */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1X |
@@ -351,11 +816,11 @@ test_generic_nr5g (void)
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE |
                             MM_MODEM_CAPABILITY_5GNR);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_GSM_UMTS |
-                                 MM_MODEM_CAPABILITY_CDMA_EVDO |
-                                 MM_MODEM_CAPABILITY_LTE |
-                                 MM_MODEM_CAPABILITY_5GNR));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
 
     /* QMI -> GSM only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_GSM);
@@ -364,10 +829,10 @@ test_generic_nr5g (void)
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE |
                             MM_MODEM_CAPABILITY_5GNR);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_GSM_UMTS |
-                                 MM_MODEM_CAPABILITY_LTE |
-                                 MM_MODEM_CAPABILITY_5GNR));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
 
     /* QMI -> UMTS only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_UMTS);
@@ -376,10 +841,10 @@ test_generic_nr5g (void)
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE |
                             MM_MODEM_CAPABILITY_5GNR);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_GSM_UMTS |
-                                 MM_MODEM_CAPABILITY_LTE |
-                                 MM_MODEM_CAPABILITY_5GNR));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
 
     /* QMI -> EVDO only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1XEVDO);
@@ -388,10 +853,10 @@ test_generic_nr5g (void)
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE |
                             MM_MODEM_CAPABILITY_5GNR);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_CDMA_EVDO |
-                                 MM_MODEM_CAPABILITY_LTE |
-                                 MM_MODEM_CAPABILITY_5GNR));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
 
     /* QMI -> CDMA only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1X);
@@ -400,10 +865,10 @@ test_generic_nr5g (void)
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE |
                             MM_MODEM_CAPABILITY_5GNR);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_CDMA_EVDO |
-                                 MM_MODEM_CAPABILITY_LTE |
-                                 MM_MODEM_CAPABILITY_5GNR));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
 
     /* QMI -> LTE only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_LTE);
@@ -412,9 +877,9 @@ test_generic_nr5g (void)
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE |
                             MM_MODEM_CAPABILITY_5GNR);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_LTE |
-                                 MM_MODEM_CAPABILITY_5GNR));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
 
     /* QMI -> 5GNR only */
     ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_5GNR);
@@ -423,9 +888,447 @@ test_generic_nr5g (void)
                             MM_MODEM_CAPABILITY_CDMA_EVDO |
                             MM_MODEM_CAPABILITY_LTE |
                             MM_MODEM_CAPABILITY_5GNR);
-    test_capabilities_expected (&ctx,
-                                (MM_MODEM_CAPABILITY_LTE |
-                                 MM_MODEM_CAPABILITY_5GNR));
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+}
+
+static void
+test_supported_capabilities_generic_nr5g_multimode (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_LTE | MM_MODEM_CAPABILITY_5GNR,
+        MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_LTE | MM_MODEM_CAPABILITY_5GNR,
+        MM_MODEM_CAPABILITY_LTE | MM_MODEM_CAPABILITY_5GNR,
+        MM_MODEM_CAPABILITY_GSM_UMTS | MM_MODEM_CAPABILITY_CDMA_EVDO | MM_MODEM_CAPABILITY_LTE | MM_MODEM_CAPABILITY_5GNR,
+    };
+
+    ctx.multimode = TRUE;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                            MM_MODEM_CAPABILITY_CDMA_EVDO |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_generic_nr5g_multimode (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        /* we MUST not have 4G-only in multimode devices */
+        /* we MUST not have 5G-only in multimode devices */
+        /* we MUST not have 4G+5G in multimode devices */
+        { .allowed = MM_MODEM_MODE_2G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_2G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_2G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_2G },
+
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_2G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_3G },
+
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_2G },
+
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_2G },
+
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_3G },
+
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_3G },
+        { .allowed = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_2G },
+    };
+
+    ctx.multimode = TRUE;
+    ctx.all = MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                MM_MODEM_CAPABILITY_LTE |
+                                MM_MODEM_CAPABILITY_5GNR);
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
+}
+
+static void
+test_current_capabilities_generic_nr5g_only (void)
+{
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_mode_preference_mask = QMI_NAS_RAT_MODE_PREFERENCE_5GNR;
+    ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
+    ctx.dms_capabilities = MM_MODEM_CAPABILITY_5GNR;
+    test_current_capabilities_expected (&ctx, MM_MODEM_CAPABILITY_5GNR);
+}
+
+static void
+test_supported_capabilities_generic_nr5g_only (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_5GNR,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = MM_MODEM_CAPABILITY_5GNR;
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_generic_nr5g_only (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_NONE },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_5G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = MM_MODEM_CAPABILITY_5GNR;
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
+}
+
+static void
+test_current_capabilities_generic_nr5g_lte (void)
+{
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = FALSE;
+
+    /* QMI -> Automatic */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_LTE |
+                                        QMI_NAS_RAT_MODE_PREFERENCE_5GNR);
+    ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+
+    /* QMI -> LTE only */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_LTE);
+    ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_LTE);
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+
+    /* QMI -> 5GNR only */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_5GNR);
+    ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+}
+
+static void
+test_supported_capabilities_generic_nr5g_lte (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_LTE | MM_MODEM_CAPABILITY_5GNR,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_generic_nr5g_lte (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_NONE },
+        { .allowed = MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_4G },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_4G | MM_MODEM_MODE_5G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = (MM_MODEM_CAPABILITY_LTE |
+                                MM_MODEM_CAPABILITY_5GNR);
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
+}
+
+static void
+test_current_capabilities_generic_nr5g_lte_umts (void)
+{
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = FALSE;
+
+    /* QMI -> Automatic */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_UMTS |
+                                        QMI_NAS_RAT_MODE_PREFERENCE_LTE |
+                                        QMI_NAS_RAT_MODE_PREFERENCE_5GNR);
+    ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+
+    /* QMI -> UMTS only */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_UMTS);
+    ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_CDMA_OR_WCDMA);
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+
+    /* QMI -> LTE only */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_LTE);
+    ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_LTE);
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+
+    /* QMI -> 5GNR only */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_5GNR);
+    ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+}
+
+static void
+test_supported_capabilities_generic_nr5g_lte_umts (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_GSM_UMTS |MM_MODEM_CAPABILITY_LTE | MM_MODEM_CAPABILITY_5GNR,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_generic_nr5g_lte_umts (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        /* we MUST have 4G-only in non-multimode devices */
+        { .allowed = MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_NONE },
+
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+
+        /* we MUST have 5G-only in non-multimode devices */
+        { .allowed = MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_NONE },
+
+        /* we MUST have 4G+5G in non-multimode devices */
+        { .allowed = MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_4G },
+
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_3G },
+
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_3G },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = (MM_MODEM_CAPABILITY_GSM_UMTS |
+                                MM_MODEM_CAPABILITY_LTE |
+                                MM_MODEM_CAPABILITY_5GNR);
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
+}
+
+static void
+test_current_capabilities_generic_nr5g_lte_evdo (void)
+{
+    MMQmiCurrentCapabilitiesContext ctx;
+
+    ctx.multimode = FALSE;
+
+    /* QMI -> Automatic */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1XEVDO |
+                                        QMI_NAS_RAT_MODE_PREFERENCE_LTE |
+                                        QMI_NAS_RAT_MODE_PREFERENCE_5GNR);
+    ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+
+    /* QMI -> EVDO only */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_CDMA_1XEVDO);
+    ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP2 | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_HDR);
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+
+    /* QMI -> LTE only */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_LTE);
+    ctx.nas_tp_mask = (QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_3GPP | QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_LTE);
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+
+    /* QMI -> 5GNR only */
+    ctx.nas_ssp_mode_preference_mask = (QMI_NAS_RAT_MODE_PREFERENCE_5GNR);
+    ctx.nas_tp_mask = QMI_NAS_RADIO_TECHNOLOGY_PREFERENCE_AUTO;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+    test_current_capabilities_expected (&ctx,
+                                        (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                         MM_MODEM_CAPABILITY_LTE |
+                                         MM_MODEM_CAPABILITY_5GNR));
+}
+
+static void
+test_supported_capabilities_generic_nr5g_lte_evdo (void)
+{
+    MMQmiSupportedCapabilitiesContext ctx;
+    static const MMModemCapability expected_capabilities[] = {
+        MM_MODEM_CAPABILITY_CDMA_EVDO |MM_MODEM_CAPABILITY_LTE | MM_MODEM_CAPABILITY_5GNR,
+    };
+
+    ctx.multimode = FALSE;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.dms_capabilities = (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                            MM_MODEM_CAPABILITY_LTE |
+                            MM_MODEM_CAPABILITY_5GNR);
+
+    test_supported_capabilities_expected (&ctx,
+                                          expected_capabilities,
+                                          G_N_ELEMENTS (expected_capabilities));
+}
+
+static void
+test_supported_modes_generic_nr5g_lte_evdo (void)
+{
+    MMQmiSupportedModesContext ctx;
+    static const MMModemModeCombination expected_modes[] = {
+        { .allowed = MM_MODEM_MODE_3G, .preferred = MM_MODEM_MODE_NONE },
+        /* we MUST have 4G-only in non-multimode devices */
+        { .allowed = MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_NONE },
+
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G, .preferred = MM_MODEM_MODE_3G },
+
+        /* we MUST have 5G-only in non-multimode devices */
+        { .allowed = MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_NONE },
+
+        /* we MUST have 4G+5G in non-multimode devices */
+        { .allowed = MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_4G },
+
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_3G },
+
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_5G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_4G },
+        { .allowed = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G, .preferred = MM_MODEM_MODE_3G },
+    };
+
+    ctx.multimode = FALSE;
+    ctx.all = MM_MODEM_MODE_3G | MM_MODEM_MODE_4G | MM_MODEM_MODE_5G;
+    ctx.nas_ssp_supported = TRUE;
+    ctx.nas_tp_supported = TRUE;
+    ctx.current_capabilities = (MM_MODEM_CAPABILITY_CDMA_EVDO |
+                                MM_MODEM_CAPABILITY_LTE |
+                                MM_MODEM_CAPABILITY_5GNR);
+
+    test_supported_modes_expected (&ctx,
+                                   expected_modes,
+                                   G_N_ELEMENTS (expected_modes));
 }
 
 /*****************************************************************************/
@@ -436,15 +1339,60 @@ int main (int argc, char **argv)
 
     g_test_init (&argc, &argv, NULL);
 
-    g_test_add_func ("/MM/QMI/Current-Capabilities/UML290",       test_uml290);
-    g_test_add_func ("/MM/QMI/Current-Capabilities/ADU960S",      test_adu960s);
-    g_test_add_func ("/MM/QMI/Current-Capabilities/Gobi1k/GSM",   test_gobi1k_gsm);
-    g_test_add_func ("/MM/QMI/Current-Capabilities/Gobi1k/CDMA",  test_gobi1k_cdma);
-    g_test_add_func ("/MM/QMI/Current-Capabilities/Gobi2k/GSM",   test_gobi2k_gsm);
-    g_test_add_func ("/MM/QMI/Current-Capabilities/Gobi2k/CDMA",  test_gobi2k_cdma);
-    g_test_add_func ("/MM/QMI/Current-Capabilities/Gobi3k/GSM",   test_gobi3k_gsm);
-    g_test_add_func ("/MM/QMI/Current-Capabilities/Gobi3k/CDMA",  test_gobi3k_cdma);
-    g_test_add_func ("/MM/QMI/Current-Capabilities/Generic/NR5G", test_generic_nr5g);
+    g_test_add_func ("/MM/qmi/current-capabilities/UML290",                   test_current_capabilities_uml290);
+    g_test_add_func ("/MM/qmi/supported-capabilities/UML290",                 test_supported_capabilities_uml290);
+    g_test_add_func ("/MM/qmi/supported-modes/UML290/cdma-evdo-gsm-umts-lte", test_supported_modes_uml290_cdma_evdo_gsm_umts_lte);
+    g_test_add_func ("/MM/qmi/supported-modes/UML290/cdma-evdo-lte",          test_supported_modes_uml290_cdma_evdo_lte);
+    g_test_add_func ("/MM/qmi/supported-modes/UML290/gsm-umts-lte",           test_supported_modes_uml290_gsm_umts_lte);
+    g_test_add_func ("/MM/qmi/supported-modes/UML290/lte",                    test_supported_modes_uml290_lte);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/ADU960S",                  test_current_capabilities_adu960s);
+    g_test_add_func ("/MM/qmi/supported-capabilities/ADU960S",                test_supported_capabilities_adu960s);
+    g_test_add_func ("/MM/qmi/supported-modes/ADU960S",                       test_supported_modes_adu960s);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/Gobi1k/GSM",               test_current_capabilities_gobi1k_gsm);
+    g_test_add_func ("/MM/qmi/supported-capabilities/Gobi1k/GSM",             test_supported_capabilities_gobi1k_gsm);
+    g_test_add_func ("/MM/qmi/supported-modes/Gobi1k/GSM",                    test_supported_modes_gobi1k_gsm);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/Gobi1k/CDMA",              test_current_capabilities_gobi1k_cdma);
+    g_test_add_func ("/MM/qmi/supported-capabilities/Gobi1k/CDMA",            test_supported_capabilities_gobi1k_cdma);
+    g_test_add_func ("/MM/qmi/supported-modes/Gobi1k/CDMA",                   test_supported_modes_gobi1k_cdma);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/Gobi2k/GSM",               test_current_capabilities_gobi2k_gsm);
+    g_test_add_func ("/MM/qmi/supported-capabilities/Gobi2k/GSM",             test_supported_capabilities_gobi2k_gsm);
+    g_test_add_func ("/MM/qmi/supported-modes/Gobi2k/GSM",                    test_supported_modes_gobi2k_gsm);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/Gobi2k/CDMA",              test_current_capabilities_gobi2k_cdma);
+    g_test_add_func ("/MM/qmi/supported-capabilities/Gobi2k/CDMA",            test_supported_capabilities_gobi2k_cdma);
+    g_test_add_func ("/MM/qmi/supported-modes/Gobi2k/CDMA",                   test_supported_modes_gobi2k_cdma);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/Gobi3k/GSM",               test_current_capabilities_gobi3k_gsm);
+    g_test_add_func ("/MM/qmi/supported-capabilities/Gobi3k/GSM",             test_supported_capabilities_gobi3k_gsm);
+    g_test_add_func ("/MM/qmi/supported-modes/Gobi3k/GSM",                    test_supported_modes_gobi3k_gsm);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/Gobi3k/CDMA",              test_current_capabilities_gobi3k_cdma);
+    g_test_add_func ("/MM/qmi/supported-capabilities/Gobi3k/CDMA",            test_supported_capabilities_gobi3k_cdma);
+    g_test_add_func ("/MM/qmi/supported-modes/Gobi3k/CDMA",                   test_supported_modes_gobi3k_cdma);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/generic/nr5g-multimode",   test_current_capabilities_generic_nr5g_multimode);
+    g_test_add_func ("/MM/qmi/supported-capabilities/generic/nr5g-multimode", test_supported_capabilities_generic_nr5g_multimode);
+    g_test_add_func ("/MM/qmi/supported-modes/generic/nr5g-multimode",        test_supported_modes_generic_nr5g_multimode);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/generic/nr5g-only",        test_current_capabilities_generic_nr5g_only);
+    g_test_add_func ("/MM/qmi/supported-capabilities/generic/nr5g-only",      test_supported_capabilities_generic_nr5g_only);
+    g_test_add_func ("/MM/qmi/supported-modes/generic/nr5g-only",             test_supported_modes_generic_nr5g_only);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/generic/nr5g-lte",         test_current_capabilities_generic_nr5g_lte);
+    g_test_add_func ("/MM/qmi/supported-capabilities/generic/nr5g-lte",       test_supported_capabilities_generic_nr5g_lte);
+    g_test_add_func ("/MM/qmi/supported-modes/generic/nr5g-lte",              test_supported_modes_generic_nr5g_lte);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/generic/nr5g-lte-umts",    test_current_capabilities_generic_nr5g_lte_umts);
+    g_test_add_func ("/MM/qmi/supported-capabilities/generic/nr5g-lte-umts",  test_supported_capabilities_generic_nr5g_lte_umts);
+    g_test_add_func ("/MM/qmi/supported-modes/generic/nr5g-lte-umts",         test_supported_modes_generic_nr5g_lte_umts);
+
+    g_test_add_func ("/MM/qmi/current-capabilities/generic/nr5g-lte-evdo",    test_current_capabilities_generic_nr5g_lte_evdo);
+    g_test_add_func ("/MM/qmi/supported-capabilities/generic/nr5g-lte-evdo",  test_supported_capabilities_generic_nr5g_lte_evdo);
+    g_test_add_func ("/MM/qmi/supported-modes/generic/nr5g-lte-evdo",         test_supported_modes_generic_nr5g_lte_evdo);
 
     return g_test_run ();
 }
