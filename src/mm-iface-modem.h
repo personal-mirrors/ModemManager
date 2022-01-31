@@ -610,4 +610,7 @@ void mm_iface_modem_modify_sim (MMIfaceModem *self,
                                 guint slot_index,
                                 MMBaseSim *new_sim);
 
+void mm_iface_modem_esim_status (MMIfaceModem *self,
+                                 MMSimEsimStatus status);
+
 #endif /* MM_IFACE_MODEM_H */

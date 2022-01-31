@@ -1388,6 +1388,23 @@ mm_iface_modem_update_access_technologies (MMIfaceModem *self,
 
 /*****************************************************************************/
 
+void
+mm_iface_modem_esim_status (MMIfaceModem *self,
+                                   MMSimEsimStatus status)
+{
+    g_autoptr(MMBaseSim) sim = NULL;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_SIM, &sim,
+                  NULL);
+    if (sim) {
+        mm_base_sim_set_esim_status (sim,status);
+    }
+}
+
+
+/*****************************************************************************/
+
 typedef struct {
     guint recent_timeout_source;
 } SignalQualityUpdateContext;

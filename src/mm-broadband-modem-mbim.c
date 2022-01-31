@@ -4641,6 +4641,9 @@ basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
     if (ready_state == MBIM_SUBSCRIBER_READY_STATE_INITIALIZED)
         mm_iface_modem_update_own_numbers (MM_IFACE_MODEM (self), telephone_numbers);
 
+    if (ready_state == MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE)
+        mm_iface_modem_esim_status (MM_IFACE_MODEM (self), MM_SIM_ESIM_STATUS_NO_PROFILES);
+
     if ((self->priv->last_ready_state != MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED &&
          ready_state == MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED) ||
         (self->priv->last_ready_state == MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED &&
