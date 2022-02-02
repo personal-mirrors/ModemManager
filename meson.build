@@ -30,6 +30,7 @@ mm_sysconfdir = get_option('sysconfdir')
 mm_pkgdatadir = mm_datadir / mm_name
 mm_pkgincludedir = mm_includedir / mm_name
 mm_pkglibdir = mm_libdir / mm_name
+mm_pkgsysconfdir = mm_sysconfdir / mm_name
 
 mm_glib_name = 'libmm-glib'
 mm_glib_pkgincludedir = mm_includedir / mm_glib_name
@@ -172,8 +173,10 @@ if enable_bash_completion
 endif
 
 # udev support (enabled by default)
-gudev_dep = dependency('gudev-1.0', version: '>= 232', required: get_option('udev'))
-enable_udev = gudev_dep.found()
+enable_udev = get_option('udev')
+if enable_udev
+  gudev_dep = dependency('gudev-1.0', version: '>= 232')
+endif
 config_h.set('WITH_UDEV', enable_udev)
 
 # udev base directory
@@ -214,14 +217,14 @@ config_h.set('WITH_SYSTEMD_SUSPEND_RESUME', enable_systemd_suspend_resume)
 config_h.set('WITH_SYSTEMD_JOURNAL', enable_systemd_journal)
 
 # PolicyKit
-polkit = get_option('polkit')
-enable_polkit = (polkit != 'no')
+polkit_opt = get_option('polkit')
+enable_polkit = (polkit_opt != 'no')
 if enable_polkit
   polkit_gobject_dep = dependency('polkit-gobject-1', version: '>= 0.97', not_found_message: 'PolicyKit development headers are required')
 
   polkit_gobject_policydir = polkit_gobject_dep.get_pkgconfig_variable('policydir', define_variable: ['prefix', mm_prefix])
 
-  policy_conf = {'MM_DEFAULT_USER_POLICY': (polkit == 'permissive' ? 'yes' : 'auth_self_keep')}
+  policy_conf = {'MM_DEFAULT_USER_POLICY': (polkit_opt == 'permissive' ? 'yes' : 'auth_self_keep')}
 endif
 config_h.set('WITH_POLKIT', enable_polkit)
 
@@ -232,20 +235,26 @@ enable_at_command_via_dbus = get_option('at_command_via_dbus')
 config_h.set('WITH_AT_COMMAND_VIA_DBUS', enable_at_command_via_dbus)
 
 # MBIM support (enabled by default)
-mbim_glib_dep = dependency('mbim-glib', version: '>= 1.26.0', required: get_option('mbim'))
-enable_mbim = mbim_glib_dep.found()
+enable_mbim = get_option('mbim')
+if enable_mbim
+  mbim_glib_dep = dependency('mbim-glib', version: '>= 1.27.3')
+endif
 config_h.set('WITH_MBIM', enable_mbim)
 
 # QMI support (enabled by default)
-qmi_glib_dep = dependency('qmi-glib', version: '>= 1.30.2', required: get_option('qmi'))
-enable_qmi = qmi_glib_dep.found()
+enable_qmi = get_option('qmi')
+if enable_qmi
+  qmi_glib_dep = dependency('qmi-glib', version: '>= 1.31.2')
+endif
 config_h.set('WITH_QMI', enable_qmi)
 
 # QRTR support (both as qrtr-glib and qmi-glib apis)
-qrtr_glib_dep = dependency('qrtr-glib', version: '>= 1.0.0', required: get_option('qrtr'))
-enable_qrtr = qrtr_glib_dep.found()
-assert(not enable_qrtr or enable_qmi, 'QRTR support requires QMI enabled')
-assert(not enable_qrtr or qmi_glib_dep.get_pkgconfig_variable('qmi_qrtr_supported').to_int().is_odd(), 'Couldn\'t find QRTR support in qmi-glib.')
+enable_qrtr = get_option('qrtr')
+if enable_qrtr
+  assert(enable_qmi, 'QRTR support requires QMI enabled')
+  assert(qmi_glib_dep.get_pkgconfig_variable('qmi_qrtr_supported').to_int().is_odd(), 'Couldn\'t find QRTR support in qmi-glib.')
+  qrtr_glib_dep = dependency('qrtr-glib', version: '>= 1.0.0')
+endif
 config_h.set('WITH_QRTR', enable_qrtr)
 
 # Distribution version string
@@ -257,7 +266,10 @@ endif
 util_dep = cc.find_library('util')
 
 # introspection support
-enable_gir = dependency('gobject-introspection-1.0', version: '>= 0.9.6', required: get_option('introspection')).found()
+enable_gir = get_option('introspection')
+if enable_gir
+  dependency('gobject-introspection-1.0', version: '>= 0.9.6')
+endif
 
 # vala support
 enable_vapi = get_option('vapi')
@@ -265,7 +277,9 @@ enable_vapi = get_option('vapi')
 # gtkdoc support
 enable_gtk_doc = get_option('gtk_doc')
 
-plugins_shared = {
+enable_plugins = not get_option('auto_features').disabled()
+
+plugins_shared_reqs = {
   'foxconn': enable_mbim,
   'icera': true,
   'novatel': true,
@@ -275,65 +289,71 @@ plugins_shared = {
   'xmm': true,
 }
 
-plugins_options = {
-  'altair-lte': [],
-  'anydata': [],
-  'broadmobi': [],
-  'cinterion': [],
-  'dell': ['foxconn', 'novatel', 'sierra', 'telit', 'xmm'],
-  'dlink': [],
-  'fibocom': ['xmm'],
-  'foxconn': ['foxconn'],
-  'generic': [],
-  'gosuncn': [],
-  'haier': [],
-  'huawei': [],
-  'iridium': [],
-  'linktop': [],
-  'longcheer': [],
-  'mbm': [],
-  'motorola': [],
-  'mtk': [],
-  'nokia': [],
-  'nokia-icera': ['icera'],
-  'novatel': ['novatel'],
-  'novatel-lte': [],
-  'option': ['option'],
-  'option-hso': ['option'],
-  'pantech': [],
-  'qcom-soc': [],
-  'quectel': [],
-  'samsung': ['icera'],
-  'sierra-legacy': ['icera', 'sierra'],
-  'sierra': ['xmm'],
-  'simtech': [],
-  'telit': ['telit'],
-  'thuraya': [],
-  'tplink': [],
-  'ublox': [],
-  'via': [],
-  'wavecom': [],
-  'x22x': [],
-  'zte': ['icera'],
+plugins_options_reqs = {
+  'altair-lte': {'available': true, 'shared': []},
+  'anydata': {'available': true, 'shared': []},
+  'broadmobi': {'available': true, 'shared': []},
+  'cinterion': {'available': true, 'shared': []},
+  'dell': {'available': true, 'shared': ['foxconn', 'novatel', 'sierra', 'telit', 'xmm']},
+  'dlink': {'available': true, 'shared': []},
+  'fibocom': {'available': true, 'shared': ['xmm']},
+  'foxconn': {'available': true, 'shared': ['foxconn']},
+  'generic': {'available': true, 'shared': []},
+  'gosuncn': {'available': true, 'shared': []},
+  'haier': {'available': true, 'shared': []},
+  'huawei': {'available': true, 'shared': []},
+  'iridium': {'available': true, 'shared': []},
+  'linktop': {'available': true, 'shared': []},
+  'longcheer': {'available': true, 'shared': []},
+  'mbm': {'available': true, 'shared': []},
+  'motorola': {'available': true, 'shared': []},
+  'mtk': {'available': true, 'shared': []},
+  'nokia': {'available': true, 'shared': []},
+  'nokia-icera': {'available': true, 'shared': ['icera']},
+  'novatel': {'available': true, 'shared': ['novatel']},
+  'novatel-lte': {'available': true, 'shared': []},
+  'option': {'available': true, 'shared': ['option']},
+  'option-hso': {'available': true, 'shared': ['option']},
+  'pantech': {'available': true, 'shared': []},
+  'qcom-soc': {'available': enable_qmi, 'shared': []},
+  'quectel': {'available': true, 'shared': []},
+  'samsung': {'available': true, 'shared': ['icera']},
+  'sierra-legacy': {'available': true, 'shared': ['icera', 'sierra']},
+  'sierra': {'available': true, 'shared': ['xmm']},
+  'simtech': {'available': true, 'shared': []},
+  'telit': {'available': true, 'shared': ['telit']},
+  'thuraya': {'available': true, 'shared': []},
+  'tplink': {'available': true, 'shared': []},
+  'ublox': {'available': true, 'shared': []},
+  'via': {'available': true, 'shared': []},
+  'wavecom': {'available': true, 'shared': []},
+  'x22x': {'available': true, 'shared': []},
+  'zte': {'available': true, 'shared': ['icera']},
 }
 
-disable_all_plugins = get_option('plugin_disable_all')
+plugins_shared = {}
+foreach plugin_name, _: plugins_shared_reqs
+  plugins_shared += {plugin_name: false}
+endforeach
 
-enable_plugins = []
-enable_plugins_shared = []
-if not disable_all_plugins
-  foreach plugin_name, plugin_shared_reqs: plugins_options
-    if get_option('plugin_' + plugin_name.underscorify())
-      enable_plugins += [plugin_name]
-      foreach plugin_req: plugin_shared_reqs
-        assert(plugins_shared[plugin_req], '@0@ required @1@ but is not available'.format(plugin_name, plugin_req))
-        if not enable_plugins_shared.contains(plugin_req)
-          enable_plugins_shared += [plugin_req]
-        endif
-      endforeach
-    endif
-  endforeach
-endif
+plugins_options = {}
+foreach plugin_name, plugin_reqs: plugins_options_reqs
+  plugin_opt = get_option('plugin_' + plugin_name.underscorify())
+  assert(plugin_reqs['available'] or not plugin_opt.enabled(), '@0@ is not available'.format(plugin_name))
+  plugin_enabled = not plugin_opt.disabled() and plugin_reqs['available']
+  if plugin_enabled
+    foreach plugin_req: plugin_reqs['shared']
+      if plugins_shared_reqs[plugin_req]
+        plugins_shared += {plugin_req: true}
+      else
+        assert(plugin_opt.enabled(), '@0@ required @1@ but is not available'.format(plugin_name, plugin_req))
+        plugin_enabled = false
+        break
+      endif
+    endforeach
+  endif
+  plugins_options += {plugin_name: plugin_enabled}
+endforeach
 
 version_conf = {
   'MM_MAJOR_VERSION': mm_major_version,
@@ -344,6 +364,7 @@ version_conf = {
 
 subdir('po')
 subdir('data')
+subdir('data/fcc-unlock')
 subdir('introspection')
 subdir('include')
 
@@ -381,6 +402,7 @@ summary({
 
 summary({
   'prefix': mm_prefix,
+  'configuration directory': mm_pkgsysconfdir,
   'D-Bus policy directory': dbus_policy_dir,
   'udev base directory': udev_udevdir,
   'systemd user unit directory': systemd_systemdsystemunitdir,
@@ -388,7 +410,7 @@ summary({
 
 summary({
   'udev': enable_udev,
-  'policykit': polkit,
+  'policykit': polkit_opt,
   'mbim': enable_mbim,
   'qmi': enable_qmi,
   'qrtr': enable_qrtr,
@@ -397,57 +419,9 @@ summary({
   'at command via dbus': enable_at_command_via_dbus,
 }, section: 'Features')
 
-summary({
-  'foxconn': enable_plugins_shared.contains('foxconn'),
-  'icera': enable_plugins_shared.contains('icera'),
-  'novatel': enable_plugins_shared.contains('novatel'),
-  'option': enable_plugins_shared.contains('option'),
-  'sierra': enable_plugins_shared.contains('sierra'),
-  'telit': enable_plugins_shared.contains('telit'),
-  'xmm': enable_plugins_shared.contains('xmm'),
-}, section: 'Shared utils')
+summary(plugins_shared, section: 'Shared utils')
 
-summary({
-  'altair-lte': enable_plugins.contains('altair-lte'),
-  'anydata': enable_plugins.contains('anydata'),
-  'broadmobi': enable_plugins.contains('broadmobi'),
-  'cinterion': enable_plugins.contains('cinterion'),
-  'dell': enable_plugins.contains('dell'),
-  'dlink': enable_plugins.contains('dlink'),
-  'fibocom': enable_plugins.contains('fibocom'),
-  'foxconn': enable_plugins.contains('foxconn'),
-  'generic': enable_plugins.contains('generic'),
-  'gosuncn': enable_plugins.contains('gosuncn'),
-  'haier': enable_plugins.contains('haier'),
-  'huawei': enable_plugins.contains('huawei'),
-  'iridium': enable_plugins.contains('iridium'),
-  'linktop': enable_plugins.contains('linktop'),
-  'longcheer': enable_plugins.contains('longcheer'),
-  'mbm': enable_plugins.contains('mbm'),
-  'motorola': enable_plugins.contains('motorola'),
-  'mtk': enable_plugins.contains('mtk'),
-  'nokia': enable_plugins.contains('nokia'),
-  'nokia-icera': enable_plugins.contains('nokia-icera'),
-  'novatel': enable_plugins.contains('novatel'),
-  'novatel-lte': enable_plugins.contains('novatel-lte'),
-  'option': enable_plugins.contains('option'),
-  'option-hso': enable_plugins.contains('option-hso'),
-  'pantech': enable_plugins.contains('pantech'),
-  'qcom-soc': enable_plugins.contains('qcom-soc'),
-  'quectel': enable_plugins.contains('quectel'),
-  'samsung': enable_plugins.contains('samsung'),
-  'sierra': enable_plugins.contains('sierra'),
-  'sierra-legacy': enable_plugins.contains('sierra-legacy'),
-  'simtech': enable_plugins.contains('simtech'),
-  'telit': enable_plugins.contains('telit'),
-  'thuraya': enable_plugins.contains('thuraya'),
-  'tplink': enable_plugins.contains('tplink'),
-  'ublox': enable_plugins.contains('ublox'),
-  'via': enable_plugins.contains('via'),
-  'wavecom': enable_plugins.contains('wavecom'),
-  'x22x': enable_plugins.contains('x22x'),
-  'zte': enable_plugins.contains('zte'),
-}, section: 'Plugins')
+summary(plugins_options, section: 'Plugins')
 
 summary({
   'gobject introspection': enable_gir,

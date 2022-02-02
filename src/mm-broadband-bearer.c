@@ -660,6 +660,7 @@ select_profile_3gpp (MMBroadbandBearer   *self,
         mm_iface_modem_3gpp_profile_manager_set_profile (
             MM_IFACE_MODEM_3GPP_PROFILE_MANAGER (modem),
             mm_bearer_properties_peek_3gpp_profile (bearer_properties),
+            "profile-id",
             FALSE, /* not strict! */
             (GAsyncReadyCallback)select_profile_3gpp_set_profile_ready,
             task);
@@ -1646,8 +1647,7 @@ cgact_periodic_query_ready (MMBaseModem  *modem,
     for (l = pdp_active_list; l; l = g_list_next (l)) {
         MM3gppPdpContextActive *pdp_active;
 
-        /* We look for he just assume the first active PDP context found is the one we're
-         * looking for. */
+        /* Just assume the first active PDP context found is the one we're looking for. */
         pdp_active = (MM3gppPdpContextActive *)(l->data);
         if (pdp_active->cid == (guint)self->priv->profile_id) {
             status = (pdp_active->active ? MM_BEARER_CONNECTION_STATUS_CONNECTED : MM_BEARER_CONNECTION_STATUS_DISCONNECTED);

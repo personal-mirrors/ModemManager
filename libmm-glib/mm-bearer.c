@@ -1,6 +1,6 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /*
- * libmm -- Access modem status & information from glib applications
+ * libmm-glib -- Access modem status & information from glib applications
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -167,6 +167,27 @@ mm_bearer_get_connected (MMBearer *self)
     g_return_val_if_fail (MM_IS_BEARER (self), FALSE);
 
     return mm_gdbus_bearer_get_connected (MM_GDBUS_BEARER (self));
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_bearer_get_reload_stats_supported:
+ * @self: A #MMBearer.
+ *
+ * Checks whether or not the #MMBearer supporting stats reload (to have
+ * RX and TX bytes of the ongoing connection).
+ *
+ * Returns: %TRUE if the #MMBearer supports these stats, #FALSE otherwise.
+ *
+ * Since: 1.20
+ */
+gboolean
+mm_bearer_get_reload_stats_supported (MMBearer *self)
+{
+    g_return_val_if_fail (MM_IS_BEARER (self), FALSE);
+
+    return mm_gdbus_bearer_get_reload_stats_supported (MM_GDBUS_BEARER (self));
 }
 
 /*****************************************************************************/

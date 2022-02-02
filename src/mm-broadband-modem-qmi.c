@@ -12,6 +12,7 @@
  *
  * Copyright (C) 2012 Google Inc.
  * Copyright (C) 2014 Aleksander Morgado <aleksander@aleksander.es>
+ * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <config.h>
@@ -98,9 +99,7 @@ struct _MMBroadbandModemQmiPrivate {
     gboolean unsolicited_events_setup;
     guint nas_event_report_indication_id;
     guint wds_event_report_indication_id;
-#if defined WITH_NEWEST_QMI_COMMANDS
     guint nas_signal_info_indication_id;
-#endif /* WITH_NEWEST_QMI_COMMANDS */
 
     /* New devices may not support the legacy DMS UIM commands */
     gboolean dms_uim_deprecated;
@@ -128,9 +127,7 @@ struct _MMBroadbandModemQmiPrivate {
     gboolean unsolicited_registration_events_enabled;
     gboolean unsolicited_registration_events_setup;
     guint serving_system_indication_id;
-#if defined WITH_NEWEST_QMI_COMMANDS
     guint system_info_indication_id;
-#endif /* WITH_NEWEST_QMI_COMMANDS */
     guint network_reject_indication_id;
 
     /* CDMA activation helpers */
@@ -720,7 +717,7 @@ modem_load_device_identifier (MMIfaceModem *self,
 
     mm_obj_dbg (self, "loading device identifier...");
 
-    /* Just use dummy ATI/ATI1 replies, all the other internal info should be
+    /* Just use placeholder ATI/ATI1 replies, all the other internal info should be
      * enough for uniqueness */
     device_identifier = mm_broadband_modem_create_device_identifier (MM_BROADBAND_MODEM (self), "", "", &error);
     if (!device_identifier)
@@ -1306,9 +1303,12 @@ modem_load_supported_ip_families (MMIfaceModem *self,
 /*****************************************************************************/
 /* Load signal quality (Modem interface) */
 
-/* Limit the value betweeen [-113,-51] and scale it to a percentage */
-#define STRENGTH_TO_QUALITY(strength)                                   \
-    (guint8)(100 - ((CLAMP (strength, -113, -51) + 51) * 100 / (-113 + 51)))
+#define RSRP_MAX -44
+#define RSRP_MIN -140
+#define SNR_MAX 40
+#define SNR_MIN -23
+#define RSRQ_MAX 20
+#define RSRQ_MIN -43
 
 static gboolean
 qmi_dbm_valid (gint8 dbm, QmiNasRadioInterface radio_interface)
@@ -1350,8 +1350,6 @@ load_signal_quality_finish (MMIfaceModem *self,
     return value;
 }
 
-#if defined WITH_NEWEST_QMI_COMMANDS
-
 static gboolean
 common_signal_info_get_quality (MMBroadbandModemQmi *self,
                                 gint8 cdma1x_rssi,
@@ -1359,10 +1357,17 @@ common_signal_info_get_quality (MMBroadbandModemQmi *self,
                                 gint8 gsm_rssi,
                                 gint8 wcdma_rssi,
                                 gint8 lte_rssi,
+                                gint16 nr5g_rsrp,
+                                gint16 nr5g_snr,
+                                gint16 nr5g_rsrq,
                                 guint8 *out_quality,
                                 MMModemAccessTechnology *out_act)
 {
     gint8 rssi_max = -125;
+    gint8 signal_quality = -1;
+    /* Valid nr5g signal quality will be in percentage [0,100].
+     * It is minimum of (rsrp, snr, rsrq) signal quality for 5G. */
+    guint8 nr5g_signal_quality_min = 101;
     QmiNasRadioInterface signal_info_radio_interface = QMI_NAS_RADIO_INTERFACE_UNKNOWN;
 
     g_assert (out_quality != NULL);
@@ -1414,12 +1419,41 @@ common_signal_info_get_quality (MMBroadbandModemQmi *self,
         }
     }
 
+    if (nr5g_rsrp <= RSRP_MAX && nr5g_rsrp >= RSRP_MIN) {
+        mm_obj_dbg (self, "RSRP (5G): %d dBm", nr5g_rsrp);
+        nr5g_signal_quality_min = MIN (nr5g_signal_quality_min,
+                                       (guint8)((nr5g_rsrp - RSRP_MIN) * 100 / (RSRP_MAX - RSRP_MIN)));
+        signal_info_radio_interface = QMI_NAS_RADIO_INTERFACE_5GNR;
+    }
+
+    if (nr5g_snr <= SNR_MAX && nr5g_snr >= SNR_MIN) {
+        mm_obj_dbg (self, "SNR (5G): %d dB", nr5g_snr);
+        nr5g_signal_quality_min = MIN (nr5g_signal_quality_min,
+                                       (guint8)((nr5g_snr - SNR_MIN) * 100 / (SNR_MAX - SNR_MIN)));
+        signal_info_radio_interface = QMI_NAS_RADIO_INTERFACE_5GNR;
+    }
+
+    if (nr5g_rsrq <= RSRQ_MAX && nr5g_rsrq >= RSRQ_MIN) {
+        mm_obj_dbg (self, "RSRQ (5G): %d dB", nr5g_rsrq);
+        nr5g_signal_quality_min = MIN (nr5g_signal_quality_min,
+                                       (guint8)((nr5g_rsrq - RSRQ_MIN) * 100 / (RSRQ_MAX - RSRQ_MIN)));
+        signal_info_radio_interface = QMI_NAS_RADIO_INTERFACE_5GNR;
+    }
+
     if (rssi_max < 0 && rssi_max > -125) {
         /* This RSSI comes as negative dBms */
-        *out_quality = STRENGTH_TO_QUALITY (rssi_max);
-        *out_act = mm_modem_access_technology_from_qmi_radio_interface (signal_info_radio_interface);
+        signal_quality = MM_RSSI_TO_QUALITY (rssi_max);
+        mm_obj_dbg (self, "RSSI: %d dBm --> %u%%", rssi_max, signal_quality);
+    }
 
-        mm_obj_dbg (self, "RSSI: %d dBm --> %u%%", rssi_max, *out_quality);
+    if (nr5g_signal_quality_min < 101 && nr5g_signal_quality_min >= signal_quality) {
+        signal_quality = nr5g_signal_quality_min;
+        mm_obj_dbg (self, "5G signal quality: %d%%", signal_quality);
+    }
+
+    if (signal_quality >= 0) {
+        *out_quality = signal_quality;
+        *out_act = mm_modem_access_technology_from_qmi_radio_interface (signal_info_radio_interface);
         return TRUE;
     }
 
@@ -1437,67 +1471,35 @@ signal_info_get_quality (MMBroadbandModemQmi *self,
     gint8 gsm_rssi = 0;
     gint8 wcdma_rssi = 0;
     gint8 lte_rssi = 0;
+    gint16 nr5g_rsrp = RSRP_MAX + 1;
+    /* Multiplying SNR_MAX by 10 as QMI gives SNR level
+     * as a scaled integer in units of 0.1 dB. */
+    gint16 nr5g_snr = 10 * SNR_MAX + 10;
+    gint16 nr5g_rsrq = RSRQ_MAX + 1;
 
     qmi_message_nas_get_signal_info_output_get_cdma_signal_strength (output, &cdma1x_rssi, NULL, NULL);
     qmi_message_nas_get_signal_info_output_get_hdr_signal_strength (output, &evdo_rssi, NULL, NULL, NULL, NULL);
     qmi_message_nas_get_signal_info_output_get_gsm_signal_strength (output, &gsm_rssi, NULL);
     qmi_message_nas_get_signal_info_output_get_wcdma_signal_strength (output, &wcdma_rssi, NULL, NULL);
     qmi_message_nas_get_signal_info_output_get_lte_signal_strength (output, &lte_rssi, NULL, NULL, NULL, NULL);
+    qmi_message_nas_get_signal_info_output_get_5g_signal_strength (output, &nr5g_rsrp, &nr5g_snr, NULL);
+    qmi_message_nas_get_signal_info_output_get_5g_signal_strength_extended (output, &nr5g_rsrq, NULL);
 
-    return common_signal_info_get_quality (self, cdma1x_rssi, evdo_rssi, gsm_rssi, wcdma_rssi, lte_rssi, out_quality, out_act);
+    /* Scale to integer values in units of 1 dB/dBm, if any */
+    nr5g_snr = 0.1 * nr5g_snr;
+
+    return common_signal_info_get_quality (self,
+                                           cdma1x_rssi,
+                                           evdo_rssi,
+                                           gsm_rssi,
+                                           wcdma_rssi,
+                                           lte_rssi,
+                                           nr5g_rsrp,
+                                           nr5g_snr,
+                                           nr5g_rsrq,
+                                           out_quality,
+                                           out_act);
 }
-
-static void
-get_signal_info_ready (QmiClientNas *client,
-                       GAsyncResult *res,
-                       GTask *task)
-{
-    MMBroadbandModemQmi *self;
-    QmiMessageNasGetSignalInfoOutput *output;
-    GError *error = NULL;
-    guint8 quality = 0;
-    MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
-
-    output = qmi_client_nas_get_signal_info_finish (client, res, &error);
-    if (!output) {
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
-    }
-
-    if (!qmi_message_nas_get_signal_info_output_get_result (output, &error)) {
-        qmi_message_nas_get_signal_info_output_unref (output);
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
-    }
-
-    self = g_task_get_source_object (task);
-
-    if (!signal_info_get_quality (self, output, &quality, &act)) {
-        qmi_message_nas_get_signal_info_output_unref (output);
-        g_task_return_new_error (task,
-                                 MM_CORE_ERROR,
-                                 MM_CORE_ERROR_FAILED,
-                                 "Signal info reported invalid signal strength.");
-        g_object_unref (task);
-        return;
-    }
-
-    /* We update the access technologies directly here when loading signal
-     * quality. It goes a bit out of context, but we can do it nicely */
-    mm_iface_modem_update_access_technologies (
-        MM_IFACE_MODEM (self),
-        act,
-        (MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK | MM_IFACE_MODEM_CDMA_ALL_ACCESS_TECHNOLOGIES_MASK));
-
-    g_task_return_int (task, quality);
-    g_object_unref (task);
-
-    qmi_message_nas_get_signal_info_output_unref (output);
-}
-
-#else /* WITH_NEWEST_QMI_COMMANDS */
 
 static gboolean
 signal_strength_get_quality_and_access_tech (MMBroadbandModemQmi *self,
@@ -1547,7 +1549,7 @@ signal_strength_get_quality_and_access_tech (MMBroadbandModemQmi *self,
 
     if (signal_max < 0) {
         /* This signal strength comes as negative dBms */
-        *o_quality = STRENGTH_TO_QUALITY (signal_max);
+        *o_quality = MM_RSSI_TO_QUALITY (signal_max);
         *o_act = act;
 
         mm_obj_dbg (self, "signal strength: %d dBm --> %u%%", signal_max, *o_quality);
@@ -1606,7 +1608,79 @@ get_signal_strength_ready (QmiClientNas *client,
     qmi_message_nas_get_signal_strength_output_unref (output);
 }
 
-#endif /* WITH_NEWEST_QMI_COMMANDS */
+static void
+get_signal_info_ready (QmiClientNas *client,
+                       GAsyncResult *res,
+                       GTask *task)
+{
+    MMBroadbandModemQmi *self;
+    QmiMessageNasGetSignalInfoOutput *output;
+    GError *error = NULL;
+    guint8 quality = 0;
+    MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+
+    self = g_task_get_source_object (task);
+
+    output = qmi_client_nas_get_signal_info_finish (client, res, &error);
+    if (!output) {
+        mm_obj_dbg (self, "couldn't get signal info: '%s': falling back to get signal strength",
+                    error->message);
+        qmi_client_nas_get_signal_strength (client,
+                                            NULL,
+                                            10,
+                                            NULL,
+                                            (GAsyncReadyCallback)get_signal_strength_ready,
+                                            task);
+        g_clear_error (&error);
+        return;
+    }
+
+    if (!qmi_message_nas_get_signal_info_output_get_result (output, &error)) {
+        qmi_message_nas_get_signal_info_output_unref (output);
+        if (g_error_matches (error,
+                             QMI_PROTOCOL_ERROR,
+                             QMI_PROTOCOL_ERROR_INVALID_QMI_COMMAND) ||
+            g_error_matches (error,
+                             QMI_PROTOCOL_ERROR,
+                             QMI_PROTOCOL_ERROR_NOT_SUPPORTED)) {
+            mm_obj_dbg (self, "couldn't get signal info: '%s': falling back to get signal strength",
+                        error->message);
+            qmi_client_nas_get_signal_strength (client,
+                                                NULL,
+                                                10,
+                                                NULL,
+                                                (GAsyncReadyCallback)get_signal_strength_ready,
+                                                task);
+            g_clear_error (&error);
+            return;
+        }
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (!signal_info_get_quality (self, output, &quality, &act)) {
+        qmi_message_nas_get_signal_info_output_unref (output);
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Signal info reported invalid signal strength.");
+        g_object_unref (task);
+        return;
+    }
+
+    /* We update the access technologies directly here when loading signal
+     * quality. It goes a bit out of context, but we can do it nicely */
+    mm_iface_modem_update_access_technologies (
+        MM_IFACE_MODEM (self),
+        act,
+        (MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK | MM_IFACE_MODEM_CDMA_ALL_ACCESS_TECHNOLOGIES_MASK));
+
+    g_task_return_int (task, quality);
+    g_object_unref (task);
+
+    qmi_message_nas_get_signal_info_output_unref (output);
+}
 
 static void
 load_signal_quality (MMIfaceModem *self,
@@ -1625,21 +1699,12 @@ load_signal_quality (MMIfaceModem *self,
 
     mm_obj_dbg (self, "loading signal quality...");
 
-#if defined WITH_NEWEST_QMI_COMMANDS
     qmi_client_nas_get_signal_info (QMI_CLIENT_NAS (client),
                                     NULL,
                                     10,
                                     NULL,
                                     (GAsyncReadyCallback)get_signal_info_ready,
                                     task);
-#else
-    qmi_client_nas_get_signal_strength (QMI_CLIENT_NAS (client),
-                                        NULL,
-                                        10,
-                                        NULL,
-                                        (GAsyncReadyCallback)get_signal_strength_ready,
-                                        task);
-#endif /* WITH_NEWEST_QMI_COMMANDS */
 }
 
 /*****************************************************************************/
@@ -2075,7 +2140,7 @@ get_sim_lock_status_via_pin_status_ready (QmiClientDms *client,
     LoadEnabledFacilityLocksContext *ctx;
     QmiMessageDmsUimGetPinStatusOutput *output;
     QmiDmsUimPinStatus current_status;
-    GError *error;
+    GError *error = NULL;
     gboolean pin1_enabled;
     gboolean pin2_enabled;
 
@@ -2258,6 +2323,7 @@ modem_3gpp_load_enabled_facility_locks (MMIfaceModem3gpp *self,
     LoadEnabledFacilityLocksContext *ctx;
     GTask *task;
     QmiClient *client = NULL;
+    MMPort *port;
 
     if (!MM_BROADBAND_MODEM_QMI (self)->priv->dms_uim_deprecated) {
         if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
@@ -2286,8 +2352,20 @@ modem_3gpp_load_enabled_facility_locks (MMIfaceModem3gpp *self,
     task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, (GDestroyNotify)load_enabled_facility_locks_context_free);
 
-    /* DMS uses get_ck_status and get_pin_status to probe facilities
-     * UIM uses get_card_status and get_configuration
+    /* If tagged by udev, perform a reduced facility lock query via DMS
+     * by skipping get_ck_status and process get_pin_status only
+     */
+    port = MM_PORT (mm_broadband_modem_qmi_peek_port_qmi (MM_BROADBAND_MODEM_QMI (self)));
+    if (mm_kernel_device_get_global_property_as_boolean (mm_port_peek_kernel_device (port),
+                                                         "ID_MM_QMI_FACILITY_LOCK_QUERY_REDUCED")) {
+        mm_obj_dbg (self, "performing reduced facility lock query (DMS)");
+        get_sim_lock_status_via_pin_status (task);
+        return;
+    }
+
+    /* Regular facility lock query
+     * DMS uses get_ck_status and get_pin_status to probe facilities
+     * UIM uses get_configuration and get_card_status
      */
     if (!MM_BROADBAND_MODEM_QMI (self)->priv->dms_uim_deprecated)
         get_next_facility_lock_status_via_dms (task);
@@ -2801,8 +2879,6 @@ modem_3gpp_run_registration_checks_finish (MMIfaceModem3gpp *self,
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
-#if !defined WITH_NEWEST_QMI_COMMANDS
-
 static void
 common_process_serving_system_3gpp (MMBroadbandModemQmi *self,
                                     QmiMessageNasGetServingSystemOutput *response_output,
@@ -3064,8 +3140,6 @@ get_serving_system_3gpp_ready (QmiClientNas *client,
     qmi_message_nas_get_serving_system_output_unref (output);
 }
 
-#else /* WITH_NEWEST_QMI_COMMANDS */
-
 static gboolean
 process_common_info (QmiNasServiceStatus service_status,
                      gboolean domain_valid,
@@ -3211,7 +3285,6 @@ process_gsm_info (MMBroadbandModemQmi *self,
                 NULL, NULL, /* dtm_support */
                 NULL)) {
             mm_obj_dbg (self, "no GSM service reported");
-            /* No GSM service */
             return FALSE;
         }
     } else {
@@ -3235,7 +3308,6 @@ process_gsm_info (MMBroadbandModemQmi *self,
                 NULL, NULL, /* dtm_support */
                 NULL)) {
             mm_obj_dbg (self, "no GSM service reported");
-            /* No GSM service */
             return FALSE;
         }
     }
@@ -3320,7 +3392,6 @@ process_wcdma_info (MMBroadbandModemQmi *self,
                 NULL, NULL, /* primary_scrambling_code */
                 NULL)) {
             mm_obj_dbg (self, "no WCDMA service reported");
-            /* No GSM service */
             return FALSE;
         }
     } else {
@@ -3345,7 +3416,6 @@ process_wcdma_info (MMBroadbandModemQmi *self,
                 NULL, NULL, /* primary_scrambling_code */
                 NULL)) {
             mm_obj_dbg (self, "no WCDMA service reported");
-            /* No GSM service */
             return FALSE;
         }
     }
@@ -3430,7 +3500,6 @@ process_lte_info (MMBroadbandModemQmi *self,
                 &tac_valid,            &tac,
                 NULL)) {
             mm_obj_dbg (self, "no LTE service reported");
-            /* No GSM service */
             return FALSE;
         }
     } else {
@@ -3453,7 +3522,6 @@ process_lte_info (MMBroadbandModemQmi *self,
                 &tac_valid,            &tac,
                 NULL)) {
             mm_obj_dbg (self, "no LTE service reported");
-            /* No GSM service */
             return FALSE;
         }
     }
@@ -3479,6 +3547,112 @@ process_lte_info (MMBroadbandModemQmi *self,
     return TRUE;
 }
 
+static gboolean
+process_nr5g_info (MMBroadbandModemQmi *self,
+                  QmiMessageNasGetSystemInfoOutput *response_output,
+                  QmiIndicationNasSystemInfoOutput *indication_output,
+                  MMModem3gppRegistrationState *mm_cs_registration_state,
+                  MMModem3gppRegistrationState *mm_ps_registration_state,
+                  guint16 *mm_lac,
+                  guint16 *mm_tac,
+                  guint32 *mm_cid,
+                  gchar **mm_operator_id)
+{
+    QmiNasServiceStatus service_status;
+    gboolean domain_valid;
+    QmiNasNetworkServiceDomain domain;
+    gboolean roaming_status_valid;
+    QmiNasRoamingStatus roaming_status;
+    gboolean forbidden_valid;
+    gboolean forbidden;
+    gboolean lac_valid;
+    guint16 lac;
+    gboolean tac_valid;
+    guint16 tac;
+    gboolean cid_valid;
+    guint32 cid;
+    gboolean network_id_valid;
+    const gchar *mcc;
+    const gchar *mnc;
+
+    g_assert ((response_output != NULL && indication_output == NULL) ||
+              (response_output == NULL && indication_output != NULL));
+
+    *mm_ps_registration_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
+    *mm_cs_registration_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
+    *mm_lac = 0;
+    *mm_tac = 0;
+    *mm_cid = 0;
+    g_free (*mm_operator_id);
+    *mm_operator_id = NULL;
+
+    if (response_output) {
+        if (!qmi_message_nas_get_system_info_output_get_nr5g_service_status_info (
+                response_output,
+                &service_status,
+                NULL, /* true_service_status */
+                NULL, /* preferred_data_path */
+                NULL) ||
+            !qmi_message_nas_get_system_info_output_get_nr5g_system_info (
+                response_output,
+                &domain_valid,         &domain,
+                NULL, NULL, /* service_capability */
+                &roaming_status_valid, &roaming_status,
+                &forbidden_valid,      &forbidden,
+                &lac_valid,            &lac,
+                &cid_valid,            &cid,
+                NULL, NULL, NULL, /* registration_reject_info */
+                &network_id_valid,     &mcc, &mnc,
+                &tac_valid,            &tac,
+                NULL)) {
+            mm_obj_dbg (self, "no NR5G service reported");
+            return FALSE;
+        }
+    } else {
+        if (!qmi_indication_nas_system_info_output_get_nr5g_service_status_info (
+                indication_output,
+                &service_status,
+                NULL, /* true_service_status */
+                NULL, /* preferred_data_path */
+                NULL) ||
+            !qmi_indication_nas_system_info_output_get_nr5g_system_info (
+                indication_output,
+                &domain_valid,         &domain,
+                NULL, NULL, /* service_capability */
+                &roaming_status_valid, &roaming_status,
+                &forbidden_valid,      &forbidden,
+                &lac_valid,            &lac,
+                &cid_valid,            &cid,
+                NULL, NULL, NULL, /* registration_reject_info */
+                &network_id_valid,     &mcc, &mnc,
+                &tac_valid,            &tac,
+                NULL)) {
+            mm_obj_dbg (self, "no NR5G service reported");
+            return FALSE;
+        }
+    }
+
+    if (!process_common_info (service_status,
+                              domain_valid,         domain,
+                              roaming_status_valid, roaming_status,
+                              forbidden_valid,      forbidden,
+                              lac_valid,            lac,
+                              tac_valid,            tac,
+                              cid_valid,            cid,
+                              network_id_valid,     mcc, mnc,
+                              mm_cs_registration_state,
+                              mm_ps_registration_state,
+                              mm_lac,
+                              mm_tac,
+                              mm_cid,
+                              mm_operator_id)) {
+        mm_obj_dbg (self, "no NR5G service registered");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 static void
 common_process_system_info_3gpp (MMBroadbandModemQmi *self,
                                  QmiMessageNasGetSystemInfoOutput *response_output,
@@ -3490,7 +3664,8 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
     guint16 tac;
     guint32 cid;
     gchar *operator_id;
-    gboolean has_lte_info;
+    gboolean has_nr5g_info = FALSE;
+    gboolean has_lte_info = FALSE;
 
     ps_registration_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
     cs_registration_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
@@ -3500,17 +3675,23 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
     operator_id = NULL;
 
     /* Process infos, with the following priority:
-     *   LTE > WCDMA > GSM
+     *   NR5G > LTE > WCDMA > GSM
      * The first one giving results will be the one reported.
      */
-    has_lte_info = process_lte_info (self, response_output, indication_output,
-                                     &cs_registration_state,
-                                     &ps_registration_state,
-                                     &lac,
-                                     &tac,
-                                     &cid,
-                                     &operator_id);
-    if (!has_lte_info &&
+    if (!(has_nr5g_info = process_nr5g_info (self, response_output, indication_output,
+                                             &cs_registration_state,
+                                             &ps_registration_state,
+                                             &lac,
+                                             &tac,
+                                             &cid,
+                                             &operator_id)) &&
+        !(has_lte_info = process_lte_info (self, response_output, indication_output,
+                                           &cs_registration_state,
+                                           &ps_registration_state,
+                                           &lac,
+                                           &tac,
+                                           &cid,
+                                           &operator_id)) &&
         !process_wcdma_info (self, response_output, indication_output,
                              &cs_registration_state,
                              &ps_registration_state,
@@ -3523,7 +3704,7 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
                            &lac,
                            &cid,
                            &operator_id)) {
-        mm_obj_dbg (self, "no service (GSM, WCDMA or LTE) reported");
+        mm_obj_dbg (self, "no service (GSM, WCDMA, LTE or NR5G) reported");
     }
 
     /* Cache current operator ID */
@@ -3535,10 +3716,12 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
     /* Report new registration states */
     mm_iface_modem_3gpp_update_cs_registration_state (MM_IFACE_MODEM_3GPP (self), cs_registration_state);
     mm_iface_modem_3gpp_update_ps_registration_state (MM_IFACE_MODEM_3GPP (self), ps_registration_state);
-    if (has_lte_info)
-        mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self), ps_registration_state);
-    else
-        mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self), MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
+    mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self),
+                                                       has_lte_info ?
+                                                       ps_registration_state : MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
+    mm_iface_modem_3gpp_update_5gs_registration_state (MM_IFACE_MODEM_3GPP (self),
+                                                       has_nr5g_info ?
+                                                       ps_registration_state : MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
     mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, tac, cid);
 }
 
@@ -3551,23 +3734,46 @@ get_system_info_ready (QmiClientNas *client,
     QmiMessageNasGetSystemInfoOutput *output;
     GError *error = NULL;
 
+    self = g_task_get_source_object (task);
+
     output = qmi_client_nas_get_system_info_finish (client, res, &error);
     if (!output) {
-        g_prefix_error (&error, "QMI operation failed: ");
-        g_task_return_error (task, error);
-        g_object_unref (task);
+        mm_obj_dbg (self, "couldn't get system info: '%s', falling back to nas get serving system 3gpp",
+                    error->message);
+        qmi_client_nas_get_serving_system (QMI_CLIENT_NAS (client),
+                                           NULL,
+                                           10,
+                                           NULL,
+                                           (GAsyncReadyCallback)get_serving_system_3gpp_ready,
+                                           task);
+        g_clear_error (&error);
         return;
     }
 
     if (!qmi_message_nas_get_system_info_output_get_result (output, &error)) {
+        qmi_message_nas_get_system_info_output_unref (output);
+        if (g_error_matches (error,
+                             QMI_PROTOCOL_ERROR,
+                             QMI_PROTOCOL_ERROR_INVALID_QMI_COMMAND) ||
+            g_error_matches (error,
+                             QMI_PROTOCOL_ERROR,
+                             QMI_PROTOCOL_ERROR_NOT_SUPPORTED)) {
+            mm_obj_dbg (self, "couldn't get system info: '%s', falling back to nas get serving system 3gpp",
+                        error->message);
+            qmi_client_nas_get_serving_system (QMI_CLIENT_NAS (client),
+                                               NULL,
+                                               10,
+                                               NULL,
+                                               (GAsyncReadyCallback)get_serving_system_3gpp_ready,
+                                               task);
+            g_clear_error (&error);
+            return;
+        }
         g_prefix_error (&error, "Couldn't get system info: ");
         g_task_return_error (task, error);
-        qmi_message_nas_get_system_info_output_unref (output);
         g_object_unref (task);
         return;
     }
-
-    self = g_task_get_source_object (task);
 
     common_process_system_info_3gpp (self, output, NULL);
 
@@ -3575,8 +3781,6 @@ get_system_info_ready (QmiClientNas *client,
     g_object_unref (task);
     qmi_message_nas_get_system_info_output_unref (output);
 }
-
-#endif /* WITH_NEWEST_QMI_COMMANDS */
 
 static void
 modem_3gpp_run_registration_checks (MMIfaceModem3gpp    *self,
@@ -3597,21 +3801,12 @@ modem_3gpp_run_registration_checks (MMIfaceModem3gpp    *self,
 
     task = g_task_new (self, NULL, callback, user_data);
 
-#if defined WITH_NEWEST_QMI_COMMANDS
     qmi_client_nas_get_system_info (QMI_CLIENT_NAS (client),
                                     NULL,
                                     10,
                                     NULL,
                                     (GAsyncReadyCallback)get_system_info_ready,
                                     task);
-#else
-    qmi_client_nas_get_serving_system (QMI_CLIENT_NAS (client),
-                                       NULL,
-                                       10,
-                                       NULL,
-                                       (GAsyncReadyCallback)get_serving_system_3gpp_ready,
-                                       task);
-#endif /* WITH_NEWEST_QMI_COMMANDS */
 }
 
 /*****************************************************************************/
@@ -3620,6 +3815,7 @@ modem_3gpp_run_registration_checks (MMIfaceModem3gpp    *self,
 typedef struct {
     QmiClientNas *client;
     gboolean enable; /* TRUE for enabling, FALSE for disabling */
+    gboolean system_info_checked;
 } UnsolicitedRegistrationEventsContext;
 
 static void
@@ -3658,6 +3854,9 @@ modem_3gpp_enable_disable_unsolicited_registration_events_finish (MMIfaceModem3g
 }
 
 static void
+common_enable_disable_unsolicited_registration_events_serving_system (GTask *task);
+
+static void
 ri_serving_system_or_system_info_ready (QmiClientNas *client,
                                         GAsyncResult *res,
                                         GTask        *task)
@@ -3672,23 +3871,27 @@ ri_serving_system_or_system_info_ready (QmiClientNas *client,
 
     output = qmi_client_nas_register_indications_finish (client, res, &error);
     if (!output || !qmi_message_nas_register_indications_output_get_result (output, &error)) {
-        mm_obj_dbg (self, "couldn't register indications: '%s'", error->message);
-        if (ctx->enable) {
-#if defined WITH_NEWEST_QMI_COMMANDS
-            mm_obj_dbg (self, "assuming system info indications are always enabled");
-#else
-            mm_obj_dbg (self, "assuming serving system indications are always enabled");
-#endif
+        if (!ctx->system_info_checked) {
+            mm_obj_dbg (self, "couldn't register system info indication: '%s', falling-back to serving system", error->message);
+            ctx->system_info_checked = TRUE;
+            common_enable_disable_unsolicited_registration_events_serving_system (task);
+            g_clear_error (&error);
+            return;
         }
+
+
+        if (ctx->enable)
+            mm_obj_dbg (self, "couldn't register serving system indications: '%s', assuming always enabled", error->message);
     }
+
+    if (!ctx->system_info_checked)
+        ctx->system_info_checked = TRUE;
 
     /* Just ignore errors for now */
     self->priv->unsolicited_registration_events_enabled = ctx->enable;
     g_task_return_boolean (task, TRUE);
     g_object_unref (task);
 }
-
-#if !defined WITH_NEWEST_QMI_COMMANDS
 
 static void
 common_enable_disable_unsolicited_registration_events_serving_system (GTask *task)
@@ -3709,8 +3912,6 @@ common_enable_disable_unsolicited_registration_events_serving_system (GTask *tas
         task);
 }
 
-#else /* WITH_NEWEST_QMI_COMMANDS */
-
 static void
 common_enable_disable_unsolicited_registration_events_system_info (GTask *task)
 {
@@ -3720,6 +3921,11 @@ common_enable_disable_unsolicited_registration_events_system_info (GTask *task)
     ctx = g_task_get_task_data (task);
     input = qmi_message_nas_register_indications_input_new ();
     qmi_message_nas_register_indications_input_set_system_info (input, ctx->enable, NULL);
+    /* When enabling, serving system events are turned-off, since some modems have them
+     * active by default. They will be turned-on again if setting system info events fails
+     */
+    if (ctx->enable)
+        qmi_message_nas_register_indications_input_set_serving_system_events (input, FALSE, NULL);
     qmi_message_nas_register_indications_input_set_network_reject_information (input, ctx->enable, FALSE, NULL);
     qmi_client_nas_register_indications (
         ctx->client,
@@ -3729,8 +3935,6 @@ common_enable_disable_unsolicited_registration_events_system_info (GTask *task)
         (GAsyncReadyCallback)ri_serving_system_or_system_info_ready,
         task);
 }
-
-#endif /* WITH_NEWEST_QMI_COMMANDS */
 
 static void
 modem_3gpp_disable_unsolicited_registration_events (MMIfaceModem3gpp    *self,
@@ -3754,11 +3958,7 @@ modem_3gpp_disable_unsolicited_registration_events (MMIfaceModem3gpp    *self,
                                                      callback,
                                                      user_data);
 
-#if defined WITH_NEWEST_QMI_COMMANDS
     common_enable_disable_unsolicited_registration_events_system_info (task);
-#else
-    common_enable_disable_unsolicited_registration_events_serving_system (task);
-#endif /* WITH_NEWEST_QMI_COMMANDS */
 }
 
 static void
@@ -3783,11 +3983,7 @@ modem_3gpp_enable_unsolicited_registration_events (MMIfaceModem3gpp    *self,
                                                      callback,
                                                      user_data);
 
-#if defined WITH_NEWEST_QMI_COMMANDS
     common_enable_disable_unsolicited_registration_events_system_info (task);
-#else
-    common_enable_disable_unsolicited_registration_events_serving_system (task);
-#endif /* WITH_NEWEST_QMI_COMMANDS */
 }
 
 /*****************************************************************************/
@@ -4743,7 +4939,6 @@ common_setup_cleanup_unsolicited_registration_events_finish (MMBroadbandModemQmi
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
-#if defined WITH_NEWEST_QMI_COMMANDS
 static void
 system_info_indication_cb (QmiClientNas *client,
                            QmiIndicationNasSystemInfoOutput *output,
@@ -4752,8 +4947,6 @@ system_info_indication_cb (QmiClientNas *client,
     if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (self)))
         common_process_system_info_3gpp (self, NULL, output);
 }
-
-#else /* WITH_NEWEST_QMI_COMMANDS */
 
 static void
 serving_system_indication_cb (QmiClientNas *client,
@@ -4765,8 +4958,6 @@ serving_system_indication_cb (QmiClientNas *client,
     else if (mm_iface_modem_is_cdma (MM_IFACE_MODEM (self)))
         common_process_serving_system_cdma (self, NULL, output);
 }
-
-#endif
 
 /* network reject indications enabled in both with/without newest QMI commands */
 static void
@@ -4823,7 +5014,6 @@ common_setup_cleanup_unsolicited_registration_events (MMBroadbandModemQmi *self,
     /* Store new state */
     self->priv->unsolicited_registration_events_setup = enable;
 
-#if defined WITH_NEWEST_QMI_COMMANDS
     /* Connect/Disconnect "System Info" indications */
     if (enable) {
         g_assert (self->priv->system_info_indication_id == 0);
@@ -4837,7 +5027,6 @@ common_setup_cleanup_unsolicited_registration_events (MMBroadbandModemQmi *self,
         g_signal_handler_disconnect (client, self->priv->system_info_indication_id);
         self->priv->system_info_indication_id = 0;
     }
-#else
     /* Connect/Disconnect "Serving System" indications */
     if (enable) {
         g_assert (self->priv->serving_system_indication_id == 0);
@@ -4851,7 +5040,6 @@ common_setup_cleanup_unsolicited_registration_events (MMBroadbandModemQmi *self,
         g_signal_handler_disconnect (client, self->priv->serving_system_indication_id);
         self->priv->serving_system_indication_id = 0;
     }
-#endif /* WITH_NEWEST_QMI_COMMANDS */
 
     /* Connect/Disconnect "Network Reject" indications */
     if (enable) {
@@ -5028,8 +5216,6 @@ common_enable_disable_unsolicited_events_data_system_status (GTask *task)
                                      task);
 }
 
-#if !defined WITH_NEWEST_QMI_COMMANDS
-
 static void
 ser_signal_strength_ready (QmiClientNas *client,
                            GAsyncResult *res,
@@ -5072,8 +5258,15 @@ common_enable_disable_unsolicited_events_signal_strength (GTask *task)
     g_autoptr(GArray)                            thresholds = NULL;
 
     /* The device doesn't really like to have many threshold values, so don't
-     * grow this array without checking first */
-    static const gint8 thresholds_data[] = { -80, -40, 0, 40, 80 };
+     * grow this array without checking first
+     * The values are chosen towards their results through MM_RSSI_TO_QUALITY
+     *   -106 dBm gives 11%
+     *    -94 dBm gives 30%
+     *    -82 dBm gives 50%
+     *    -69 dBm gives 70%
+     *    -57 dBm gives 90%
+     */
+    static const gint8 thresholds_data[] = { -106, -94, -82, -69, -57 };
 
     ctx = g_task_get_task_data (task);
 
@@ -5097,8 +5290,6 @@ common_enable_disable_unsolicited_events_signal_strength (GTask *task)
         task);
 }
 
-#else /* WITH_NEWEST_QMI_COMMANDS */
-
 static void
 ri_signal_info_ready (QmiClientNas *client,
                       GAsyncResult *res,
@@ -5113,11 +5304,14 @@ ri_signal_info_ready (QmiClientNas *client,
     ctx  = g_task_get_task_data     (task);
 
     output = qmi_client_nas_register_indications_finish (client, res, &error);
-    if (!output || !qmi_message_nas_register_indications_output_get_result (output, &error))
-        mm_obj_dbg (self, "couldn't register signal info indications: '%s'", error->message);
-    else {
+    if (!output || !qmi_message_nas_register_indications_output_get_result (output, &error)) {
+        mm_obj_dbg (self, "couldn't register signal info indications: '%s', falling back to signal strength", error->message);
+        common_enable_disable_unsolicited_events_signal_strength (task);
+        g_clear_error (&error);
+        return;
+    } else {
         /* Disable access technology and signal quality polling if we can use the indications */
-        mm_obj_dbg (self, "signal strength indications enabled: polling disabled");
+        mm_obj_dbg (self, "signal info indications enabled: polling disabled");
         g_object_set (self,
                       MM_IFACE_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED,      TRUE,
                       MM_IFACE_MODEM_PERIODIC_ACCESS_TECH_CHECK_DISABLED, TRUE,
@@ -5210,8 +5404,6 @@ common_enable_disable_unsolicited_events_signal_info_config (GTask *task)
         task);
 }
 
-#endif /* WITH_NEWEST_QMI_COMMANDS */
-
 static void
 common_enable_disable_unsolicited_events (MMBroadbandModemQmi *self,
                                           gboolean             enable,
@@ -5251,11 +5443,7 @@ common_enable_disable_unsolicited_events (MMBroadbandModemQmi *self,
     g_task_set_task_data (task, ctx, (GDestroyNotify)enable_unsolicited_events_context_free);
 
     if (ctx->client_nas) {
-#if defined WITH_NEWEST_QMI_COMMANDS
         common_enable_disable_unsolicited_events_signal_info_config (task);
-#else
-        common_enable_disable_unsolicited_events_signal_strength (task);
-#endif /* WITH_NEWEST_QMI_COMMANDS */
         return;
     }
 
@@ -5379,7 +5567,7 @@ nas_event_report_indication_cb (QmiClientNas                      *client,
             guint8 quality;
 
             /* This signal strength comes as negative dBms */
-            quality = STRENGTH_TO_QUALITY (signal_strength);
+            quality = MM_RSSI_TO_QUALITY (signal_strength);
 
             mm_obj_dbg (self, "signal strength indication (%s): %d dBm --> %u%%",
                         qmi_nas_radio_interface_get_string (signal_strength_radio_interface),
@@ -5399,8 +5587,6 @@ nas_event_report_indication_cb (QmiClientNas                      *client,
     }
 }
 
-#if defined WITH_NEWEST_QMI_COMMANDS
-
 static void
 nas_signal_info_indication_cb (QmiClientNas                     *client,
                                QmiIndicationNasSignalInfoOutput *output,
@@ -5411,6 +5597,11 @@ nas_signal_info_indication_cb (QmiClientNas                     *client,
     gint8 gsm_rssi = 0;
     gint8 wcdma_rssi = 0;
     gint8 lte_rssi = 0;
+    gint16 nr5g_rsrp = RSRP_MAX + 1;
+    /* Multiplying SNR_MAX by 10 as QMI gives SNR level
+     * as a scaled integer in units of 0.1 dB. */
+    gint16 nr5g_snr = 10 * SNR_MAX + 10;
+    gint16 nr5g_rsrq = RSRQ_MAX + 1;
     guint8 quality;
     MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
 
@@ -5419,6 +5610,11 @@ nas_signal_info_indication_cb (QmiClientNas                     *client,
     qmi_indication_nas_signal_info_output_get_gsm_signal_strength (output, &gsm_rssi, NULL);
     qmi_indication_nas_signal_info_output_get_wcdma_signal_strength (output, &wcdma_rssi, NULL, NULL);
     qmi_indication_nas_signal_info_output_get_lte_signal_strength (output, &lte_rssi, NULL, NULL, NULL, NULL);
+    qmi_indication_nas_signal_info_output_get_5g_signal_strength (output, &nr5g_rsrp, &nr5g_snr, NULL);
+    qmi_indication_nas_signal_info_output_get_5g_signal_strength_extended (output, &nr5g_rsrq, NULL);
+
+    /* Scale to integer values in units of 1 dB/dBm, if any */
+    nr5g_snr = 0.1 * nr5g_snr;
 
     if (common_signal_info_get_quality (self,
                                         cdma1x_rssi,
@@ -5426,6 +5622,9 @@ nas_signal_info_indication_cb (QmiClientNas                     *client,
                                         gsm_rssi,
                                         wcdma_rssi,
                                         lte_rssi,
+                                        nr5g_rsrp,
+                                        nr5g_snr,
+                                        nr5g_rsrq,
                                         &quality,
                                         &act)) {
         mm_iface_modem_update_signal_quality (MM_IFACE_MODEM (self), quality);
@@ -5435,8 +5634,6 @@ nas_signal_info_indication_cb (QmiClientNas                     *client,
             (MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK | MM_IFACE_MODEM_CDMA_ALL_ACCESS_TECHNOLOGIES_MASK));
     }
 }
-
-#endif /* WITH_NEWEST_QMI_COMMANDS */
 
 static void
 common_setup_cleanup_unsolicited_events (MMBroadbandModemQmi *self,
@@ -5482,7 +5679,6 @@ common_setup_cleanup_unsolicited_events (MMBroadbandModemQmi *self,
             self->priv->nas_event_report_indication_id = 0;
         }
 
-#if defined WITH_NEWEST_QMI_COMMANDS
         if (enable) {
             g_assert (self->priv->nas_signal_info_indication_id == 0);
             self->priv->nas_signal_info_indication_id =
@@ -5494,7 +5690,6 @@ common_setup_cleanup_unsolicited_events (MMBroadbandModemQmi *self,
             g_signal_handler_disconnect (client_nas, self->priv->nas_signal_info_indication_id);
             self->priv->nas_signal_info_indication_id = 0;
         }
-#endif /* WITH_NEWEST_QMI_COMMANDS */
     }
 
     if (client_wds) {
@@ -5609,9 +5804,10 @@ modem_3gpp_profile_manager_check_format_finish (MMIfaceModem3gppProfileManager  
     /* use default string comparison method */
     if (apn_cmp)
         *apn_cmp = NULL;
-    /* we support everything! */
     if (profile_cmp_flags)
-        *profile_cmp_flags = 0;
+        *profile_cmp_flags = (MM_3GPP_PROFILE_CMP_FLAGS_NO_ACCESS_TYPE_PREFERENCE |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_ROAMING_ALLOWANCE |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_PROFILE_SOURCE);
     return TRUE;
 }
 
@@ -5931,18 +6127,24 @@ store_profile_context_free (StoreProfileContext *ctx)
     g_slice_free (StoreProfileContext, ctx);
 }
 
-static gint
+static gboolean
 modem_3gpp_profile_manager_store_profile_finish (MMIfaceModem3gppProfileManager  *self,
                                                  GAsyncResult                    *res,
+                                                 gint                            *out_profile_id,
+                                                 MMBearerApnType                 *out_apn_type,
                                                  GError                         **error)
 {
     StoreProfileContext *ctx;
 
     if (!g_task_propagate_boolean (G_TASK (res), error))
-        return MM_3GPP_PROFILE_ID_UNKNOWN;
+        return FALSE;
 
     ctx = g_task_get_task_data (G_TASK (res));
-    return ctx->profile_id;
+    if (out_profile_id)
+        *out_profile_id = ctx->profile_id;
+    if (out_apn_type)
+        *out_apn_type = MM_BEARER_APN_TYPE_NONE;
+    return TRUE;
 }
 
 static void store_profile_run (GTask *task);
@@ -6087,6 +6289,7 @@ store_profile_run (GTask *task)
 static void
 modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager *self,
                                           MM3gppProfile                  *profile,
+                                          const gchar                    *index_field,
                                           GAsyncReadyCallback             callback,
                                           gpointer                        user_data)
 {
@@ -6096,6 +6299,8 @@ modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager *self,
     MMBearerIpFamily      ip_type;
     MMBearerApnType       apn_type;
     MMBearerAllowedAuth   allowed_auth;
+
+    g_assert (g_strcmp0 (index_field, "profile-id") == 0);
 
     if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
                                       QMI_SERVICE_WDS, &client,
@@ -6176,6 +6381,7 @@ delete_profile_ready (QmiClientWds *client,
 static void
 modem_3gpp_profile_manager_delete_profile (MMIfaceModem3gppProfileManager *self,
                                            MM3gppProfile                  *profile,
+                                           const gchar                    *index_field,
                                            GAsyncReadyCallback             callback,
                                            gpointer                        user_data)
 {
@@ -6183,6 +6389,8 @@ modem_3gpp_profile_manager_delete_profile (MMIfaceModem3gppProfileManager *self,
     QmiClient *client = NULL;
     gint       profile_id;
     g_autoptr(QmiMessageWdsDeleteProfileInput) input = NULL;
+
+    g_assert (g_strcmp0 (index_field, "profile-id") == 0);
 
     if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
                                       QMI_SERVICE_WDS, &client,
@@ -10051,6 +10259,7 @@ set_initial_eps_bearer_modify_profile (GTask *task)
 
     mm_iface_modem_3gpp_profile_manager_set_profile (MM_IFACE_MODEM_3GPP_PROFILE_MANAGER (self),
                                                      ctx->profile,
+                                                     "profile-id",
                                                      TRUE,
                                                      (GAsyncReadyCallback)set_initial_eps_bearer_modify_profile_ready,
                                                      task);
@@ -10092,6 +10301,7 @@ set_initial_eps_bearer_delete_mm_profile (GTask *task)
 
     modem_3gpp_profile_manager_delete_profile (MM_IFACE_MODEM_3GPP_PROFILE_MANAGER (self),
                                                ctx->profile,
+                                               "profile-id",
                                                (GAsyncReadyCallback)set_initial_eps_bearer_delete_mm_profile_ready,
                                                task);
 }
@@ -12399,8 +12609,6 @@ iface_modem_init (MMIfaceModem *iface)
     /* Enabling/disabling */
     iface->modem_power_up = modem_power_up;
     iface->modem_power_up_finish = modem_power_up_down_off_finish;
-    iface->fcc_unlock = mm_shared_qmi_fcc_unlock;
-    iface->fcc_unlock_finish = mm_shared_qmi_fcc_unlock_finish;
     iface->modem_after_power_up = NULL;
     iface->modem_after_power_up_finish = NULL;
     iface->modem_power_down = modem_power_down;

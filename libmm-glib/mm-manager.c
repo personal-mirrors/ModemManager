@@ -1,6 +1,6 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /*
- * libmm -- Access modem status & information from glib applications
+ * libmm-glib -- Access modem status & information from glib applications
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -71,6 +71,7 @@ get_proxy_type (GDBusObjectManagerClient *manager,
         g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Voice",                    GSIZE_TO_POINTER (MM_TYPE_MODEM_VOICE));
         g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Location",                 GSIZE_TO_POINTER (MM_TYPE_MODEM_LOCATION));
         g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Time",                     GSIZE_TO_POINTER (MM_TYPE_MODEM_TIME));
+        g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Sar",                      GSIZE_TO_POINTER (MM_TYPE_MODEM_SAR));
         g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Signal",                   GSIZE_TO_POINTER (MM_TYPE_MODEM_SIGNAL));
         g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Firmware",                 GSIZE_TO_POINTER (MM_TYPE_MODEM_FIRMWARE));
         g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Oma",                      GSIZE_TO_POINTER (MM_TYPE_MODEM_OMA));

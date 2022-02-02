@@ -1,6 +1,6 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /*
- * libmm -- Access modem status & information from glib applications
+ * libmm-glib -- Access modem status & information from glib applications
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -51,6 +51,7 @@
 # include <mm-modem-firmware.h>
 # include <mm-modem-signal.h>
 # include <mm-modem-oma.h>
+# include <mm-modem-sar.h>
 #endif
 
 #if defined (_LIBMM_INSIDE_MM) ||    \
@@ -83,6 +84,8 @@
 #include <mm-pco.h>
 #include <mm-sim-preferred-network.h>
 #include <mm-3gpp-profile.h>
+#include <mm-signal-threshold-properties.h>
+#include <mm-nr5g-registration-settings.h>
 #include <mm-compat.h>
 
 /* generated */

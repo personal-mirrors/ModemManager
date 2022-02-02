@@ -33,6 +33,8 @@
 static void iface_modem_init  (MMIfaceModem  *iface);
 static void shared_telit_init (MMSharedTelit *iface);
 
+static MMIfaceModem *iface_modem_parent;
+
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbimTelit, mm_broadband_modem_mbim_telit, MM_TYPE_BROADBAND_MODEM_MBIM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_SHARED_TELIT, shared_telit_init))
@@ -65,7 +67,7 @@ load_supported_modes_ready (MMIfaceModem *self,
 
     response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
     if (error) {
-        g_prefix_error (&error, "ceneric query of supported 3GPP networks with WS46=? failed: ");
+        g_prefix_error (&error, "generic query of supported 3GPP networks with WS46=? failed: ");
         g_task_return_error (task, error);
         g_object_unref (task);
         return;
@@ -156,6 +158,8 @@ mm_broadband_modem_mbim_telit_init (MMBroadbandModemMbimTelit *self)
 static void
 iface_modem_init (MMIfaceModem *iface)
 {
+    iface_modem_parent = g_type_interface_peek_parent (iface);
+
     iface->set_current_bands = mm_shared_telit_modem_set_current_bands;
     iface->set_current_bands_finish = mm_shared_telit_modem_set_current_bands_finish;
     iface->load_current_bands = mm_shared_telit_modem_load_current_bands;
@@ -170,9 +174,16 @@ iface_modem_init (MMIfaceModem *iface)
     iface->set_current_modes_finish = mm_shared_telit_set_current_modes_finish;
 }
 
+static MMIfaceModem *
+peek_parent_modem_interface (MMSharedTelit *self)
+{
+    return iface_modem_parent;
+}
+
 static void
 shared_telit_init (MMSharedTelit *iface)
 {
+    iface->peek_parent_modem_interface = peek_parent_modem_interface;
 }
 
 static void

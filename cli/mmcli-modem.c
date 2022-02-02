@@ -395,6 +395,7 @@ print_modem_info (void)
         const gchar *operator_code = NULL;
         const gchar *operator_name = NULL;
         const gchar *registration = NULL;
+        const gchar *packet_service_state = NULL;
         const gchar *eps_ue_mode = NULL;
         GList       *pco_list = NULL;
         const gchar *initial_eps_bearer_path = NULL;
@@ -402,6 +403,8 @@ print_modem_info (void)
         gchar       *initial_eps_bearer_ip_family_str = NULL;
         const gchar *initial_eps_bearer_user = NULL;
         const gchar *initial_eps_bearer_password = NULL;
+        const gchar *nr5g_registration_settings_mico_mode_str = NULL;
+        const gchar *nr5g_registration_settings_drx_cycle_str = NULL;
 
         if (ctx->modem_3gpp) {
             imei = mm_modem_3gpp_get_imei (ctx->modem_3gpp);
@@ -409,6 +412,7 @@ print_modem_info (void)
             operator_code = mm_modem_3gpp_get_operator_code (ctx->modem_3gpp);
             operator_name = mm_modem_3gpp_get_operator_name (ctx->modem_3gpp);
             registration = mm_modem_3gpp_registration_state_get_string (mm_modem_3gpp_get_registration_state (ctx->modem_3gpp));
+            packet_service_state = mm_modem_3gpp_packet_service_state_get_string (mm_modem_3gpp_get_packet_service_state (ctx->modem_3gpp));
             eps_ue_mode = mm_modem_3gpp_eps_ue_mode_operation_get_string (mm_modem_3gpp_get_eps_ue_mode_operation (ctx->modem_3gpp));
             pco_list = mm_modem_3gpp_get_pco (ctx->modem_3gpp);
             initial_eps_bearer_path = mm_modem_3gpp_get_initial_eps_bearer_path (ctx->modem_3gpp);
@@ -424,19 +428,32 @@ print_modem_info (void)
                     initial_eps_bearer_password      = mm_bearer_properties_get_password (initial_eps_bearer_properties);
                 }
             }
+
+            if (mm_modem_get_current_capabilities (ctx->modem) & (MM_MODEM_CAPABILITY_5GNR)) {
+                MMNr5gRegistrationSettings *nr5g_registration_settings;
+
+                nr5g_registration_settings = mm_modem_3gpp_peek_nr5g_registration_settings (ctx->modem_3gpp);
+                if (nr5g_registration_settings) {
+                    nr5g_registration_settings_mico_mode_str = mm_modem_3gpp_mico_mode_get_string (mm_nr5g_registration_settings_get_mico_mode (nr5g_registration_settings));
+                    nr5g_registration_settings_drx_cycle_str = mm_modem_3gpp_drx_cycle_get_string (mm_nr5g_registration_settings_get_drx_cycle (nr5g_registration_settings));
+                }
+            }
         }
 
-        mmcli_output_string      (MMC_F_3GPP_IMEI,          imei);
-        mmcli_output_string_list (MMC_F_3GPP_ENABLED_LOCKS, facility_locks);
-        mmcli_output_string      (MMC_F_3GPP_OPERATOR_ID,   operator_code);
-        mmcli_output_string      (MMC_F_3GPP_OPERATOR_NAME, operator_name);
-        mmcli_output_string      (MMC_F_3GPP_REGISTRATION,  registration);
-        mmcli_output_string      (MMC_F_3GPP_EPS_UE_MODE,   eps_ue_mode);
+        mmcli_output_string      (MMC_F_3GPP_IMEI,                         imei);
+        mmcli_output_string_list (MMC_F_3GPP_ENABLED_LOCKS,                facility_locks);
+        mmcli_output_string      (MMC_F_3GPP_OPERATOR_ID,                  operator_code);
+        mmcli_output_string      (MMC_F_3GPP_OPERATOR_NAME,                operator_name);
+        mmcli_output_string      (MMC_F_3GPP_REGISTRATION,                 registration);
+        mmcli_output_string      (MMC_F_3GPP_PACKET_SERVICE_STATE,         packet_service_state);
+        mmcli_output_string      (MMC_F_3GPP_EPS_UE_MODE,                  eps_ue_mode);
         mmcli_output_string      (MMC_F_3GPP_EPS_INITIAL_BEARER_PATH,      g_strcmp0 (initial_eps_bearer_path, "/") != 0 ? initial_eps_bearer_path : NULL);
         mmcli_output_string      (MMC_F_3GPP_EPS_BEARER_SETTINGS_APN,      initial_eps_bearer_apn);
         mmcli_output_string_take (MMC_F_3GPP_EPS_BEARER_SETTINGS_IP_TYPE,  initial_eps_bearer_ip_family_str);
         mmcli_output_string      (MMC_F_3GPP_EPS_BEARER_SETTINGS_USER,     initial_eps_bearer_user);
         mmcli_output_string      (MMC_F_3GPP_EPS_BEARER_SETTINGS_PASSWORD, initial_eps_bearer_password);
+        mmcli_output_string      (MMC_F_3GPP_5GNR_REGISTRATION_MICO_MODE,  nr5g_registration_settings_mico_mode_str);
+        mmcli_output_string      (MMC_F_3GPP_5GNR_REGISTRATION_DRX_CYCLE,  nr5g_registration_settings_drx_cycle_str);
         mmcli_output_pco_list    (pco_list);
 
         g_free (facility_locks);

@@ -1,6 +1,6 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /*
- * libmm -- Access modem status & information from glib applications
+ * libmm-glib -- Access modem status & information from glib applications
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -88,6 +88,10 @@ const gchar * const  *mm_sim_get_emergency_numbers (MMSim *self);
 gchar               **mm_sim_dup_emergency_numbers (MMSim *self);
 
 GList*       mm_sim_get_preferred_networks  (MMSim *self);
+
+MMSimType         mm_sim_get_sim_type     (MMSim *self);
+MMSimEsimStatus   mm_sim_get_esim_status  (MMSim *self);
+MMSimRemovability mm_sim_get_removability (MMSim *self);
 
 void     mm_sim_send_pin        (MMSim *self,
                                  const gchar *pin,

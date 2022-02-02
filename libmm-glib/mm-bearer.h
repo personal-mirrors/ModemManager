@@ -1,6 +1,6 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /*
- * libmm -- Access modem status & information from glib applications
+ * libmm-glib -- Access modem status & information from glib applications
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -75,6 +75,8 @@ const gchar  *mm_bearer_get_interface   (MMBearer *self);
 gchar        *mm_bearer_dup_interface   (MMBearer *self);
 
 gboolean      mm_bearer_get_connected   (MMBearer *self);
+
+gboolean      mm_bearer_get_reload_stats_supported (MMBearer *self);
 
 gboolean      mm_bearer_get_suspended   (MMBearer *self);
 

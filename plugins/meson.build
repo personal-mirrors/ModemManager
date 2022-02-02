@@ -42,14 +42,19 @@ plugins_incs = [
   src_inc,
   kerneldevice_inc,
 ]
-plugins_deps = [
-  libmm_glib_dep,
-  mbim_glib_dep,
-  qmi_glib_dep,
-]
+
+plugins_deps = [libmm_glib_dep]
+
+if enable_mbim
+  plugins_deps += mbim_glib_dep
+endif
+
+if enable_qmi
+  plugins_deps += qmi_glib_dep
+endif
 
 # Common Foxconn modem support library (MBIM only)
-if enable_plugins_shared.contains('foxconn')
+if plugins_shared['foxconn']
   foxconn_inc = include_directories('foxconn')
 
   sources = files(
@@ -69,7 +74,7 @@ if enable_plugins_shared.contains('foxconn')
 endif
 
 # common icera support
-if enable_plugins_shared.contains('icera')
+if plugins_shared['icera']
   icera_inc = include_directories('icera')
 
   common_c_args = '-DMM_MODULE_NAME="shared-icera"'
@@ -89,7 +94,7 @@ if enable_plugins_shared.contains('icera')
 endif
 
 # common novatel support
-if enable_plugins_shared.contains('novatel')
+if plugins_shared['novatel']
   novatel_inc = include_directories('novatel')
 
   sources = files(
@@ -105,7 +110,7 @@ if enable_plugins_shared.contains('novatel')
 endif
 
 # common option support
-if enable_plugins_shared.contains('option')
+if plugins_shared['option']
   sources = files(
     'option/mm-broadband-modem-option.c',
     'option/mm-shared.c',
@@ -120,7 +125,7 @@ if enable_plugins_shared.contains('option')
 endif
 
 # common sierra support
-if enable_plugins_shared.contains('sierra')
+if plugins_shared['sierra']
   sierra_inc = include_directories('sierra')
 
   common_c_args = '-DMM_MODULE_NAME="shared-sierra"'
@@ -142,7 +147,7 @@ if enable_plugins_shared.contains('sierra')
 endif
 
 # common telit support
-if enable_plugins_shared.contains('telit')
+if plugins_shared['telit']
   telit_inc = include_directories('telit')
 
   common_c_args = '-DMM_MODULE_NAME="shared-telit"'
@@ -186,7 +191,7 @@ if enable_plugins_shared.contains('telit')
 endif
 
 # common xmm support
-if enable_plugins_shared.contains('xmm')
+if plugins_shared['xmm']
   xmm_inc = include_directories('xmm')
 
   common_c_args = '-DMM_MODULE_NAME="shared-xmm"'
@@ -210,7 +215,7 @@ if enable_plugins_shared.contains('xmm')
 endif
 
 # plugin: altair lte
-if enable_plugins.contains('altair-lte')
+if plugins_options['altair-lte']
   common_c_args = '-DMM_MODULE_NAME="altair-lte"'
 
   sources = files(
@@ -228,7 +233,7 @@ if enable_plugins.contains('altair-lte')
 endif
 
 # plugin: anydata
-if enable_plugins.contains('anydata')
+if plugins_options['anydata']
   sources = files(
     'anydata/mm-broadband-modem-anydata.c',
     'anydata/mm-plugin-anydata.c',
@@ -241,7 +246,7 @@ if enable_plugins.contains('anydata')
 endif
 
 # plugin: broadmobi
-if enable_plugins.contains('broadmobi')
+if plugins_options['broadmobi']
   c_args = [
     '-DMM_MODULE_NAME="broadmobi"',
     '-DTESTUDEVRULESDIR_BROADMOBI="@0@"'.format(plugins_dir / 'broadmobi'),
@@ -256,7 +261,7 @@ if enable_plugins.contains('broadmobi')
 endif
 
 # plugin: cinterion (previously siemens)
-if enable_plugins.contains('cinterion')
+if plugins_options['cinterion']
   common_c_args = [
     '-DMM_MODULE_NAME="cinterion"',
     '-DTESTUDEVRULESDIR_CINTERION="@0@"'.format(plugins_dir / 'cinterion'),
@@ -288,7 +293,7 @@ if enable_plugins.contains('cinterion')
 endif
 
 # plugin: dell
-if enable_plugins.contains('dell')
+if plugins_options['dell']
   incs = plugins_incs + [
     foxconn_inc,
     novatel_inc,
@@ -311,7 +316,7 @@ if enable_plugins.contains('dell')
 endif
 
 # plugin: dlink
-if enable_plugins.contains('dlink')
+if plugins_options['dlink']
   c_args = [
     '-DMM_MODULE_NAME="d-link"',
     '-DTESTUDEVRULESDIR_DLINK="@0@"'.format(plugins_dir / 'dlink'),
@@ -326,7 +331,7 @@ if enable_plugins.contains('dlink')
 endif
 
 # plugin: fibocom
-if enable_plugins.contains('fibocom')
+if plugins_options['fibocom']
   c_args = [
     '-DMM_MODULE_NAME="fibocom"',
     '-DTESTUDEVRULESDIR_FIBOCOM="@0@"'.format(plugins_dir / 'fibocom'),
@@ -341,14 +346,13 @@ if enable_plugins.contains('fibocom')
 endif
 
 # plugin: foxconn
-if enable_plugins.contains('foxconn')
+if plugins_options['foxconn']
   foxconn_dir = plugins_dir / 'foxconn'
 
   c_args = [
     '-DMM_MODULE_NAME="foxconn"',
     '-DTESTUDEVRULESDIR_FOXCONN="@0@"'.format(foxconn_dir),
 	'-DTESTKEYFILE_FOXCONN_T77W968="@0@"'.format(foxconn_dir / 'mm-foxconn-t77w968-carrier-mapping.conf'),
-	'-DTESTKEYFILE_FOXCONN_T99W175="@0@"'.format(foxconn_dir / 'mm-foxconn-t99w175-carrier-mapping.conf'),
   ]
 
   plugins += {'plugin-foxconn': {
@@ -358,13 +362,12 @@ if enable_plugins.contains('foxconn')
 
   plugins_data += files(
     'foxconn/mm-foxconn-t77w968-carrier-mapping.conf',
-    'foxconn/mm-foxconn-t99w175-carrier-mapping.conf',
   )
   plugins_udev_rules += files('foxconn/77-mm-foxconn-port-types.rules')
 endif
 
 # plugin: generic
-if enable_plugins.contains('generic')
+if plugins_options['generic']
   # FIXME
   '''
   15/16 test-service-generic                FAIL            0.02s   killed by signal 5 SIGTRAP
@@ -391,7 +394,7 @@ if enable_plugins.contains('generic')
 endif
 
 # plugin: gosuncn
-if enable_plugins.contains('gosuncn')
+if plugins_options['gosuncn']
   c_args = [
     '-DMM_MODULE_NAME="gosuncn"',
     '-DTESTUDEVRULESDIR_GOSUNCN="@0@"'.format(plugins_dir / 'gosuncn'),
@@ -406,7 +409,7 @@ if enable_plugins.contains('gosuncn')
 endif
 
 # plugin: haier
-if enable_plugins.contains('haier')
+if plugins_options['haier']
   c_args = [
     '-DMM_MODULE_NAME="haier"',
     '-DTESTUDEVRULESDIR_HAIER="@0@"'.format(plugins_dir / 'haier'),
@@ -421,7 +424,7 @@ if enable_plugins.contains('haier')
 endif
 
 # plugin: huawei
-if enable_plugins.contains('huawei')
+if plugins_options['huawei']
   huawei_inc = include_directories('huawei')
 
   common_c_args = ['-DTESTUDEVRULESDIR_HUAWEI="@0@"'.format(plugins_dir / 'huawei')]
@@ -464,7 +467,7 @@ if enable_plugins.contains('huawei')
 endif
 
 # plugin: iridium
-if enable_plugins.contains('iridium')
+if plugins_options['iridium']
   sources = files(
     'iridium/mm-bearer-iridium.c',
     'iridium/mm-broadband-modem-iridium.c',
@@ -479,7 +482,7 @@ if enable_plugins.contains('iridium')
 endif
 
 # plugin: linktop
-if enable_plugins.contains('linktop')
+if plugins_options['linktop']
   common_c_args = '-DMM_MODULE_NAME="linktop"'
 
   sources = files(
@@ -496,7 +499,7 @@ if enable_plugins.contains('linktop')
 endif
 
 # plugin: longcheer (and rebranded dongles)
-if enable_plugins.contains('longcheer')
+if plugins_options['longcheer']
   sources = files(
     'longcheer/mm-broadband-modem-longcheer.c',
     'longcheer/mm-plugin-longcheer.c',
@@ -516,7 +519,7 @@ if enable_plugins.contains('longcheer')
 endif
 
 # plugin: ericsson mbm
-if enable_plugins.contains('mbm')
+if plugins_options['mbm']
   common_c_args = ['-DTESTUDEVRULESDIR_MBM="@0@"'.format(plugins_dir / 'mbm')]
 
   sources = files(
@@ -537,7 +540,7 @@ if enable_plugins.contains('mbm')
 endif
 
 # plugin: motorola
-if enable_plugins.contains('motorola')
+if plugins_options['motorola']
   sources = files(
     'motorola/mm-broadband-modem-motorola.c',
     'motorola/mm-plugin-motorola.c',
@@ -550,7 +553,7 @@ if enable_plugins.contains('motorola')
 endif
 
 # plugin: mtk
-if enable_plugins.contains('mtk')
+if plugins_options['mtk']
   sources = files(
     'mtk/mm-broadband-modem-mtk.c',
     'mtk/mm-plugin-mtk.c',
@@ -570,7 +573,7 @@ if enable_plugins.contains('mtk')
 endif
 
 # plugin: nokia
-if enable_plugins.contains('nokia')
+if plugins_options['nokia']
   sources = files(
     'nokia/mm-broadband-modem-nokia.c',
     'nokia/mm-plugin-nokia.c',
@@ -584,7 +587,7 @@ if enable_plugins.contains('nokia')
 endif
 
 # plugin: nokia (icera)
-if enable_plugins.contains('nokia-icera')
+if plugins_options['nokia-icera']
   c_args = [
     '-DMM_MODULE_NAME="nokia-icera"',
     '-DTESTUDEVRULESDIR_NOKIA_ICERA="@0@"'.format(plugins_dir / 'nokia'),
@@ -599,7 +602,7 @@ if enable_plugins.contains('nokia-icera')
 endif
 
 # plugin: novatel non-lte
-if enable_plugins.contains('novatel')
+if plugins_options['novatel']
   plugins += {'plugin-novatel': {
     'plugin': true,
     'module': {'sources': files('novatel/mm-plugin-novatel.c'), 'include_directories': plugins_incs, 'c_args': '-DMM_MODULE_NAME="novatel"'},
@@ -607,7 +610,7 @@ if enable_plugins.contains('novatel')
 endif
 
 # plugin: novatel lte
-if enable_plugins.contains('novatel-lte')
+if plugins_options['novatel-lte']
   sources = files(
     'novatel/mm-plugin-novatel-lte.c',
     'novatel/mm-broadband-modem-novatel-lte.c',
@@ -622,7 +625,7 @@ if enable_plugins.contains('novatel-lte')
 endif
 
 # plugin: option
-if enable_plugins.contains('option')
+if plugins_options['option']
   plugins += {'plugin-option': {
     'plugin': true,
     'module': {'sources': files('option/mm-plugin-option.c'), 'include_directories': plugins_incs, 'c_args': '-DMM_MODULE_NAME="option"'},
@@ -630,7 +633,7 @@ if enable_plugins.contains('option')
 endif
 
 # plugin: option hso
-if enable_plugins.contains('option-hso')
+if plugins_options['option-hso']
   sources = files(
     'option/mm-plugin-hso.c',
     'option/mm-broadband-bearer-hso.c',
@@ -644,7 +647,7 @@ if enable_plugins.contains('option-hso')
 endif
 
 # plugin: pantech
-if enable_plugins.contains('pantech')
+if plugins_options['pantech']
   sources = files(
     'pantech/mm-broadband-modem-pantech.c',
     'pantech/mm-plugin-pantech.c',
@@ -658,7 +661,7 @@ if enable_plugins.contains('pantech')
 endif
 
 # plugin: qcom-soc
-if enable_plugins.contains('qcom-soc')
+if plugins_options['qcom-soc']
   sources = files(
     'qcom-soc/mm-broadband-modem-qmi-qcom-soc.c',
     'qcom-soc/mm-plugin-qcom-soc.c',
@@ -678,7 +681,7 @@ if enable_plugins.contains('qcom-soc')
 endif
 
 # plugin: quectel
-if enable_plugins.contains('quectel')
+if plugins_options['quectel']
   common_c_args = ['-DTESTUDEVRULESDIR_QUECTEL="@0@"'.format(plugins_dir / 'quectel')]
 
   sources = files(
@@ -706,7 +709,7 @@ if enable_plugins.contains('quectel')
 endif
 
 # plugin: samsung
-if enable_plugins.contains('samsung')
+if plugins_options['samsung']
   sources = files(
     'samsung/mm-broadband-modem-samsung.c',
     'samsung/mm-plugin-samsung.c',
@@ -719,7 +722,7 @@ if enable_plugins.contains('samsung')
 endif
 
 # plugin: sierra (legacy)
-if enable_plugins.contains('sierra-legacy')
+if plugins_options['sierra-legacy']
   sources = files(
     'sierra/mm-broadband-modem-sierra-icera.c',
     'sierra/mm-plugin-sierra-legacy.c',
@@ -732,7 +735,7 @@ if enable_plugins.contains('sierra-legacy')
 endif
 
 # plugin: sierra (new QMI or MBIM modems)
-if enable_plugins.contains('sierra')
+if plugins_options['sierra']
   plugins += {'plugin-sierra': {
     'plugin': true,
     'module': {'sources': files('sierra/mm-plugin-sierra.c'), 'include_directories': plugins_incs + [xmm_inc], 'c_args': '-DMM_MODULE_NAME="sierra"'},
@@ -742,7 +745,7 @@ if enable_plugins.contains('sierra')
 endif
 
 # plugin: simtech
-if enable_plugins.contains('simtech')
+if plugins_options['simtech']
   common_c_args = ['-DTESTUDEVRULESDIR_SIMTECH="@0@"'.format(plugins_dir / 'simtech')]
 
   sources = files(
@@ -766,7 +769,7 @@ if enable_plugins.contains('simtech')
 endif
 
 # plugin: telit
-if enable_plugins.contains('telit')
+if plugins_options['telit']
   c_args = [
     '-DMM_MODULE_NAME="telit"',
     '-DTESTUDEVRULESDIR_TELIT="@0@"'.format(plugins_dir / 'telit'),
@@ -781,7 +784,7 @@ if enable_plugins.contains('telit')
 endif
 
 # plugin: thuraya xt
-if enable_plugins.contains('thuraya')
+if plugins_options['thuraya']
   common_c_args = ['-DMM_MODULE_NAME="thuraya"']
 
   sources = files(
@@ -798,7 +801,7 @@ if enable_plugins.contains('thuraya')
 endif
 
 # plugin: tplink
-if enable_plugins.contains('tplink')
+if plugins_options['tplink']
   c_args = [
     '-DMM_MODULE_NAME="tp-link"',
     '-DTESTUDEVRULESDIR_TPLINK="@0@"'.format(plugins_dir / 'tplink'),
@@ -813,7 +816,7 @@ if enable_plugins.contains('tplink')
 endif
 
 # plugin: u-blox
-if enable_plugins.contains('ublox')
+if plugins_options['ublox']
   ublox_inc = include_directories('ublox')
 
   common_c_args = '-DMM_MODULE_NAME="u-blox"'
@@ -855,7 +858,7 @@ if enable_plugins.contains('ublox')
 endif
 
 # plugin: via
-if enable_plugins.contains('via')
+if plugins_options['via']
   sources = files(
     'via/mm-broadband-modem-via.c',
     'via/mm-plugin-via.c',
@@ -868,7 +871,7 @@ if enable_plugins.contains('via')
 endif
 
 # plugin: wavecom (now sierra airlink)
-if enable_plugins.contains('wavecom')
+if plugins_options['wavecom']
   sources = files(
     'wavecom/mm-broadband-modem-wavecom.c',
     'wavecom/mm-plugin-wavecom.c',
@@ -881,7 +884,7 @@ if enable_plugins.contains('wavecom')
 endif
 
 # plugin: alcatel/TCT/JRD x220D and possibly others
-if enable_plugins.contains('x22x')
+if plugins_options['x22x']
   sources = files(
     'x22x/mm-broadband-modem-x22x.c',
     'x22x/mm-plugin-x22x.c',
@@ -901,7 +904,7 @@ if enable_plugins.contains('x22x')
 endif
 
 # plugin: zte
-if enable_plugins.contains('zte')
+if plugins_options['zte']
   sources = files(
     'zte/mm-broadband-modem-zte.c',
     'zte/mm-broadband-modem-zte-icera.c',

@@ -32,6 +32,7 @@
 #include "mm-iface-modem-3gpp.h"
 #include "mm-iface-modem-3gpp-profile-manager.h"
 #include "mm-iface-modem-time.h"
+#include "mm-common-helpers.h"
 #include "mm-base-modem-at.h"
 #include "mm-bearer-list.h"
 #include "mm-broadband-bearer-icera.h"
@@ -1953,15 +1954,21 @@ store_profile_context_free (StoreProfileContext *ctx)
 static gint
 modem_3gpp_profile_manager_store_profile_finish (MMIfaceModem3gppProfileManager  *self,
                                                  GAsyncResult                    *res,
+                                                 gint                            *out_profile_id,
+                                                 MMBearerApnType                 *out_apn_type,
                                                  GError                         **error)
 {
     StoreProfileContext *ctx;
 
     if (!g_task_propagate_boolean (G_TASK (res), error))
-        return MM_3GPP_PROFILE_ID_UNKNOWN;
+        return FALSE;
 
     ctx = g_task_get_task_data (G_TASK (res));
-    return ctx->profile_id;
+    if (out_profile_id)
+        *out_profile_id = ctx->profile_id;
+    if (out_apn_type)
+        *out_apn_type = MM_BEARER_APN_TYPE_NONE;
+    return TRUE;
 }
 
 static void profile_manager_store_profile_auth_settings (GTask *task);
@@ -2075,7 +2082,7 @@ profile_manager_parent_store_profile_ready (MMIfaceModem3gppProfileManager *self
 {
     GError *error = NULL;
 
-    if (iface_modem_3gpp_profile_manager_parent->store_profile_finish (self, res, &error) == MM_3GPP_PROFILE_ID_UNKNOWN) {
+    if (!iface_modem_3gpp_profile_manager_parent->store_profile_finish (self, res, NULL, NULL, &error)) {
         g_task_return_error (task, error);
         g_object_unref (task);
         return;
@@ -2087,11 +2094,14 @@ profile_manager_parent_store_profile_ready (MMIfaceModem3gppProfileManager *self
 static void
 modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager  *self,
                                           MM3gppProfile                   *profile,
+                                          const gchar                     *index_field,
                                           GAsyncReadyCallback              callback,
                                           gpointer                         user_data)
 {
     StoreProfileContext *ctx;
     GTask               *task;
+
+    g_assert (g_strcmp0 (index_field, "profile-id") == 0);
 
     task = g_task_new (self, NULL, callback, user_data);
     ctx = g_slice_new0 (StoreProfileContext);
@@ -2103,6 +2113,7 @@ modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager  *self,
     iface_modem_3gpp_profile_manager_parent->store_profile (
         self,
         profile,
+        index_field,
         (GAsyncReadyCallback)profile_manager_parent_store_profile_ready,
         task);
 }

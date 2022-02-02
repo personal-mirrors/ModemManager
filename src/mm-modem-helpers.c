@@ -29,6 +29,7 @@
 #include <libmm-glib.h>
 
 #include "mm-sms-part.h"
+#include "mm-common-helpers.h"
 #include "mm-modem-helpers.h"
 #include "mm-helper-enums-types.h"
 #include "mm-log-object.h"
@@ -380,38 +381,6 @@ mm_filter_current_bands (const GArray *supported_bands,
     }
 
     return filtered;
-}
-
-/*****************************************************************************/
-
-gchar *
-mm_new_iso8601_time (guint year,
-                     guint month,
-                     guint day,
-                     guint hour,
-                     guint minute,
-                     guint second,
-                     gboolean have_offset,
-                     gint offset_minutes)
-{
-    GString *str;
-
-    str = g_string_sized_new (30);
-    g_string_append_printf (str, "%04d-%02d-%02dT%02d:%02d:%02d",
-                            year, month, day, hour, minute, second);
-    if (have_offset) {
-        if (offset_minutes >=0 ) {
-            g_string_append_printf (str, "+%02d:%02d",
-                                    offset_minutes / 60,
-                                    offset_minutes % 60);
-        } else {
-            offset_minutes *= -1;
-            g_string_append_printf (str, "-%02d:%02d",
-                                    offset_minutes / 60,
-                                    offset_minutes % 60);
-        }
-    }
-    return g_string_free (str, FALSE);
 }
 
 /*****************************************************************************/
@@ -1577,6 +1546,27 @@ mm_3gpp_profile_list_find_by_profile_id (GList   *profile_list,
 
     g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
                  "Profile '%d' not found", profile_id);
+    return NULL;
+}
+
+MM3gppProfile *
+mm_3gpp_profile_list_find_by_apn_type (GList            *profile_list,
+                                       MMBearerApnType   apn_type,
+                                       GError          **error)
+{
+    g_autofree gchar *apn_type_str = NULL;
+    GList             *l;
+
+    for (l = profile_list; l; l = g_list_next (l)) {
+        MM3gppProfile *iter_profile = l->data;
+
+        if (mm_3gpp_profile_get_apn_type (iter_profile) == apn_type)
+            return g_object_ref (iter_profile);
+    }
+
+    apn_type_str = mm_bearer_apn_type_build_string_from_mask (apn_type);
+    g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
+                 "Profile '%s' not found", apn_type_str);
     return NULL;
 }
 
@@ -2965,6 +2955,29 @@ out:
         *status = (gboolean) class_1_status;
 
     return TRUE;
+}
+
+/*************************************************************************/
+/* CGATT helpers */
+
+gchar *
+mm_3gpp_build_cgatt_set_request (MMModem3gppPacketServiceState state)
+{
+    guint cgatt_action;
+
+    switch (state) {
+    case MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED:
+        cgatt_action = 1;
+        break;
+    case MM_MODEM_3GPP_PACKET_SERVICE_STATE_DETACHED:
+        cgatt_action = 0;
+        break;
+    case MM_MODEM_3GPP_PACKET_SERVICE_STATE_UNKNOWN:
+    default:
+        return NULL;
+    }
+
+    return g_strdup_printf ("+CGATT=%u", cgatt_action);
 }
 
 /*************************************************************************/

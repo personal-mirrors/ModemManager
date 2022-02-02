@@ -1,14 +1,21 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /*
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * libmm-glib -- Access modem status & information from glib applications
  *
- * This program is distributed in the hope that it will be useful,
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details:
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301 USA.
  *
  * Copyright (C) 2010 - 2012 Red Hat, Inc.
  * Copyright (C) 2011 - 2012 Google, Inc.
@@ -84,6 +91,16 @@ MMBearerMultiplexSupport      mm_common_get_multiplex_support_from_string       
 MMBearerApnType               mm_common_get_apn_type_from_string                  (const gchar  *str,
                                                                                    GError      **error);
 MMModem3gppFacility           mm_common_get_3gpp_facility_from_string             (const gchar  *str,
+                                                                                   GError      **error);
+MMModem3gppPacketServiceState mm_common_get_3gpp_packet_service_state_from_string (const gchar  *str,
+                                                                                   GError      **error);
+MMModem3gppMicoMode           mm_common_get_3gpp_mico_mode_from_string            (const gchar  *str,
+                                                                                   GError      **error);
+MMModem3gppDrxCycle           mm_common_get_3gpp_drx_cycle_from_string            (const gchar  *str,
+                                                                                   GError      **error);
+MMBearerAccessTypePreference  mm_common_get_access_type_preference_from_string    (const gchar  *str,
+                                                                                   GError      **error);
+MMBearerProfileSource         mm_common_get_profile_source_from_string            (const gchar  *str,
                                                                                    GError      **error);
 
 /******************************************************************************/
@@ -190,6 +207,16 @@ gboolean  mm_get_double_from_match_info          (GMatchInfo  *match_info,
                                                   gdouble     *out);
 gchar    *mm_get_string_unquoted_from_match_info (GMatchInfo  *match_info,
                                                   guint32      match_index);
+
+gchar    *mm_new_iso8601_time_from_unix_time     (guint64  timestamp);
+gchar    *mm_new_iso8601_time                    (guint    year,
+                                                  guint    month,
+                                                  guint    day,
+                                                  guint    hour,
+                                                  guint    minute,
+                                                  guint    second,
+                                                  gboolean have_offset,
+                                                  gint     offset_minutes);
 
 /******************************************************************************/
 /* Type checkers and conversion utilities */

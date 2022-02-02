@@ -41,6 +41,7 @@
 #include "mm-iface-modem-voice.h"
 #include "mm-iface-modem-time.h"
 #include "mm-iface-modem-firmware.h"
+#include "mm-iface-modem-sar.h"
 #include "mm-iface-modem-signal.h"
 #include "mm-iface-modem-oma.h"
 #include "mm-broadband-bearer.h"
@@ -72,6 +73,7 @@ static void iface_modem_time_init (MMIfaceModemTime *iface);
 static void iface_modem_signal_init (MMIfaceModemSignal *iface);
 static void iface_modem_oma_init (MMIfaceModemOma *iface);
 static void iface_modem_firmware_init (MMIfaceModemFirmware *iface);
+static void iface_modem_sar_init (MMIfaceModemSar *iface);
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModem, mm_broadband_modem, MM_TYPE_BASE_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
@@ -86,6 +88,7 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModem, mm_broadband_modem, MM_TYPE_BASE_MODEM
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_TIME, iface_modem_time_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_OMA, iface_modem_oma_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SAR, iface_modem_sar_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_FIRMWARE, iface_modem_firmware_init))
 
 enum {
@@ -103,6 +106,7 @@ enum {
     PROP_MODEM_SIGNAL_DBUS_SKELETON,
     PROP_MODEM_OMA_DBUS_SKELETON,
     PROP_MODEM_FIRMWARE_DBUS_SKELETON,
+    PROP_MODEM_SAR_DBUS_SKELETON,
     PROP_MODEM_SIM,
     PROP_MODEM_SIM_SLOTS,
     PROP_MODEM_BEARER_LIST,
@@ -265,6 +269,11 @@ struct _MMBroadbandModemPrivate {
     /*<--- Modem Firmware interface --->*/
     /* Properties */
     GObject  *modem_firmware_dbus_skeleton;
+
+    /*<--- Modem Sar interface --->*/
+    /* Properties */
+    GObject  *modem_sar_dbus_skeleton;
+
     gboolean  modem_firmware_ignore_carrier;
 };
 
@@ -2059,16 +2068,13 @@ modem_load_signal_quality_finish (MMIfaceModem *self,
 static guint
 signal_quality_evdo_pilot_sets (MMBroadbandModem *self)
 {
-    gint dbm;
-
     if (self->priv->modem_cdma_evdo_registration_state == MM_MODEM_CDMA_REGISTRATION_STATE_UNKNOWN)
         return 0;
 
     if (self->priv->evdo_pilot_rssi >= 0)
         return 0;
 
-    dbm = CLAMP (self->priv->evdo_pilot_rssi, -113, -51);
-    return 100 - ((dbm + 51) * 100 / (-113 + 51));
+    return MM_RSSI_TO_QUALITY (self->priv->evdo_pilot_rssi);
 }
 
 static void
@@ -4608,6 +4614,34 @@ modem_3gpp_set_eps_ue_mode_operation (MMIfaceModem3gpp              *self,
                               callback,
                               user_data);
     g_free (cmd);
+}
+
+/*****************************************************************************/
+/* Set packet service state (3GPP interface) */
+
+static gboolean
+modem_3gpp_set_packet_service_state_finish (MMIfaceModem3gpp  *self,
+                                            GAsyncResult      *res,
+                                            GError          **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_3gpp_set_packet_service_state (MMIfaceModem3gpp              *self,
+                                     MMModem3gppPacketServiceState  state,
+                                     GAsyncReadyCallback            callback,
+                                     gpointer                       user_data)
+{
+    g_autofree gchar *cmd = NULL;
+
+    cmd = mm_3gpp_build_cgatt_set_request (state);
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              cmd,
+                              10,
+                              FALSE,
+                              callback,
+                              user_data);
 }
 
 /*****************************************************************************/
@@ -10150,9 +10184,15 @@ modem_signal_load_values (MMIfaceModemSignal  *self,
 static gboolean
 modem_3gpp_profile_manager_check_support_finish (MMIfaceModem3gppProfileManager  *self,
                                                  GAsyncResult                    *res,
+                                                 gchar                          **index_field,
                                                  GError                         **error)
 {
-    return g_task_propagate_boolean (G_TASK (res), error);
+    if (g_task_propagate_boolean (G_TASK (res), error)) {
+        *index_field = g_strdup ("profile-id");;
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 static void
@@ -10318,7 +10358,11 @@ modem_3gpp_profile_manager_check_format_finish (MMIfaceModem3gppProfileManager  
     if (apn_cmp)
         *apn_cmp = (GEqualFunc) mm_3gpp_cmp_apn_name;
     if (profile_cmp_flags)
-        *profile_cmp_flags = (MM_3GPP_PROFILE_CMP_FLAGS_NO_AUTH | MM_3GPP_PROFILE_CMP_FLAGS_NO_APN_TYPE);
+        *profile_cmp_flags = (MM_3GPP_PROFILE_CMP_FLAGS_NO_AUTH |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_APN_TYPE |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_ACCESS_TYPE_PREFERENCE |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_ROAMING_ALLOWANCE |
+                              MM_3GPP_PROFILE_CMP_FLAGS_NO_PROFILE_SOURCE);
     return TRUE;
 }
 
@@ -10453,14 +10497,17 @@ profile_manager_cgdel_set_ready (MMBaseModem  *self,
 }
 
 static void
-modem_3gpp_profile_manager_delete_profile (MMIfaceModem3gppProfileManager  *self,
-                                           MM3gppProfile                   *profile,
-                                           GAsyncReadyCallback              callback,
-                                           gpointer                         user_data)
+modem_3gpp_profile_manager_delete_profile (MMIfaceModem3gppProfileManager *self,
+                                           MM3gppProfile                  *profile,
+                                           const gchar                    *index_field,
+                                           GAsyncReadyCallback             callback,
+                                           gpointer                        user_data)
 {
     g_autofree gchar *cmd = NULL;
     GTask            *task;
     gint              profile_id;
+
+    g_assert (g_strcmp0 (index_field, "profile-id") == 0);
 
     task = g_task_new (self, NULL, callback, user_data);
 
@@ -10625,15 +10672,21 @@ modem_3gpp_profile_manager_deactivate_profile (MMIfaceModem3gppProfileManager *s
 /*****************************************************************************/
 /* Store profile (3GPP profile management interface) */
 
-static gint
+static gboolean
 modem_3gpp_profile_manager_store_profile_finish (MMIfaceModem3gppProfileManager  *self,
                                                  GAsyncResult                    *res,
+                                                 gint                            *out_profile_id,
+                                                 MMBearerApnType                 *out_apn_type,
                                                  GError                         **error)
 {
     if (!g_task_propagate_boolean (G_TASK (res), error))
-        return MM_3GPP_PROFILE_ID_UNKNOWN;
+        return FALSE;
 
-    return GPOINTER_TO_INT (g_task_get_task_data (G_TASK (res)));
+    if (out_profile_id)
+        *out_profile_id = GPOINTER_TO_INT (g_task_get_task_data (G_TASK (res)));
+    if (out_apn_type)
+        *out_apn_type = MM_BEARER_APN_TYPE_NONE;
+    return TRUE;
 }
 
 static void
@@ -10653,6 +10706,7 @@ store_profile_cgdcont_set_ready (MMBaseModem  *self,
 static void
 modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager *self,
                                           MM3gppProfile                  *profile,
+                                          const gchar                    *index_field,
                                           GAsyncReadyCallback             callback,
                                           gpointer                        user_data)
 {
@@ -10664,6 +10718,8 @@ modem_3gpp_profile_manager_store_profile (MMIfaceModem3gppProfileManager *self,
     g_autofree gchar  *ip_type_str = NULL;
     g_autofree gchar  *quoted_apn = NULL;
     g_autofree gchar  *cmd = NULL;
+
+    g_assert (g_strcmp0 (index_field, "profile-id") == 0);
 
     task = g_task_new (self, NULL, callback, user_data);
 
@@ -12208,6 +12264,7 @@ typedef enum {
     INITIALIZE_STEP_IFACE_TIME,
     INITIALIZE_STEP_IFACE_SIGNAL,
     INITIALIZE_STEP_IFACE_OMA,
+    INITIALIZE_STEP_IFACE_SAR,
     INITIALIZE_STEP_FALLBACK_LIMITED,
     INITIALIZE_STEP_IFACE_VOICE,
     INITIALIZE_STEP_IFACE_FIRMWARE,
@@ -12386,6 +12443,7 @@ INTERFACE_INIT_READY_FN (iface_modem_time,                 MM_IFACE_MODEM_TIME, 
 INTERFACE_INIT_READY_FN (iface_modem_signal,               MM_IFACE_MODEM_SIGNAL,               FALSE)
 INTERFACE_INIT_READY_FN (iface_modem_oma,                  MM_IFACE_MODEM_OMA,                  FALSE)
 INTERFACE_INIT_READY_FN (iface_modem_firmware,             MM_IFACE_MODEM_FIRMWARE,             FALSE)
+INTERFACE_INIT_READY_FN (iface_modem_sar,                  MM_IFACE_MODEM_SAR,                  FALSE)
 
 static void
 initialize_step (GTask *task)
@@ -12534,6 +12592,14 @@ initialize_step (GTask *task)
         mm_iface_modem_oma_initialize (MM_IFACE_MODEM_OMA (ctx->self),
                                        g_task_get_cancellable (task),
                                        (GAsyncReadyCallback)iface_modem_oma_initialize_ready,
+                                       task);
+        return;
+
+    case INITIALIZE_STEP_IFACE_SAR:
+        /* Initialize the SAR interface */
+        mm_iface_modem_sar_initialize (MM_IFACE_MODEM_SAR (ctx->self),
+                                       g_task_get_cancellable (task),
+                                       (GAsyncReadyCallback)iface_modem_sar_initialize_ready,
                                        task);
         return;
 
@@ -12784,6 +12850,8 @@ mm_broadband_modem_create_device_identifier (MMBroadbandModem  *self,
                                              const gchar       *ati1,
                                              GError           **error)
 {
+    gchar *device_identifier;
+
     /* do nothing if device has gone already */
     if (!self->priv->modem_dbus_skeleton) {
         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
@@ -12791,7 +12859,7 @@ mm_broadband_modem_create_device_identifier (MMBroadbandModem  *self,
         return NULL;
     }
 
-    return (mm_create_device_identifier (
+    device_identifier = mm_create_device_identifier (
                 mm_base_modem_get_vendor_id (MM_BASE_MODEM (self)),
                 mm_base_modem_get_product_id (MM_BASE_MODEM (self)),
                 self,
@@ -12804,7 +12872,15 @@ mm_broadband_modem_create_device_identifier (MMBroadbandModem  *self,
                 mm_gdbus_modem_get_model (
                     MM_GDBUS_MODEM (self->priv->modem_dbus_skeleton)),
                 mm_gdbus_modem_get_manufacturer (
-                    MM_GDBUS_MODEM (self->priv->modem_dbus_skeleton))));
+                    MM_GDBUS_MODEM (self->priv->modem_dbus_skeleton)));
+
+    if (!device_identifier) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Unable to generate a device identifier");
+        return NULL;
+    }
+
+    return device_identifier;
 }
 
 /*****************************************************************************/
@@ -12902,6 +12978,10 @@ set_property (GObject *object,
     case PROP_MODEM_FIRMWARE_DBUS_SKELETON:
         g_clear_object (&self->priv->modem_firmware_dbus_skeleton);
         self->priv->modem_firmware_dbus_skeleton = g_value_dup_object (value);
+        break;
+    case PROP_MODEM_SAR_DBUS_SKELETON:
+        g_clear_object (&self->priv->modem_sar_dbus_skeleton);
+        self->priv->modem_sar_dbus_skeleton = g_value_dup_object (value);
         break;
     case PROP_MODEM_SIM:
         g_clear_object (&self->priv->modem_sim);
@@ -13056,6 +13136,9 @@ get_property (GObject *object,
         break;
     case PROP_MODEM_FIRMWARE_DBUS_SKELETON:
         g_value_set_object (value, self->priv->modem_firmware_dbus_skeleton);
+        break;
+    case PROP_MODEM_SAR_DBUS_SKELETON:
+        g_value_set_object (value, self->priv->modem_sar_dbus_skeleton);
         break;
     case PROP_MODEM_SIM:
         g_value_set_object (value, self->priv->modem_sim);
@@ -13277,6 +13360,11 @@ dispose (GObject *object)
         g_clear_object (&self->priv->modem_firmware_dbus_skeleton);
     }
 
+    if (self->priv->modem_sar_dbus_skeleton) {
+        mm_iface_modem_sar_shutdown (MM_IFACE_MODEM_SAR (object));
+        g_clear_object (&self->priv->modem_sar_dbus_skeleton);
+    }
+
     g_clear_object (&self->priv->modem_3gpp_initial_eps_bearer);
     g_clear_object (&self->priv->modem_sim);
     g_clear_pointer (&self->priv->modem_sim_slots, g_ptr_array_unref);
@@ -13389,6 +13477,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->set_eps_ue_mode_operation = modem_3gpp_set_eps_ue_mode_operation;
     iface->set_eps_ue_mode_operation_finish = modem_3gpp_set_eps_ue_mode_operation_finish;
     iface->create_initial_eps_bearer = modem_3gpp_create_initial_eps_bearer;
+    iface->set_packet_service_state = modem_3gpp_set_packet_service_state;
+    iface->set_packet_service_state_finish = modem_3gpp_set_packet_service_state_finish;
 }
 
 static void
@@ -13582,6 +13672,12 @@ iface_modem_firmware_init (MMIfaceModemFirmware *iface)
 }
 
 static void
+iface_modem_sar_init (MMIfaceModemSar *iface)
+{
+
+}
+
+static void
 mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
 {
     GObjectClass *object_class = G_OBJECT_CLASS (klass);
@@ -13664,6 +13760,10 @@ mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
     g_object_class_override_property (object_class,
                                       PROP_MODEM_OMA_DBUS_SKELETON,
                                       MM_IFACE_MODEM_OMA_DBUS_SKELETON);
+
+    g_object_class_override_property (object_class,
+                                      PROP_MODEM_SAR_DBUS_SKELETON,
+                                      MM_IFACE_MODEM_SAR_DBUS_SKELETON);
 
     g_object_class_override_property (object_class,
                                       PROP_MODEM_FIRMWARE_DBUS_SKELETON,

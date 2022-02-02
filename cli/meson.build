@@ -16,6 +16,7 @@ sources = files(
   'mmcli-modem-location.c',
   'mmcli-modem-messaging.c',
   'mmcli-modem-oma.c',
+  'mmcli-modem-sar.c',
   'mmcli-modem-signal.c',
   'mmcli-modem-simple.c',
   'mmcli-modem-time.c',
@@ -25,10 +26,11 @@ sources = files(
   'mmcli-sms.c',
 )
 
-deps = [
-  gudev_dep,
-  libmm_glib_dep,
-]
+deps = [libmm_glib_dep]
+
+if enable_udev
+  deps += gudev_dep
+endif
 
 executable(
   'mmcli',

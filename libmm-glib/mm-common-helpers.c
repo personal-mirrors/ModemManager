@@ -1,14 +1,21 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /*
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * libmm-glib -- Access modem status & information from glib applications
  *
- * This program is distributed in the hope that it will be useful,
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details:
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301 USA.
  *
  * Copyright (C) 2010 - 2012 Red Hat, Inc.
  * Copyright (C) 2011 - 2012 Google, Inc.
@@ -667,6 +674,56 @@ mm_common_get_3gpp_facility_from_string (const gchar  *str,
                                str,
                                MM_MODEM_3GPP_FACILITY_NONE,
                                error);
+}
+
+MMModem3gppPacketServiceState
+mm_common_get_3gpp_packet_service_state_from_string (const gchar  *str,
+                                                     GError      **error)
+{
+    return _enum_from_string (MM_TYPE_MODEM_3GPP_PACKET_SERVICE_STATE,
+                              str,
+                              MM_MODEM_3GPP_PACKET_SERVICE_STATE_UNKNOWN,
+                              error);
+}
+
+MMModem3gppMicoMode
+mm_common_get_3gpp_mico_mode_from_string (const gchar  *str,
+                                          GError      **error)
+{
+    return _enum_from_string (MM_TYPE_MODEM_3GPP_MICO_MODE,
+                              str,
+                              MM_MODEM_3GPP_MICO_MODE_UNKNOWN,
+                              error);
+}
+
+MMModem3gppDrxCycle
+mm_common_get_3gpp_drx_cycle_from_string (const gchar  *str,
+                                          GError      **error)
+{
+    return _enum_from_string (MM_TYPE_MODEM_3GPP_DRX_CYCLE,
+                              str,
+                              MM_MODEM_3GPP_DRX_CYCLE_UNKNOWN,
+                              error);
+}
+
+MMBearerAccessTypePreference
+mm_common_get_access_type_preference_from_string (const gchar  *str,
+                                                  GError      **error)
+{
+    return _enum_from_string (MM_TYPE_BEARER_ACCESS_TYPE_PREFERENCE,
+                              str,
+                              MM_BEARER_ACCESS_TYPE_PREFERENCE_NONE,
+                              error);
+}
+
+MMBearerProfileSource
+mm_common_get_profile_source_from_string (const gchar  *str,
+                                          GError      **error)
+{
+    return _enum_from_string (MM_TYPE_BEARER_PROFILE_SOURCE,
+                              str,
+                              MM_BEARER_PROFILE_SOURCE_UNKNOWN,
+                              error);
 }
 
 /******************************************************************************/
@@ -1659,6 +1716,72 @@ mm_get_string_unquoted_from_match_info (GMatchInfo *match_info,
     }
 
     return str;
+}
+
+/*
+ * The following implementation is taken from glib g_date_time_format_iso8601 code
+ * https://gitlab.gnome.org/GNOME/glib/-/blob/main/glib/gdatetime.c#L3490
+ */
+static gchar *
+date_time_format_iso8601 (GDateTime *dt)
+{
+#if GLIB_CHECK_VERSION (2, 62, 0)
+    return g_date_time_format_iso8601 (dt);
+#else
+    GString          *outstr = NULL;
+    g_autofree gchar *main_date = NULL;
+    gint64            offset = 0;
+
+    main_date = g_date_time_format (dt, "%Y-%m-%dT%H:%M:%S");
+    outstr = g_string_new (main_date);
+
+    /* Timezone. Format it as `%:::z` unless the offset is zero, in which case
+     * we can simply use `Z`. */
+    offset = g_date_time_get_utc_offset (dt);
+    if (offset == 0) {
+        g_string_append_c (outstr, 'Z');
+    } else {
+        g_autofree gchar *time_zone = NULL;
+
+        time_zone = g_date_time_format (dt, "%:::z");
+        g_string_append (outstr, time_zone);
+    }
+
+    return g_string_free (outstr, FALSE);
+#endif
+}
+
+gchar *
+mm_new_iso8601_time_from_unix_time (guint64 timestamp)
+{
+    g_autoptr(GDateTime) dt = NULL;
+
+    dt = g_date_time_new_from_unix_utc ((gint64)timestamp);
+
+    return date_time_format_iso8601 (dt);
+}
+
+gchar *
+mm_new_iso8601_time (guint    year,
+                     guint    month,
+                     guint    day,
+                     guint    hour,
+                     guint    minute,
+                     guint    second,
+                     gboolean have_offset,
+                     gint     offset_minutes)
+{
+    g_autoptr(GDateTime) dt = NULL;
+
+    if (have_offset) {
+        g_autoptr(GTimeZone) tz = NULL;
+
+        tz = g_time_zone_new_offset (offset_minutes * 60);
+        dt = g_date_time_new (tz, year, month, day, hour, minute, second);
+    } else
+        dt = g_date_time_new_utc (year, month, day, hour, minute, second);
+
+    return date_time_format_iso8601 (dt);
 }
 
 /*****************************************************************************/

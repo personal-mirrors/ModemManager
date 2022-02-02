@@ -92,6 +92,7 @@
         <xi:include href="xml/mm-modem-cdma.xml"/>
         <xi:include href="xml/mm-cdma-manual-activation-properties.xml"/>
         <xi:include href="xml/mm-unlock-retries.xml"/>
+        <xi:include href="xml/mm-pco.xml"/>
       </section>
       <section>
         <title>Simple interface support</title>
@@ -135,6 +136,7 @@
         <title>Extended signal information</title>
         <xi:include href="xml/mm-modem-signal.xml"/>
         <xi:include href="xml/mm-signal.xml"/>
+        <xi:include href="xml/mm-signal-threshold-properties.xml"/>
       </section>
       <section>
         <title>OMA support</title>
@@ -145,8 +147,8 @@
         <xi:include href="xml/mm-modem-voice.xml"/>
       </section>
       <section>
-        <title>PCO support</title>
-        <xi:include href="xml/mm-pco.xml"/>
+        <title>SAR support</title>
+        <xi:include href="xml/mm-modem-sar.xml"/>
       </section>
     </chapter>
 
@@ -323,6 +325,10 @@
   <chapter id="api-index-1-18" role="1.18">
     <title>Index of new symbols in 1.18</title>
     <xi:include href="xml/api-index-1.18.xml"></xi:include>
+  </chapter>
+  <chapter id="api-index-1-20" role="1.20">
+    <title>Index of new symbols in 1.20</title>
+    <xi:include href="xml/api-index-1.20.xml"></xi:include>
   </chapter>
 
   <xi:include href="xml/annotation-glossary.xml"></xi:include>

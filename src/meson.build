@@ -45,20 +45,20 @@ incs = [
   kerneldevice_inc,
 ]
 
-deps = [
-  libmm_glib_dep,
-  mbim_glib_dep,
-  qmi_glib_dep,
-]
+deps = [libmm_glib_dep]
 
 private_deps = []
 
 if enable_qmi
   sources += files('mm-modem-helpers-qmi.c')
+
+  deps += qmi_glib_dep
 endif
 
 if enable_mbim
   sources += files('mm-modem-helpers-mbim.c')
+
+  deps += mbim_glib_dep
 endif
 
 if enable_systemd_journal
@@ -87,18 +87,18 @@ sources = files(
   'kerneldevice/mm-kernel-device-helpers.c',
 )
 
-deps = [
-  gudev_dep,
-  libhelpers_dep,
-  qrtr_glib_dep,
-]
+deps = [libhelpers_dep]
 
 if enable_qrtr
   sources += files('kerneldevice/mm-kernel-device-qrtr.c')
+
+  deps += qrtr_glib_dep
 endif
 
 if enable_udev
   sources += files('kerneldevice/mm-kernel-device-udev.c')
+
+  deps += gudev_dep
 endif
 
 libkerneldevice = static_library(
@@ -200,6 +200,7 @@ sources = files(
   'mm-call-list.c',
   'mm-context.c',
   'mm-device.c',
+  'mm-fcc-unlock-dispatcher.c',
   'mm-filter.c',
   'mm-iface-modem-3gpp.c',
   'mm-iface-modem-3gpp-profile-manager.c',
@@ -210,6 +211,7 @@ sources = files(
   'mm-iface-modem-location.c',
   'mm-iface-modem-messaging.c',
   'mm-iface-modem-oma.c',
+  'mm-iface-modem-sar.c',
   'mm-iface-modem-signal.c',
   'mm-iface-modem-simple.c',
   'mm-iface-modem-time.c',
@@ -223,7 +225,6 @@ sources = files(
 )
 
 enums_types = 'mm-daemon-enums-types'
-
 
 sources += gnome.mkenums(
   enums_types + '.c',
@@ -250,6 +251,8 @@ deps = [
 c_args = [
   '-DMM_COMPILATION',
   '-DPLUGINDIR="@0@"'.format(mm_prefix / mm_pkglibdir),
+  '-DFCCUNLOCKDIRPACKAGE="@0@"'.format(mm_prefix / mm_pkglibdir / 'fcc-unlock.d'),
+  '-DFCCUNLOCKDIRUSER="@0@"'.format(mm_prefix / mm_pkgsysconfdir / 'fcc-unlock.d'),
 ]
 
 if enable_qrtr
