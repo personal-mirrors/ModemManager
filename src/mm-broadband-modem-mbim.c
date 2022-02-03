@@ -49,6 +49,8 @@
 # include "mm-shared-qmi.h"
 #endif
 
+#define MBIM_FIBOCOM_ATTACH_APN_HACK 1
+
 static void iface_modem_init                      (MMIfaceModem                   *iface);
 static void iface_modem_3gpp_init                 (MMIfaceModem3gpp               *iface);
 static void iface_modem_3gpp_profile_manager_init (MMIfaceModem3gppProfileManager *iface);
@@ -3464,6 +3466,48 @@ modem_3gpp_load_initial_eps_bearer_settings (MMIfaceModem3gpp    *_self,
     mbim_message_unref (message);
 }
 
+#if defined MBIM_FIBOCOM_ATTACH_APN_HACK // TODO(b/198002531): set radio off and on after attach APN
+static void
+after_attach_apn_modem_power_up_ready (MMIfaceModem *self,
+                                       GAsyncResult *res,
+                                       GTask        *task)
+{
+    GError *error = NULL;
+
+    if (!power_up_finish (self, res, &error)) {
+        mm_obj_warn (self, "failed to power up modem after attach APN: %s", error->message);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    mm_obj_dbg (self, "Success toggling modem power after attach APN");
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+
+}
+
+static void
+after_attach_apn_modem_power_down_ready (MMIfaceModem *self,
+                                         GAsyncResult *res,
+                                         GTask        *task)
+{
+    GError *error = NULL;
+
+    if (!power_down_finish (self, res, &error)) {
+        mm_obj_warn (self, "failed to power down modem after attach APN: %s", error->message);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    modem_power_up (self,
+                    (GAsyncReadyCallback) after_attach_apn_modem_power_up_ready,
+                    task);
+
+}
+#endif
+
 /*****************************************************************************/
 /* Set initial EPS bearer settings
  *
@@ -3488,8 +3532,14 @@ set_lte_attach_configuration_set_ready (MbimDevice   *device,
 {
     MbimMessage          *response;
     GError               *error = NULL;
+#ifdef MBIM_FIBOCOM_ATTACH_APN_HACK
+    MMIfaceModem         *self_hack;
+
+    self_hack = g_task_get_source_object (task);
+#endif
 
     response = mbim_device_command_finish (device, res, &error);
+#ifndef MBIM_FIBOCOM_ATTACH_APN_HACK
     if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error))
         g_task_return_error (task, error);
     else
@@ -3498,6 +3548,22 @@ set_lte_attach_configuration_set_ready (MbimDevice   *device,
 
     if (response)
         mbim_message_unref (response);
+#else
+    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        if (response)
+            mbim_message_unref (response);
+        return;
+    }
+
+    if (response)
+        mbim_message_unref (response);
+
+    modem_power_down (self_hack,
+                     (GAsyncReadyCallback) after_attach_apn_modem_power_down_ready,
+                     task);
+#endif
 }
 
 static void
