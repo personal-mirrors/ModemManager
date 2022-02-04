@@ -52,6 +52,7 @@
 # include <mm-modem-signal.h>
 # include <mm-modem-oma.h>
 # include <mm-modem-sar.h>
+# include <mm-modem-rf.h>
 #endif
 
 #if defined (_LIBMM_INSIDE_MM) ||    \

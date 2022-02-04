@@ -3737,6 +3737,75 @@ mm_gdbus_modem_sar_skeleton_get_type
 </SECTION>
 
 <SECTION>
+<FILE>MmGdbusModemRf</FILE>
+<TITLE>MmGdbusModemRf</TITLE>
+MmGdbusModemRf
+MmGdbusModemRfIface
+<SUBSECTION Getters>
+mm_gdbus_modem_rf_get_rf_inf
+<SUBSECTION Methods>
+mm_gdbus_modem_rf_call_get_rf_info
+mm_gdbus_modem_rf_call_get_rf_info_finish
+mm_gdbus_modem_rf_call_get_rf_info_sync
+mm_gdbus_modem_rf_call_setup_rf_info
+mm_gdbus_modem_rf_call_setup_rf_info_finish
+mm_gdbus_modem_rf_call_setup_rf_info_sync
+<SUBSECTION Private>
+mm_gdbus_modem_rf_set_rf_inf
+mm_gdbus_modem_rf_interface_info
+mm_gdbus_modem_rf_override_properties
+mm_gdbus_modem_rf_complete_get_rf_info
+mm_gdbus_modem_rf_complete_setup_rf_info
+<SUBSECTION Standard>
+MM_GDBUS_IS_MODEM_RF
+MM_GDBUS_MODEM_RF
+MM_GDBUS_MODEM_RF_GET_IFACE
+MM_GDBUS_TYPE_MODEM_RF
+mm_gdbus_modem_rf_get_type
+</SECTION>
+
+<SECTION>
+<FILE>MmGdbusModemRfProxy</FILE>
+<TITLE>MmGdbusModemRfProxy</TITLE>
+MmGdbusModemRfProxy
+<SUBSECTION New>
+mm_gdbus_modem_rf_proxy_new
+mm_gdbus_modem_rf_proxy_new_finish
+mm_gdbus_modem_rf_proxy_new_for_bus
+mm_gdbus_modem_rf_proxy_new_for_bus_finish
+mm_gdbus_modem_rf_proxy_new_for_bus_sync
+mm_gdbus_modem_rf_proxy_new_sync
+<SUBSECTION Standard>
+MmGdbusModemRfProxyClass
+MM_GDBUS_IS_MODEM_RF_PROXY
+MM_GDBUS_IS_MODEM_RF_PROXY_CLASS
+MM_GDBUS_MODEM_RF_PROXY
+MM_GDBUS_MODEM_RF_PROXY_CLASS
+MM_GDBUS_MODEM_RF_PROXY_GET_CLASS
+MM_GDBUS_TYPE_MODEM_RF_PROXY
+MmGdbusModemRfProxyPrivate
+mm_gdbus_modem_rf_proxy_get_type
+</SECTION>
+
+<SECTION>
+<FILE>MmGdbusModemrfSkeleton</FILE>
+<TITLE>MmGdbusModemrfSkeleton</TITLE>
+MmGdbusModemRfSkeleton
+<SUBSECTION New>
+mm_gdbus_modem_rf_skeleton_new
+<SUBSECTION Standard>
+MmGdbusModemRfSkeletonClass
+MM_GDBUS_IS_MODEM_RF_SKELETON
+MM_GDBUS_IS_MODEM_RF_SKELETON_CLASS
+MM_GDBUS_MODEM_RF_SKELETON
+MM_GDBUS_MODEM_RF_SKELETON_CLASS
+MM_GDBUS_MODEM_RF_SKELETON_GET_CLASS
+MM_GDBUS_TYPE_MODEM_RF_SKELETON
+MmGdbusModemRfSkeletonPrivate
+mm_gdbus_modem_rf_skeleton_get_type
+</SECTION>
+
+<SECTION>
 <FILE>MmGdbusObject</FILE>
 <TITLE>MmGdbusObject</TITLE>
 MmGdbusObject

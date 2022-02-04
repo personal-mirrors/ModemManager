@@ -45,6 +45,7 @@
 #include "mm-modem-sar.h"
 #include "mm-modem-signal.h"
 #include "mm-modem-oma.h"
+#include "mm-modem-rf.h"
 
 G_BEGIN_DECLS
 
@@ -95,6 +96,7 @@ MMModemFirmware            *mm_object_get_modem_firmware              (MMObject 
 MMModemSar                 *mm_object_get_modem_sar                   (MMObject *self);
 MMModemSignal              *mm_object_get_modem_signal                (MMObject *self);
 MMModemOma                 *mm_object_get_modem_oma                   (MMObject *self);
+MMModemRf                  *mm_object_get_modem_rf                    (MMObject *self);
 
 MMModem                    *mm_object_peek_modem                      (MMObject *self);
 MMModem3gpp                *mm_object_peek_modem_3gpp                 (MMObject *self);
@@ -110,6 +112,7 @@ MMModemFirmware            *mm_object_peek_modem_firmware             (MMObject 
 MMModemSar                 *mm_object_peek_modem_sar                  (MMObject *self);
 MMModemSignal              *mm_object_peek_modem_signal               (MMObject *self);
 MMModemOma                 *mm_object_peek_modem_oma                  (MMObject *self);
+MMModemRf                  *mm_object_peek_modem_rf                   (MMObject *self);
 
 G_END_DECLS
 

@@ -1906,4 +1906,26 @@ typedef enum { /*< underscore_name=mm_bearer_profile_source >*/
     MM_BEARER_PROFILE_SOURCE_DEVICE   = 5,
 } MMBearerProfileSource;
 
+/*****************************************************************************/
+/* 'RF' enums */
+
+/**
+ * MMRfCellType:
+ * @MM_RF_CELL_TYPE_PCELL: Refers to the primary cell of MCS in ENDC case.
+ * @MM_RF_CELL_TYPE_SCELL: Refers to the secondary cell of MCS in ENDC case.
+ * @MM_RF_CELL_TYPE_PSCELL: Refers to primary cell of SCS in ENDC case
+ * @MM_RF_CELL_TYPE_SSCELL: Refers to secondary cell of SCS in ENDC case.
+ * @MM_RF_CELL_TYPE_INVALID: Indicates that the radio is off, all other values are invalid.
+ *
+ * Indicates the frequency information provided belongs to which servicing cell.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_rf_cell_type >*/
+    MM_RF_CELL_TYPE_PCELL    = 0,
+    MM_RF_CELL_TYPE_SCELL    = 1,
+    MM_RF_CELL_TYPE_PSCELL   = 2,
+    MM_RF_CELL_TYPE_SSCELL   = 3,
+    MM_RF_CELL_TYPE_INVALID  = 0xFFFFFFFF
+} MMRfCellType;
 #endif /*  _MODEMMANAGER_ENUMS_H_ */

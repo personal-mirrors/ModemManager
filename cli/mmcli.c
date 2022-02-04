@@ -243,6 +243,8 @@ main (gint argc, gchar **argv)
                                 mmcli_sms_get_option_group ());
     g_option_context_add_group (context,
                                 mmcli_call_get_option_group ());
+    g_option_context_add_group (context,
+                                mmcli_modem_rf_get_option_group ());
     g_option_context_add_main_entries (context, main_entries, NULL);
     g_option_context_parse (context, &argc, &argv, NULL);
     g_option_context_free (context);
@@ -425,6 +427,13 @@ main (gint argc, gchar **argv)
         else
             mmcli_modem_oma_run_synchronous (connection);
     }
+    /* Modem Rf options? */
+    else if (mmcli_modem_rf_options_enabled ()) {
+        if (async_flag)
+            mmcli_modem_rf_run_asynchronous (connection, cancellable);
+        else
+            mmcli_modem_rf_run_synchronous (connection);
+    }
     /* Modem options?
      * NOTE: let this check be always the last one, as other groups also need
      * having a modem specified, and therefore if -m is set, modem options
@@ -481,6 +490,8 @@ main (gint argc, gchar **argv)
         mmcli_sms_shutdown ();
     }  else if (mmcli_call_options_enabled ()) {
         mmcli_call_shutdown ();
+    } else if (mmcli_modem_rf_options_enabled ()) {
+        mmcli_modem_rf_shutdown ();
     } else if (mmcli_modem_options_enabled ()) {
         mmcli_modem_shutdown ();
     }

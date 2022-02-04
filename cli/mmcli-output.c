@@ -71,6 +71,7 @@ static SectionInfo section_infos[] = {
     [MMC_S_MODEM_LOCATION_CDMABS]      = { "CDMA BS"              },
     [MMC_S_MODEM_FIRMWARE]             = { "Firmware"             },
     [MMC_S_MODEM_FIRMWARE_FASTBOOT]    = { "Fastboot settings"    },
+    [MMC_S_MODEM_RF_RF_INF]            = { "Rf info"              },
     [MMC_S_MODEM_VOICE]                = { "Voice"                },
     [MMC_S_MODEM_SAR]                  = { "SAR"                  },
     [MMC_S_BEARER_GENERAL]             = { "General"              },
@@ -223,6 +224,7 @@ static FieldInfo field_infos[] = {
     [MMC_F_FIRMWARE_DEVICE_IDS]                      = { "modem.firmware.device-ids",                       "device ids",               MMC_S_MODEM_FIRMWARE,             },
     [MMC_F_FIRMWARE_VERSION]                         = { "modem.firmware.version",                          "version",                  MMC_S_MODEM_FIRMWARE,             },
     [MMC_F_FIRMWARE_FASTBOOT_AT]                     = { "modem.firmware.fastboot.at",                      "at command",               MMC_S_MODEM_FIRMWARE_FASTBOOT,    },
+    [MMC_F_RF_RF_INF]                                = { "modem.rf.rf-inf",                                 "rf inf",                   MMC_S_MODEM_RF_RF_INF,            },
     [MMC_F_VOICE_EMERGENCY_ONLY]                     = { "modem.voice.emergency-only",                      "emergency only",           MMC_S_MODEM_VOICE,                },
     [MMC_F_BEARER_GENERAL_DBUS_PATH]                 = { "bearer.dbus-path",                                "path",                     MMC_S_BEARER_GENERAL,             },
     [MMC_F_BEARER_GENERAL_TYPE]                      = { "bearer.type",                                     "type",                     MMC_S_BEARER_GENERAL,             },
@@ -1113,6 +1115,65 @@ mmcli_output_profile_set (MM3gppProfile *profile)
     profile_list = g_list_append (profile_list, profile);
     output_profile_list (MMC_F_3GPP_PROFILE_MANAGER_SET, profile_list);
     g_list_free (profile_list);
+}
+
+/******************************************************************************/
+/* (Custom) RF info output */
+
+static gchar *
+build_rf_info (MMModemRfInfo *network)
+{
+    const gchar  *serving_cell_str;
+    gchar  *out;
+
+    serving_cell_str = mm_rf_cell_type_get_string (mm_modem_rf_get_serving_cell_info(network));
+
+    if (selected_type == MMC_OUTPUT_TYPE_HUMAN)
+        out = g_strdup_printf ("%s %lu %u %u %u %u %u %u",
+                               serving_cell_str,
+                               mm_modem_rf_get_center_frequency (network),
+                               mm_modem_rf_get_bandwidth (network),
+                               mm_modem_rf_get_rsrp (network),
+                               mm_modem_rf_get_rsrq (network),
+                               mm_modem_rf_get_sinr (network),
+                               mm_modem_rf_get_rssi (network),
+                               mm_modem_rf_get_connection_status (network));
+    else
+        out = g_strdup_printf ("serving-cell-info: %s center-frequency: %lu bandwidth: %u rsrp: %u rsrq: %u sinr: %u rssi: %u connection_status: %u",
+                                serving_cell_str,
+                                mm_modem_rf_get_center_frequency (network),
+                                mm_modem_rf_get_bandwidth (network),
+                                mm_modem_rf_get_rsrp (network),
+                                mm_modem_rf_get_rsrq (network),
+                                mm_modem_rf_get_sinr (network),
+                                mm_modem_rf_get_rssi (network),
+                                mm_modem_rf_get_connection_status (network));
+
+    return out;
+}
+
+void
+mmcli_output_rf_info (GList *rf_info)
+{
+    gchar **info = NULL;
+
+    if (rf_info) {
+        GPtrArray *aux;
+        GList     *l;
+
+        aux = g_ptr_array_new ();
+        for (l = rf_info; l; l = g_list_next (l))
+            g_ptr_array_add (aux, build_rf_info ((MMModemRfInfo *)(l->data)));
+        g_ptr_array_add (aux, NULL);
+        info = (gchar **) g_ptr_array_free (aux, FALSE);
+    }
+
+    /* When printing human result, we want to show some result even if no rf info
+     * are found, so we force a explicit string result. */
+    if (selected_type == MMC_OUTPUT_TYPE_HUMAN && !info)
+        output_item_new_take_single (MMC_F_RF_RF_INF, g_strdup ("n/a"));
+    else
+        output_item_new_take_multiple (MMC_F_RF_RF_INF, info, TRUE);
 }
 
 /******************************************************************************/

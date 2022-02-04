@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!--
+ ModemManager 1.0 Interface Specification
+
+   Copyright (C) 2011-2013 Red Hat, Inc.
+   Copyright (C) 2011-2013 Google, Inc.
+   Copyright (C) 2011-2013 Lanedo GmbH
+   Copyright (C) 2018 Aleksander Morgado <aleksander@aleksander.es>
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+
+  <!--
+      org.freedesktop.ModemManager1.Modem.Rf:
+      @short_description: The ModemManager Rf interface.
+
+      This interface provides access to retreive radio frequency specific information
+      from the modem.
+
+      This interface will always be available as long a the modem is considered
+      valid.
+  -->
+  <interface name="org.freedesktop.ModemManager1.Modem.Rf">
+
+  <!--
+      GetRfInfo:
+
+      Command is used to retrieve MB device's frequency information. This information
+      will be used to determine potential interference created from platform clocking
+      and take mitigation action.
+
+      The method will update the property
+      <link linkend="gdbus-property-org-freedesktop-ModemManager1-Modem-Rf.RfInf"> RfInf</link>.
+
+      Since: 1.20
+  -->
+  <method name="GetRfInfo" />
+
+  <!--
+      SetupRfInfo:
+      @enable: enable or disable RFIM control. Use FALSE to disable or TRUE to enable
+      RFIM notification.
+
+      Enable or disable unsolicited notification fom modem with radio frequency
+      specific information.
+  
+      Since: 1.20
+  -->
+  <method name="SetupRfInfo">
+    <arg name="enable" type="b" direction="in" />
+  </method>
+
+  <!--
+      RfInf:
+
+      The frequency and other channel information shall be reported in this property
+      with as many elements in the array as the number of aggregated channels.
+
+      This is a read-only property, updation of this happens when 
+      <link linkend="gdbus-method-org-freedesktop-ModemManager1-Modem-Rf.GetRfInfo">GetRfInfo()</link>
+      method is called or RF notificaiton is received. Notification can be enabled
+      using the method 
+      <link linkend="gdbus-method-org-freedesktop-ModemManager1-Modem-Rf.SetupRfInfo">SetupRfInfo()</link>.
+
+      <variablelist>
+        <varlistentry><term><literal>"cell-type"</literal></term>
+          <listitem>
+            A <link linkend="MMRfCellType">MMRfCellType</link>
+            value indicating that the frequency information provided in this
+            stucture belongs to which servicing cell, given as an
+            unsigned integer (signature <literal>"u"</literal>).
+            If the value is set to
+                <link linkend="MM-RF-CELL-TYPE:INVALID">MM_RF_CELL_TYPE_INVALID</link>,
+                then all the other values in the structure are invalid.
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"center-frequency"</literal></term>
+          <listitem>
+            The center frequency of downlink channel in Hz, given as an
+            unsigned 64-bit integer value (signature <literal>"t"</literal>).
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"bandwidth"</literal></term>
+          <listitem>
+            Bandwidth of the particular carrier in downlink, given as an
+            unsigned integer (signature <literal>"u"</literal>). This
+            feild shall be 0 when radio is off.
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"rsrp"</literal></term>
+          <listitem>
+            Average reference signal received power, given as an
+            unsigned integer (signature <literal>"u"</literal>).
+            Range is (0...127) and mapped to (-156.. -31)dBm.
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"rsrq"</literal></term>
+          <listitem>
+            Average reference signal received quality, given as an
+            unsigned integer (signature <literal>"u"</literal>).
+            Range is (0...127) and mapped to (-43 ... 20)dB.
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"sinr"</literal></term>
+          <listitem>
+            Average reference signal to noise ratio, given as an
+            unsigned integer (signature <literal>"u"</literal>).
+            Range is (0...127) and mapped to (-23,...40) dB.
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"rssi"</literal></term>
+          <listitem>
+            Received signal strength indication, given as an unsigned
+            integer (signature <literal>"u"</literal>). Coded value
+            range (0,...,99) and mapped to (-113,...,-51)dBm.
+          </listitem>
+        </varlistentry>
+        <varlistentry><term><literal>"connection-status"</literal></term>
+          <listitem>
+            Modem connection status, given as an unsigned
+            integer (signature <literal>"u"</literal>).
+          </listitem>
+        </varlistentry>
+      </variablelist>
+      Since: 1.20
+  -->
+  <property name="RfInf" type="aa{sv}" access="read" />
+  
+  </interface>
+</node>
+
+
+

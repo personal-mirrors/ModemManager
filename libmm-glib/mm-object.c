@@ -731,6 +731,53 @@ mm_object_peek_modem_oma (MMObject *self)
 
 /*****************************************************************************/
 
+/*****************************************************************************/
+
+/**
+ * mm_object_get_modem_rf:
+ * @self: A #MMObject.
+ *
+ * Gets the #MMModemRf instance for the D-Bus interface
+ * org.freedesktop.ModemManager1.Modem.Rf on @self, if any.
+ *
+ * Returns: (transfer full): A #MMModemRf that must be freed with
+ * g_object_unref() or %NULL if @self does not implement the interface.
+ *
+ * Since: 1.20
+ */
+MMModemRf *
+mm_object_get_modem_rf (MMObject *self)
+{
+    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
+
+    return (MMModemRf *)mm_gdbus_object_get_modem_rf (MM_GDBUS_OBJECT (self));
+}
+
+/**
+ * mm_object_peek_modem_rf: (skip)
+ * @self: A #MMObject.
+ *
+ * Like mm_object_get_modem_rf() but doesn't increase the reference count on
+ * the returned object.
+ *
+ * <warning>It is not safe to use the returned object if you are on another
+ * thread than the one where the #MMManager is running.</warning>
+ *
+ * Returns: (transfer none): A #MMModemRf or %NULL if @self does not implement
+ * the interface. Do not free the returned object, it is owned by @self.
+ *
+ * Since: 1.20
+ */
+MMModemRf *
+mm_object_peek_modem_rf (MMObject *self)
+{
+    g_return_val_if_fail (MM_IS_OBJECT (MM_GDBUS_OBJECT (self)), NULL);
+
+    return (MMModemRf *)mm_gdbus_object_peek_modem_rf (MM_GDBUS_OBJECT (self));
+}
+
+/*****************************************************************************/
+
 static void
 mm_object_init (MMObject *self)
 {
