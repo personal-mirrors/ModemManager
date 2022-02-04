@@ -5417,3 +5417,11 @@ mm_decode_eid (const gchar *eid, gsize eid_len)
 
     return mm_bcd_to_string ((const guint8 *) eid, eid_len, FALSE /* low_nybble_first */);
 }
+/*****************************************************************************/
+
+void
+mm_rfim_info_list_free (GList *info_list)
+{
+    g_list_free_full (info_list, (GDestroyNotify) g_free);
+}
+

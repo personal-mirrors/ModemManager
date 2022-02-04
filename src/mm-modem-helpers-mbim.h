@@ -141,4 +141,9 @@ gboolean mm_signal_from_mbim_signal_state (MbimDataClass          data_class,
                                            MMSignal             **out_lte,
                                            MMSignal             **out_nr5g);
 
+/*****************************************************************************/
+
+GList *
+mm_rfim_info_from_mbim_rfim_freq_val_array(MbimRFIMFreqValueArray  *freq_info, guint freq_count);
+
 #endif  /* MM_MODEM_HELPERS_MBIM_H */

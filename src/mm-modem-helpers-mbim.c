@@ -1176,3 +1176,32 @@ mm_signal_from_mbim_signal_state (MbimDataClass          data_class,
 
     return TRUE;
 }
+/*****************************************************************************/
+
+GList *
+mm_rfim_info_from_mbim_rfim_freq_val_array(MbimRFIMFreqValueArray  *freq_info, guint freq_count)
+{
+    GList *info_list = NULL;
+    guint i;
+
+    g_return_val_if_fail (freq_info != NULL, NULL);
+
+    for (i = 0; i < freq_count; i++) {
+        MMRfInfo*info;
+
+        info = g_new0 (MMRfInfo, 1);
+        info->serving_cell_info = freq_info[i]->serving_cell_info;
+        info->center_frequency = freq_info[i]->center_frequency;
+        info->bandwidth = freq_info[i]->band_width;
+        info->rsrp = freq_info[i]->rsrp;
+        info->rsrq = freq_info[i]->rsrq;
+        info->sinr = freq_info[i]->sinr;
+        info->rssi = freq_info[i]->rssi;
+        info->connection_status = freq_info[i]->connection_status;
+
+        info_list = g_list_append (info_list, info);
+    }
+
+    return info_list;
+}
+

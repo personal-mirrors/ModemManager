@@ -583,4 +583,21 @@ gboolean mm_sim_parse_cpol_test_response (const gchar  *response,
 /* Helper function to decode eid read from esim */
 gchar *mm_decode_eid (const gchar *eid, gsize eid_len);
 
+/*****************************************************************************/
+/* RF utilities */
+/*****************************************************************************/
+
+typedef struct {
+    MMRfCellType  serving_cell_info;
+    guint64  center_frequency;
+    guint32  bandwidth;
+    guint32  rsrp;
+    guint32  rsrq;
+    guint32  sinr;
+    guint32  rssi;
+    guint32  connection_status;
+} MMRfInfo;
+
+void mm_rfim_info_list_free (GList *info_list);
+
 #endif  /* MM_MODEM_HELPERS_H */
