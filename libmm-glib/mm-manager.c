@@ -80,6 +80,7 @@ get_proxy_type (GDBusObjectManagerClient *manager,
         g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Modem3gpp.ProfileManager", GSIZE_TO_POINTER (MM_TYPE_MODEM_3GPP_PROFILE_MANAGER));
         g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Modem3gpp.Ussd",           GSIZE_TO_POINTER (MM_TYPE_MODEM_3GPP_USSD));
         g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Simple",                   GSIZE_TO_POINTER (MM_TYPE_MODEM_SIMPLE));
+        g_hash_table_insert (lookup_hash, (gpointer) "org.freedesktop.ModemManager1.Modem.Rf",                       GSIZE_TO_POINTER (MM_TYPE_MODEM_RF));
         g_once_init_leave (&once_init_value, 1);
     }
 

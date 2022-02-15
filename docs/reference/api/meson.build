@@ -32,6 +32,7 @@ expand_content_files = [
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Modem.Oma.xml',
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Modem.Signal.xml',
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Modem.Simple.xml',
+  generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Modem.Rf.xml',
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Modem.Time.xml',
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Modem.xml',
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.xml',

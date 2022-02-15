@@ -67,6 +67,7 @@ typedef enum {
     MMC_S_MODEM_LOCATION_CDMABS,
     MMC_S_MODEM_FIRMWARE,
     MMC_S_MODEM_FIRMWARE_FASTBOOT,
+    MMC_S_MODEM_RF_RF_INF,
     MMC_S_MODEM_VOICE,
     MMC_S_MODEM_SAR,
     MMC_S_BEARER_GENERAL,
@@ -237,6 +238,8 @@ typedef enum {
     MMC_F_FIRMWARE_DEVICE_IDS,
     MMC_F_FIRMWARE_VERSION,
     MMC_F_FIRMWARE_FASTBOOT_AT,
+    /* Rf section */
+    MMC_F_RF_RF_INF,
     /* Voice section */
     MMC_F_VOICE_EMERGENCY_ONLY,
     /* Bearer general section */
@@ -395,6 +398,7 @@ void mmcli_output_pco_list           (GList                     *pco_list);
 void mmcli_output_preferred_networks (GList                     *preferred_nets_list);
 void mmcli_output_profile_list       (GList                     *profile_list);
 void mmcli_output_profile_set        (MM3gppProfile             *profile);
+void mmcli_output_rf_info            (GList                     *rf_info);
 void mmcli_output_cell_info          (GList                     *cell_info_list);
 
 /******************************************************************************/

@@ -182,4 +182,12 @@ void          mmcli_call_run_asynchronous   (GDBusConnection *connection,
 void          mmcli_call_run_synchronous    (GDBusConnection *connection);
 void          mmcli_call_shutdown           (void);
 
+/* Rf group */
+GOptionGroup *mmcli_modem_rf_get_option_group   (void);
+gboolean      mmcli_modem_rf_options_enabled    (void);
+void          mmcli_modem_rf_run_asynchronous   (GDBusConnection *connection,
+                                                 GCancellable    *cancellable);
+void          mmcli_modem_rf_run_synchronous    (GDBusConnection *connection);
+void          mmcli_modem_rf_shutdown           (void);
+
 #endif /* __MMCLI_H__ */

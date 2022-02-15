@@ -22,6 +22,7 @@ mm_ifaces_modem = files(
   'org.freedesktop.ModemManager1.Modem.Sar.xml',
   'org.freedesktop.ModemManager1.Modem.Signal.xml',
   'org.freedesktop.ModemManager1.Modem.Simple.xml',
+  'org.freedesktop.ModemManager1.Modem.Rf.xml',
   'org.freedesktop.ModemManager1.Modem.Time.xml',
   'org.freedesktop.ModemManager1.Modem.Voice.xml',
   'org.freedesktop.ModemManager1.Modem.xml',

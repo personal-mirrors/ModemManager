@@ -214,6 +214,7 @@ sources = files(
   'mm-iface-modem-sar.c',
   'mm-iface-modem-signal.c',
   'mm-iface-modem-simple.c',
+  'mm-iface-modem-rf.c',
   'mm-iface-modem-time.c',
   'mm-iface-modem-voice.c',
   'mm-plugin.c',

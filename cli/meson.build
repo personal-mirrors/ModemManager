@@ -19,6 +19,7 @@ sources = files(
   'mmcli-modem-sar.c',
   'mmcli-modem-signal.c',
   'mmcli-modem-simple.c',
+  'mmcli-modem-rf.c',
   'mmcli-modem-time.c',
   'mmcli-modem-voice.c',
   'mmcli-output.c',

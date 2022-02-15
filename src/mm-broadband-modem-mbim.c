@@ -42,6 +42,7 @@
 #include "mm-iface-modem-messaging.h"
 #include "mm-iface-modem-signal.h"
 #include "mm-iface-modem-sar.h"
+#include "mm-iface-modem-rf.h"
 #include "mm-sms-part-3gpp.h"
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
@@ -57,6 +58,7 @@ static void iface_modem_location_init             (MMIfaceModemLocation         
 static void iface_modem_messaging_init            (MMIfaceModemMessaging          *iface);
 static void iface_modem_signal_init               (MMIfaceModemSignal             *iface);
 static void iface_modem_sar_init                  (MMIfaceModemSar                *iface);
+static void iface_modem_rf_init                   (MMIfaceModemRf                 *iface);
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
 static void shared_qmi_init                       (MMSharedQmi                    *iface);
 #endif
@@ -75,6 +77,7 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbim, mm_broadband_modem_mbim, MM_TYPE_B
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SAR, iface_modem_sar_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_RF, iface_modem_rf_init)
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
                         G_IMPLEMENT_INTERFACE (MM_TYPE_SHARED_QMI, shared_qmi_init)
 #endif
@@ -93,6 +96,7 @@ typedef enum {
     PROCESS_NOTIFICATION_FLAG_LTE_ATTACH_INFO      = 1 << 8,
     PROCESS_NOTIFICATION_FLAG_PROVISIONED_CONTEXTS = 1 << 9,
     PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS     = 1 << 10,
+    PROCESS_NOTIFICATION_FLAG_RF_INFO              = 1 << 11
 } ProcessNotificationFlag;
 
 enum {
@@ -165,6 +169,7 @@ struct _MMBroadbandModemMbimPrivate {
 #endif
 
     gboolean intel_firmware_update_unsupported;
+    gboolean is_rf_supported;
 
     /* Multi-SIM support */
     guint32 executor_index;
@@ -3075,6 +3080,16 @@ query_device_services_ready (MbimDevice   *device,
                 continue;
             }
 
+            if (service == MBIM_SERVICE_INTC_THERMAL_RF_INTERFACE) {
+                for (j = 0; j < device_services[i]->cids_count; j++) {
+                    if (device_services[i]->cids[j] == MBIM_CID_INTC_THERMAL_RF_INTERFACE_RFIM) {
+                        mm_obj_dbg (self, "RFIM status is supported");
+                        self->priv->is_rf_supported = TRUE;
+                    }
+                }
+                continue;
+            }
+
             /* no optional features to check in remaining services */
         }
         mbim_device_service_element_array_free (device_services);
@@ -5202,6 +5217,49 @@ ussd_notification (MMBroadbandModemMbim *self,
 }
 
 static void
+rf_info_notification (MMBroadbandModemMbim *self,
+                      MbimMessage *notification)
+{
+    MbimRFIMFreqValueArray  *freq_info;
+    guint                    freq_count;
+    g_autoptr(GError)        error = NULL;
+    GList                   *info_list;
+
+    if (!mbim_message_intc_thermal_rf_interface_rfim_notification_parse (
+              notification,
+              &freq_count,
+              NULL,
+              &freq_info,
+              &error))
+    {
+        mm_obj_dbg(self,"Error in processing RF notification");
+        return;
+    }
+
+    info_list = mm_rfim_info_from_mbim_rfim_freq_val_array (freq_info,
+                                                            freq_count);
+
+    mm_iface_modem_rf_update_rf_info (MM_IFACE_MODEM_RF(self), info_list);
+}
+
+static void
+rf_notification (MMBroadbandModemMbim *self,
+                 MbimDevice           *device,
+                 MbimMessage          *notification)
+{
+    switch (mbim_message_indicate_status_get_cid (notification))
+    {
+        case MBIM_CID_INTC_THERMAL_RF_INTERFACE_RFIM:
+            if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_RF_INFO)
+                rf_info_notification (self, notification);
+            break;
+        default:
+            /* Ignore */
+            break;
+    }
+}
+
+static void
 device_notification_cb (MbimDevice *device,
                         MbimMessage *notification,
                         MMBroadbandModemMbim *self)
@@ -5222,6 +5280,8 @@ device_notification_cb (MbimDevice *device,
         sms_notification (self, device, notification);
     else if (service == MBIM_SERVICE_USSD)
         ussd_notification (self, device, notification);
+    else if (service == MBIM_SERVICE_INTC_THERMAL_RF_INTERFACE)
+        rf_notification (self, device, notification);
 }
 
 static void
@@ -5234,7 +5294,7 @@ common_setup_cleanup_unsolicited_events_sync (MMBroadbandModemMbim *self,
 
     mm_obj_dbg (self, "supported notifications: signal (%s), registration (%s), sms (%s), "
                 "connect (%s), subscriber (%s), packet (%s), pco (%s), ussd (%s), "
-                "lte attach info (%s), provisioned contexts (%s), slot_info_status (%s)",
+                "lte attach info (%s), provisioned contexts (%s), slot_info_status (%s), rfim (%s)",
                 self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SIGNAL_QUALITY ? "yes" : "no",
                 self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_REGISTRATION_UPDATES ? "yes" : "no",
                 self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SMS_READ ? "yes" : "no",
@@ -5245,7 +5305,8 @@ common_setup_cleanup_unsolicited_events_sync (MMBroadbandModemMbim *self,
                 self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_USSD ? "yes" : "no",
                 self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_LTE_ATTACH_INFO ? "yes" : "no",
                 self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_PROVISIONED_CONTEXTS ? "yes" : "no",
-                self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS ? "yes" : "no");
+                self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS ? "yes" : "no",
+                self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_RF_INFO? "yes" : "no");
 
     if (setup) {
         /* Don't re-enable it if already there */
@@ -5320,6 +5381,8 @@ cleanup_unsolicited_events_3gpp (MMIfaceModem3gpp *_self,
         self->priv->setup_flags &= PROCESS_NOTIFICATION_FLAG_LTE_ATTACH_INFO;
     if (self->priv->is_slot_info_status_supported)
         self->priv->setup_flags &= ~PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS;
+    if (self->priv->is_rf_supported)
+        self->priv->setup_flags &= ~PROCESS_NOTIFICATION_FLAG_RF_INFO;
     common_setup_cleanup_unsolicited_events (self, FALSE, callback, user_data);
 }
 
@@ -5340,6 +5403,8 @@ setup_unsolicited_events_3gpp (MMIfaceModem3gpp *_self,
         self->priv->setup_flags |= PROCESS_NOTIFICATION_FLAG_LTE_ATTACH_INFO;
     if (self->priv->is_slot_info_status_supported)
         self->priv->setup_flags |= PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS;
+    if (self->priv->is_rf_supported)
+        self->priv->setup_flags |= PROCESS_NOTIFICATION_FLAG_RF_INFO;
     common_setup_cleanup_unsolicited_events (self, TRUE, callback, user_data);
 }
 
@@ -5416,7 +5481,7 @@ common_enable_disable_unsolicited_events (MMBroadbandModemMbim *self,
 
     mm_obj_dbg (self, "enabled notifications: signal (%s), registration (%s), sms (%s), "
                 "connect (%s), subscriber (%s), packet (%s), pco (%s), ussd (%s), "
-                "lte attach info (%s), provisioned contexts (%s), slot_info_status (%s)",
+                "lte attach info (%s), provisioned contexts (%s), slot_info_status (%s), rfim (%s)",
                 self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_SIGNAL_QUALITY ? "yes" : "no",
                 self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_REGISTRATION_UPDATES ? "yes" : "no",
                 self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_SMS_READ ? "yes" : "no",
@@ -5427,9 +5492,10 @@ common_enable_disable_unsolicited_events (MMBroadbandModemMbim *self,
                 self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_USSD ? "yes" : "no",
                 self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_LTE_ATTACH_INFO ? "yes" : "no",
                 self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_PROVISIONED_CONTEXTS ? "yes" : "no",
-                self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS ? "yes" : "no");
+                self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS ? "yes" : "no",
+                self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_RF_INFO ? "yes" : "no");
 
-    entries = g_new0 (MbimEventEntry *, 5);
+    entries = g_new0 (MbimEventEntry *, 6);
 
     /* Basic connect service */
     if (self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_SIGNAL_QUALITY ||
@@ -5492,6 +5558,16 @@ common_enable_disable_unsolicited_events (MMBroadbandModemMbim *self,
         entries[n_entries]->cids_count = 1;
         entries[n_entries]->cids = g_new0 (guint32, 1);
         entries[n_entries]->cids[0] = MBIM_CID_USSD;
+        n_entries++;
+    }
+
+    /* RF service */
+    if (self->priv->enable_flags & PROCESS_NOTIFICATION_FLAG_RF_INFO) {
+        entries[n_entries] = g_new (MbimEventEntry, 1);
+        memcpy (&(entries[n_entries]->device_service_id), MBIM_UUID_INTC_THERMAL_RF_INTERFACE , sizeof (MbimUuid));
+        entries[n_entries]->cids_count = 1;
+        entries[n_entries]->cids = g_new0 (guint32, 1);
+        entries[n_entries]->cids[0] = MBIM_CID_INTC_THERMAL_RF_INTERFACE_RFIM;
         n_entries++;
     }
 
@@ -5708,6 +5784,8 @@ modem_3gpp_disable_unsolicited_events (MMIfaceModem3gpp *_self,
         self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_LTE_ATTACH_INFO;
     if (self->priv->is_slot_info_status_supported)
         self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS;
+    if (self->priv->is_rf_supported)
+        self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_RF_INFO;
     common_enable_disable_unsolicited_events (self, callback, user_data);
 }
 
@@ -5728,6 +5806,8 @@ modem_3gpp_enable_unsolicited_events (MMIfaceModem3gpp *_self,
         self->priv->enable_flags |= PROCESS_NOTIFICATION_FLAG_LTE_ATTACH_INFO;
     if (self->priv->is_slot_info_status_supported)
         self->priv->enable_flags |= PROCESS_NOTIFICATION_FLAG_SLOT_INFO_STATUS;
+    if (self->priv->is_rf_supported)
+        self->priv->enable_flags |= PROCESS_NOTIFICATION_FLAG_RF_INFO;
     common_enable_disable_unsolicited_events (self, callback, user_data);
 }
 
@@ -8923,8 +9003,151 @@ set_packet_service_state (MMIfaceModem3gpp              *self,
                          task);
 }
 
+/*****************************************************************************/
+/* Check support (RF interface) */
+
+static gboolean
+rf_check_support_finish (MMIfaceModemRf *self,
+                         GAsyncResult    *res,
+                         GError         **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+rf_check_support (MMIfaceModemRf       *_self,
+                  GAsyncReadyCallback  callback,
+                  gpointer             user_data)
+{
+    MMBroadbandModemMbim  *self = MM_BROADBAND_MODEM_MBIM (_self);
+    GTask                 *task;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    mm_obj_dbg (self, "RF capabilities %s", self->priv->is_rf_supported ? "supported" : "not supported");
+    g_task_return_boolean (task, self->priv->is_rf_supported);
+    g_object_unref (task);
+}
 
 /*****************************************************************************/
+/* Setup RF info (RF interface) */
+
+static gboolean
+setup_rf_info_finish (MMIfaceModemRf  *self,
+                      GAsyncResult    *res,
+                      GError         **error)
+{
+     return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+setup_rf_info_ready (MbimDevice    *device,
+                     GAsyncResult  *res,
+                     GTask         *task)
+{
+    g_autoptr(MbimMessage ) response = NULL;
+    GError                 *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
+        g_task_return_boolean (task, TRUE);
+    } else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+}
+
+static void
+setup_rf_info (MMIfaceModemRf      *self,
+               gboolean             enable,
+               GAsyncReadyCallback  callback,
+               gpointer             user_data)
+{
+    MbimDevice             *device;
+    GTask                  *task;
+    g_autoptr(MbimMessage)  message = NULL;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    message = mbim_message_intc_thermal_rf_interface_rfim_set_new (enable,
+                                                                   NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)setup_rf_info_ready,
+                         task);
+}
+
+/*****************************************************************************/
+/* Get RF info (RF interface) */
+
+static GList *
+get_rf_info_finish (MMIfaceModemRf  *self,
+                    GAsyncResult    *res,
+                    GError         **error)
+{
+    return g_task_propagate_pointer (G_TASK (res), error);
+}
+
+static void
+get_rf_info_ready (MbimDevice    *device,
+                   GAsyncResult  *res,
+                   GTask         *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    MbimRFIMFreqValueArray  *freq_info;
+    guint                   freq_count;
+    GError                  *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) &&
+        mbim_message_intc_thermal_rf_interface_rfim_response_parse (response,
+                                                                    &freq_count,
+                                                                    &freq_info,
+                                                                    &error)) {
+        GList *info_list;
+
+        info_list = mm_rfim_info_from_mbim_rfim_freq_val_array (freq_info,
+                                                                freq_count);
+
+        g_task_return_pointer (task, info_list,(GDestroyNotify)mm_rfim_info_list_free );
+
+        mbim_rfim_freq_value_array_free(freq_info);
+
+    } else
+        g_task_return_error (task, error);
+
+    g_object_unref (task);
+}
+
+static void
+get_rf_info (MMIfaceModemRf      *self,
+             GAsyncReadyCallback callback,
+             gpointer            user_data)
+{
+    MbimDevice             *device;
+    GTask                  *task;
+    g_autoptr(MbimMessage)  message = NULL;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    message = mbim_message_intc_thermal_rf_interface_rfim_query_new (NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)get_rf_info_ready,
+                         task);
+}
 
 MMBroadbandModemMbim *
 mm_broadband_modem_mbim_new (const gchar *device,
@@ -9299,6 +9522,17 @@ iface_modem_sar_init (MMIfaceModemSar *iface)
     iface->enable_finish = sar_enable_finish;
     iface->set_power_level = sar_set_power_level;
     iface->set_power_level_finish = sar_set_power_level_finish;
+}
+
+static void
+iface_modem_rf_init (MMIfaceModemRf *iface)
+{
+    iface->check_support = rf_check_support;
+    iface->check_support_finish  = rf_check_support_finish;
+    iface->get_rf_info = get_rf_info;
+    iface->get_rf_info_finish = get_rf_info_finish;
+    iface->setup_rf_info = setup_rf_info;
+    iface->setup_rf_info_finish = setup_rf_info_finish;
 }
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
