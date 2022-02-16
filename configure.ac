@@ -6,7 +6,7 @@ dnl
 
 m4_define([mm_major_version], [1])
 m4_define([mm_minor_version], [19])
-m4_define([mm_micro_version], [0])
+m4_define([mm_micro_version], [1])
 m4_define([mm_version],
           [mm_major_version.mm_minor_version.mm_micro_version])
 
@@ -221,6 +221,12 @@ if test "x$with_systemdsystemunitdir" != xno; then
 fi
 AM_CONDITIONAL(HAVE_SYSTEMD, [test -n "$SYSTEMD_UNIT_DIR" -a "$SYSTEMD_UNIT_DIR" != xno ])
 
+
+dnl subdir where plugins are built w.r.t abs_top_builddir, just because it's
+dnl different to what meson does
+PLUGIN_BUILD_SUBDIR="plugins/.libs"
+AC_SUBST(PLUGIN_BUILD_SUBDIR)
+
 dnl-----------------------------------------------------------------------------
 dnl udev support (enabled by default)
 dnl
@@ -380,7 +386,7 @@ dnl-----------------------------------------------------------------------------
 dnl MBIM support (enabled by default)
 dnl
 
-LIBMBIM_VERSION=1.27.3
+LIBMBIM_VERSION=1.27.5
 
 AC_ARG_WITH(mbim, AS_HELP_STRING([--without-mbim], [Build without MBIM support]), [], [with_mbim=yes])
 AM_CONDITIONAL(WITH_MBIM, test "x$with_mbim" = "xyes")

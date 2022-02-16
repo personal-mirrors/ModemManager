@@ -659,6 +659,30 @@ typedef enum { /*< underscore_name=mm_modem_port_type >*/
 } MMModemPortType;
 
 /**
+ * MMCellType:
+ * @MM_CELL_TYPE_UNKNOWN: Unknown.
+ * @MM_CELL_TYPE_CDMA: CDMA cell.
+ * @MM_CELL_TYPE_GSM: GSM cell.
+ * @MM_CELL_TYPE_UMTS: UMTS cell.
+ * @MM_CELL_TYPE_TDSCDMA: TD-SCDMA cell.
+ * @MM_CELL_TYPE_LTE: LTE cell.
+ * @MM_CELL_TYPE_5GNR: 5GNR cell.
+ *
+ * Type of cell information reported.
+ *
+ * Since: 1.20
+ */
+typedef enum { /*< underscore_name=mm_cell_type >*/
+    MM_CELL_TYPE_UNKNOWN = 0,
+    MM_CELL_TYPE_CDMA    = 1,
+    MM_CELL_TYPE_GSM     = 2,
+    MM_CELL_TYPE_UMTS    = 3,
+    MM_CELL_TYPE_TDSCDMA = 4,
+    MM_CELL_TYPE_LTE     = 5,
+    MM_CELL_TYPE_5GNR    = 6,
+} MMCellType;
+
+/**
  * MMSmsPduType:
  * @MM_SMS_PDU_TYPE_UNKNOWN: Unknown type.
  * @MM_SMS_PDU_TYPE_DELIVER: 3GPP Mobile-Terminated (MT) message.
@@ -1619,6 +1643,7 @@ typedef enum { /*< underscore_name=mm_call_direction >*/
  * @MM_MODEM_FIRMWARE_UPDATE_METHOD_QMI_PDC: Device supports QMI PDC based update.
  * @MM_MODEM_FIRMWARE_UPDATE_METHOD_MBIM_QDU: Device supports MBIM QDU based update. Since 1.18.
  * @MM_MODEM_FIRMWARE_UPDATE_METHOD_FIREHOSE: Device supports Firehose based update. Since 1.18.
+ * @MM_MODEM_FIRMWARE_UPDATE_METHOD_SAHARA: Device supports Sahara protocol. Usually used in combination with Firehose. Since 1.20.
  *
  * Type of firmware update method supported by the module.
  *
@@ -1630,6 +1655,7 @@ typedef enum { /*< underscore_name=mm_modem_firmware_update_method >*/
     MM_MODEM_FIRMWARE_UPDATE_METHOD_QMI_PDC  = 1 << 1,
     MM_MODEM_FIRMWARE_UPDATE_METHOD_MBIM_QDU = 1 << 2,
     MM_MODEM_FIRMWARE_UPDATE_METHOD_FIREHOSE = 1 << 3,
+    MM_MODEM_FIRMWARE_UPDATE_METHOD_SAHARA   = 1 << 4,
 } MMModemFirmwareUpdateMethod;
 
 /**
