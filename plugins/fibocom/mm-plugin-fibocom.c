@@ -28,6 +28,7 @@
 #if defined WITH_MBIM
 #include "mm-broadband-modem-mbim.h"
 #include "mm-broadband-modem-mbim-xmm.h"
+#include "mm-broadband-modem-mbim-xmm-fibocom.h"
 #endif
 
 #if defined WITH_QMI
@@ -54,11 +55,11 @@ create_modem (MMPlugin     *self,
     if (mm_port_probe_list_has_mbim_port (probes)) {
         if (mm_port_probe_list_is_xmm (probes)) {
             mm_obj_dbg (self, "MBIM-powered XMM-based Fibocom modem found...");
-            return MM_BASE_MODEM (mm_broadband_modem_mbim_xmm_new (uid,
-                                                                   drivers,
-                                                                   mm_plugin_get_name (self),
-                                                                   vendor,
-                                                                   product));
+            return MM_BASE_MODEM (mm_broadband_modem_mbim_xmm_fibocom_new (uid,
+                                                                           drivers,
+                                                                           mm_plugin_get_name (self),
+                                                                           vendor,
+                                                                           product));
         }
         mm_obj_dbg (self, "MBIM-powered Fibocom modem found...");
         return MM_BASE_MODEM (mm_broadband_modem_mbim_new (uid,
