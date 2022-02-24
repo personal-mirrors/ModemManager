@@ -405,6 +405,14 @@ struct _MMIfaceModem {
     gboolean (* setup_carrier_config_finish) (MMIfaceModem         *self,
                                               GAsyncResult         *res,
                                               GError              **error);
+
+    /* Asynchronous cell info retrieval operation */
+    void    (* get_cell_info)        (MMIfaceModem         *self,
+                                      GAsyncReadyCallback   callback,
+                                      gpointer              user_data);
+    GList * (* get_cell_info_finish) (MMIfaceModem         *self,
+                                      GAsyncResult         *res,
+                                      GError              **error);
 };
 
 GType mm_iface_modem_get_type (void);
@@ -509,9 +517,6 @@ MMModemLock mm_iface_modem_update_lock_info_finish (MMIfaceModem *self,
 
 MMModemLock      mm_iface_modem_get_unlock_required (MMIfaceModem *self);
 MMUnlockRetries *mm_iface_modem_get_unlock_retries  (MMIfaceModem *self);
-
-void mm_iface_modem_update_unlock_retries (MMIfaceModem *self,
-                                           MMUnlockRetries *unlock_retries);
 
 /* Request signal quality check update.
  * It will not only return the signal quality status, but also set the property

@@ -101,6 +101,20 @@ libmm_glib_la_SOURCES = \
 	mm-signal-threshold-properties.c \
 	mm-nr5g-registration-settings.h \
 	mm-nr5g-registration-settings.c \
+	mm-cell-info.h \
+	mm-cell-info.c \
+	mm-cell-info-cdma.h \
+	mm-cell-info-cdma.c \
+	mm-cell-info-gsm.h \
+	mm-cell-info-gsm.c \
+	mm-cell-info-umts.h \
+	mm-cell-info-umts.c \
+	mm-cell-info-tdscdma.h \
+	mm-cell-info-tdscdma.c \
+	mm-cell-info-lte.h \
+	mm-cell-info-lte.c \
+	mm-cell-info-nr5g.h \
+	mm-cell-info-nr5g.c \
 	mm-compat.h \
 	mm-compat.c \
 	$(NULL)
@@ -180,6 +194,13 @@ include_HEADERS = \
 	mm-3gpp-profile.h \
 	mm-signal-threshold-properties.h \
 	mm-nr5g-registration-settings.h \
+	mm-cell-info.h \
+	mm-cell-info-cdma.h \
+	mm-cell-info-gsm.h \
+	mm-cell-info-umts.h \
+	mm-cell-info-tdscdma.h \
+	mm-cell-info-lte.h \
+	mm-cell-info-nr5g.h \
 	mm-compat.h \
 	$(NULL)
 

@@ -16,6 +16,13 @@ headers = files(
   'mm-call.h',
   'mm-call-properties.h',
   'mm-cdma-manual-activation-properties.h',
+  'mm-cell-info.h',
+  'mm-cell-info-cdma.h',
+  'mm-cell-info-gsm.h',
+  'mm-cell-info-lte.h',
+  'mm-cell-info-nr5g.h',
+  'mm-cell-info-tdscdma.h',
+  'mm-cell-info-umts.h',
   'mm-compat.h',
   'mm-firmware-properties.h',
   'mm-firmware-update-settings.h',
@@ -71,6 +78,13 @@ sources = files(
   'mm-call.c',
   'mm-call-properties.c',
   'mm-cdma-manual-activation-properties.c',
+  'mm-cell-info.c',
+  'mm-cell-info-cdma.c',
+  'mm-cell-info-gsm.c',
+  'mm-cell-info-lte.c',
+  'mm-cell-info-nr5g.c',
+  'mm-cell-info-tdscdma.c',
+  'mm-cell-info-umts.c',
   'mm-common-helpers.c',
   'mm-compat.c',
   'mm-firmware-properties.c',
@@ -113,8 +127,10 @@ sources = files(
 
 deps = [include_dep]
 
+libname = 'mm-glib'
+
 libmm_glib = shared_library(
-  'mm-glib',
+  libname,
   version: mm_glib_version,
   sources: sources,
   include_directories: top_inc,
@@ -133,7 +149,7 @@ libmm_glib_dep = declare_dependency(
 pkg.generate(
   libraries: libmm_glib,
   version: mm_version,
-  name: 'mm-glib',
+  name: libname,
   description: 'Library to control and monitor the ModemManager',
   subdirs: mm_glib_name,
   # FIXME: produced by the inhability of meson to use internal dependencies
@@ -166,7 +182,7 @@ if enable_gir
     symbol_prefix: gir_prefix.to_lower(),
     extra_args: args,
     header: 'libmm-glib.h',
-    export_packages: gir_ns,
+    export_packages: libname,
     install: true,
   )
 

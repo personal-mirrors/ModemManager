@@ -12,7 +12,7 @@
  *
  * Copyright (C) 2012 Google Inc.
  * Copyright (C) 2014 Aleksander Morgado <aleksander@aleksander.es>
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <config.h>
@@ -170,6 +170,14 @@ struct _MMBroadbandModemQmiPrivate {
 
     /* For notifying when the qmi-proxy connection is dead */
     guint qmi_device_removed_id;
+
+    /* Power Set Operating Mode Helper */
+    GTask *set_operating_mode_task;
+
+    /* PDC Refresh notifications ID (3gpp Profile Manager) */
+    gboolean profile_manager_unsolicited_events_enabled;
+    gboolean profile_manager_unsolicited_events_setup;
+    guint refresh_indication_id;
 };
 
 /*****************************************************************************/
@@ -1708,7 +1716,23 @@ load_signal_quality (MMIfaceModem *self,
 }
 
 /*****************************************************************************/
-/* Powering up the modem (Modem interface) */
+/* Powering up/down/off the modem (Modem interface) */
+
+typedef struct {
+    QmiDmsOperatingMode  mode;
+    QmiClientDms        *client;
+    guint                indication_id;
+    guint                timeout_id;
+} SetOperatingModeContext;
+
+static void
+set_operating_mode_context_free (SetOperatingModeContext *ctx)
+{
+    g_assert (ctx->indication_id == 0);
+    g_assert (ctx->timeout_id == 0);
+    g_clear_object (&ctx->client);
+    g_slice_free (SetOperatingModeContext, ctx);
+}
 
 static gboolean
 modem_power_up_down_off_finish (MMIfaceModem  *self,
@@ -1719,28 +1743,99 @@ modem_power_up_down_off_finish (MMIfaceModem  *self,
 }
 
 static void
-dms_set_operating_mode_ready (QmiClientDms *client,
-                              GAsyncResult *res,
-                              GTask        *task)
+set_operating_mode_complete (MMBroadbandModemQmi *self,
+                             GError              *error)
 {
-    MMBroadbandModemQmi                            *self;
-    QmiDmsOperatingMode                             mode;
-    GError                                         *error = NULL;
-    g_autoptr(QmiMessageDmsSetOperatingModeOutput)  output = NULL;
+    GTask                   *task;
+    SetOperatingModeContext *ctx;
 
-    self = g_task_get_source_object (task);
-    mode = GPOINTER_TO_UINT (g_task_get_task_data (task));
+    g_assert (self->priv->set_operating_mode_task);
+    task = g_steal_pointer (&self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (task);
+
+    if (ctx->timeout_id) {
+        g_source_remove (ctx->timeout_id);
+        ctx->timeout_id = 0;
+    }
+
+    if (ctx->indication_id) {
+        g_autoptr(QmiMessageDmsSetEventReportInput) input = NULL;
+
+        g_signal_handler_disconnect (ctx->client, ctx->indication_id);
+        ctx->indication_id = 0;
+
+        input = qmi_message_dms_set_event_report_input_new ();
+        qmi_message_dms_set_event_report_input_set_operating_mode_reporting (input, FALSE, NULL);
+        qmi_client_dms_set_event_report (ctx->client, input, 5, NULL, NULL, NULL);
+    }
+
+    if (error)
+        g_task_return_error (task, error);
+    else
+        g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+dms_set_operating_mode_timeout_cb (MMBroadbandModemQmi *self)
+{
+    GError *error = NULL;
+
+    error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Power update operation timed out");
+    set_operating_mode_complete (self, error);
+}
+
+static void
+power_event_report_indication_cb (QmiClientDms                      *client,
+                                  QmiIndicationDmsEventReportOutput *output,
+                                  MMBroadbandModemQmi               *self)
+{
+    QmiDmsOperatingMode      state;
+    GError                  *error = NULL;
+    SetOperatingModeContext *ctx;
+
+    if (!qmi_indication_dms_event_report_output_get_operating_mode (output, &state, NULL)) {
+        error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Invalid power indication received");
+        set_operating_mode_complete (self, error);
+        return;
+    }
+
+    g_assert (self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
+
+    if (ctx->mode == state) {
+        mm_obj_dbg (self, "Power state successfully updated: '%s'", qmi_dms_operating_mode_get_string (state));
+        set_operating_mode_complete (self, NULL);
+        return;
+    }
+
+    error = g_error_new (MM_CORE_ERROR,
+                         MM_CORE_ERROR_FAILED,
+                         "Requested mode (%s) and mode received (%s) did not match",
+                         qmi_dms_operating_mode_get_string (ctx->mode),
+                         qmi_dms_operating_mode_get_string (state));
+    set_operating_mode_complete (self, error);
+}
+
+static void
+dms_set_operating_mode_ready (QmiClientDms        *client,
+                              GAsyncResult        *res,
+                              MMBroadbandModemQmi *self) /* full reference */
+{
+    g_autoptr (QmiMessageDmsSetOperatingModeOutput)  output = NULL;
+    GError                                          *error = NULL;
+    SetOperatingModeContext                         *ctx;
+
+    if (!self->priv->set_operating_mode_task) {
+        /* We completed the operation already via indication */
+        g_object_unref (self);
+        return;
+    }
+
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
 
     output = qmi_client_dms_set_operating_mode_finish (client, res, &error);
-    if (!output) {
-        g_prefix_error (&error, "QMI operation failed: ");
-        /* If unsupported, just complete without errors */
-        if (g_error_matches (error, QMI_CORE_ERROR, QMI_CORE_ERROR_UNSUPPORTED)) {
-            mm_obj_dbg (self, "device doesn't support operating mode setting: ignoring power update");
-            g_clear_error (&error);
-        }
-    } else if (!qmi_message_dms_set_operating_mode_output_get_result (output, &error)) {
-        g_prefix_error (&error, "Couldn't set operating mode: ");
+    if (!output || !qmi_message_dms_set_operating_mode_output_get_result (output, &error)) {
         /*
          * Some new devices, like the Dell DW5770, will return an internal error when
          * trying to bring the power mode to online.
@@ -1752,47 +1847,142 @@ dms_set_operating_mode_ready (QmiClientDms *client,
          * retrying. Notify this to upper layers with the special MM_CORE_ERROR_RETRY
          * error.
          */
-        if ((mode == QMI_DMS_OPERATING_MODE_ONLINE) &&
+        if ((ctx->mode == QMI_DMS_OPERATING_MODE_ONLINE) &&
             ((g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_INTERNAL) ||
               g_error_matches (error, QMI_PROTOCOL_ERROR, QMI_PROTOCOL_ERROR_INVALID_TRANSITION)))) {
             g_clear_error (&error);
             error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_RETRY, "Invalid transition");
-        }
+        } else
+            g_prefix_error (&error, "Couldn't set operating mode: ");
     }
 
-    if (error)
-        g_task_return_error (task, error);
+    /* If unsupported, just complete without errors */
+    if (g_error_matches (error, QMI_CORE_ERROR, QMI_CORE_ERROR_UNSUPPORTED)) {
+        mm_obj_dbg (self, "device doesn't support operating mode setting: ignoring power update");
+        g_clear_error (&error);
+        set_operating_mode_complete (self, NULL);
+    } else if (error)
+        set_operating_mode_complete (self, error);
     else
-        g_task_return_boolean (task, TRUE);
-    g_object_unref (task);
+        mm_obj_dbg (self, "operating mode request sent, waiting for power update indication");
+
+    g_object_unref (self);
 }
 
 static void
-common_power_up_down_off (MMIfaceModem        *self,
-                          QmiDmsOperatingMode  mode,
-                          GAsyncReadyCallback  callback,
-                          gpointer             user_data)
+dms_set_operating_mode (MMBroadbandModemQmi *self)
 {
-    GTask                                         *task;
-    QmiClient                                     *client = NULL;
-    g_autoptr(QmiMessageDmsSetOperatingModeInput)  input = NULL;
+    g_autoptr (QmiMessageDmsSetOperatingModeInput)  input = NULL;
+    SetOperatingModeContext                        *ctx;
 
-    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_DMS, &client,
-                                      callback, user_data))
-        return;
-
-    task = g_task_new (self, NULL, callback, user_data);
-    g_task_set_task_data (task, GUINT_TO_POINTER (mode), NULL);
+    g_assert (self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
 
     input = qmi_message_dms_set_operating_mode_input_new ();
-    qmi_message_dms_set_operating_mode_input_set_mode (input, mode, NULL);
-    qmi_client_dms_set_operating_mode (QMI_CLIENT_DMS (client),
+    qmi_message_dms_set_operating_mode_input_set_mode (input, ctx->mode, NULL);
+    qmi_client_dms_set_operating_mode (ctx->client,
                                        input,
                                        20,
                                        NULL,
                                        (GAsyncReadyCallback)dms_set_operating_mode_ready,
-                                       task);
+                                       g_object_ref (self));
+
+    mm_obj_dbg (self, "Starting timeout for indication receiving for 10 seconds");
+    ctx->timeout_id = g_timeout_add_seconds (10,
+                                             (GSourceFunc) dms_set_operating_mode_timeout_cb,
+                                             self);
+}
+
+static void
+dms_set_event_report_operating_mode_activate_ready (QmiClientDms        *client,
+                                                    GAsyncResult        *res,
+                                                    MMBroadbandModemQmi *self) /* full reference */
+{
+    g_autoptr(QmiMessageDmsSetEventReportOutput)  output = NULL;
+    GError                                       *error = NULL;
+    SetOperatingModeContext                      *ctx;
+
+    g_assert (self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
+
+    output = qmi_client_dms_set_event_report_finish (client, res, &error);
+    if (!output || !qmi_message_dms_set_event_report_output_get_result (output, &error)) {
+        g_prefix_error (&error, "Couldn't register for power indications: ");
+        set_operating_mode_complete (self, error);
+        g_object_unref (self);
+        return;
+    }
+
+    g_assert (ctx->indication_id == 0);
+    ctx->indication_id = g_signal_connect (client,
+                                           "event-report",
+                                           G_CALLBACK (power_event_report_indication_cb),
+                                           self);
+
+    mm_obj_dbg (self, "Power operation is pending");
+    dms_set_operating_mode (self);
+    g_object_unref (self);
+}
+
+static void
+modem_power_indication_register (MMBroadbandModemQmi *self)
+{
+    g_autoptr(QmiMessageDmsSetEventReportInput)  input = NULL;
+    SetOperatingModeContext                     *ctx;
+
+    g_assert (self->priv->set_operating_mode_task);
+    ctx = g_task_get_task_data (self->priv->set_operating_mode_task);
+
+    input = qmi_message_dms_set_event_report_input_new ();
+    qmi_message_dms_set_event_report_input_set_operating_mode_reporting (input, TRUE, NULL);
+    mm_obj_dbg (self, "Power indication registration request is sent");
+    qmi_client_dms_set_event_report (
+        ctx->client,
+        input,
+        5,
+        NULL,
+        (GAsyncReadyCallback)dms_set_event_report_operating_mode_activate_ready,
+        g_object_ref (self));
+}
+
+static void
+common_power_up_down_off (MMIfaceModem        *_self,
+                          QmiDmsOperatingMode  mode,
+                          GAsyncReadyCallback  callback,
+                          gpointer             user_data)
+{
+    MMBroadbandModemQmi     *self = MM_BROADBAND_MODEM_QMI (_self);
+    GError                  *error = NULL;
+    GTask                   *task;
+    SetOperatingModeContext *ctx;
+    QmiClient               *client;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    if (self->priv->set_operating_mode_task) {
+        error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_IN_PROGRESS, "Another operation in progress");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    client = mm_shared_qmi_peek_client (MM_SHARED_QMI (self),
+                                        QMI_SERVICE_DMS,
+                                        MM_PORT_QMI_FLAG_DEFAULT,
+                                        &error);
+    if (!client) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx = g_slice_new0 (SetOperatingModeContext);
+    ctx->mode = mode;
+    ctx->client = QMI_CLIENT_DMS (g_object_ref (client));
+    g_task_set_task_data (task, ctx, (GDestroyNotify)set_operating_mode_context_free);
+
+    self->priv->set_operating_mode_task = task;
+    modem_power_indication_register (self);
 }
 
 static void
@@ -6413,6 +6603,200 @@ modem_3gpp_profile_manager_delete_profile (MMIfaceModem3gppProfileManager *self,
                                    NULL,
                                    (GAsyncReadyCallback)delete_profile_ready,
                                    task);
+}
+
+/*****************************************************************************/
+/* PDC Refresh events (3gppProfileManager interface) */
+
+static void
+pdc_refresh_received (QmiClientPdc                  *client,
+                      QmiIndicationPdcRefreshOutput *output,
+                      MMBroadbandModemQmi           *self)
+{
+    mm_obj_dbg (self, "profile refresh indication was received");
+    mm_iface_modem_3gpp_profile_manager_updated (MM_IFACE_MODEM_3GPP_PROFILE_MANAGER (self));
+}
+
+/*****************************************************************************/
+/* Enable/Disable unsolicited events (3gppProfileManager interface) */
+
+static gboolean
+modem_3gpp_profile_manager_enable_disable_unsolicited_events_finish (MMIfaceModem3gppProfileManager  *self,
+                                                                     GAsyncResult                    *res,
+                                                                     GError                         **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+register_pdc_refresh_ready (QmiClientPdc *client,
+                            GAsyncResult *res,
+                            GTask        *task)
+{
+    g_autoptr(QmiMessagePdcRegisterOutput)  output = NULL;
+    MMBroadbandModemQmi                    *self;
+    gboolean                                enable;
+    GError                                 *error = NULL;
+
+    self = g_task_get_source_object (task);
+    enable = GPOINTER_TO_UINT (g_task_get_task_data (task));
+
+    output = qmi_client_pdc_register_finish (client, res, &error);
+    if (!output) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (!qmi_message_pdc_register_output_get_result (output, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    self->priv->profile_manager_unsolicited_events_enabled = enable;
+    mm_obj_dbg (self, "%s for refresh events", enable ? "registered" : "unregistered");
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+common_enable_disable_unsolicited_events_3gpp_profile_manager (MMBroadbandModemQmi *self,
+                                                               gboolean             enable,
+                                                               GAsyncReadyCallback  callback,
+                                                               gpointer             user_data)
+{
+    g_autoptr(QmiMessagePdcRegisterInput)  input = NULL;
+    GTask                                 *task;
+    QmiClient                             *client = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_PDC, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, GUINT_TO_POINTER (enable), NULL);
+
+    if (enable == self->priv->profile_manager_unsolicited_events_enabled) {
+        mm_obj_dbg (self, "profile manager unsolicited events already %s; skipping",
+                    enable ? "enabled" : "disabled");
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    input = qmi_message_pdc_register_input_new ();
+    qmi_message_pdc_register_input_set_enable_reporting (input, enable, NULL);
+    qmi_message_pdc_register_input_set_enable_refresh (input, enable, NULL);
+    qmi_client_pdc_register (QMI_CLIENT_PDC (client),
+                             input,
+                             10,
+                             NULL,
+                             (GAsyncReadyCallback) register_pdc_refresh_ready,
+                             task);
+}
+
+static void
+modem_3gpp_profile_manager_disable_unsolicited_events (MMIfaceModem3gppProfileManager *self,
+                                                       GAsyncReadyCallback             callback,
+                                                       gpointer                        user_data)
+{
+    common_enable_disable_unsolicited_events_3gpp_profile_manager (MM_BROADBAND_MODEM_QMI (self),
+                                                                   FALSE,
+                                                                   callback,
+                                                                   user_data);
+}
+
+static void
+modem_3gpp_profile_manager_enable_unsolicited_events (MMIfaceModem3gppProfileManager *self,
+                                                      GAsyncReadyCallback             callback,
+                                                      gpointer                        user_data)
+{
+    common_enable_disable_unsolicited_events_3gpp_profile_manager (MM_BROADBAND_MODEM_QMI (self),
+                                                                   TRUE,
+                                                                   callback,
+                                                                   user_data);
+}
+
+/*****************************************************************************/
+/* Setup/cleanup unsolicited events (3gppProfileManager interface) */
+
+static gboolean
+modem_3gpp_profile_manager_setup_cleanup_unsolicited_events_finish (MMIfaceModem3gppProfileManager  *self,
+                                                                    GAsyncResult                    *res,
+                                                                    GError                         **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+common_setup_cleanup_unsolicited_events_3gpp_profile_manager (MMBroadbandModemQmi *self,
+                                                              gboolean             enable,
+                                                              GAsyncReadyCallback  callback,
+                                                              gpointer             user_data)
+
+{
+    GTask     *task;
+    QmiClient *client = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_PDC, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    if (enable == self->priv->profile_manager_unsolicited_events_setup) {
+        mm_obj_dbg (self, "profile manager unsolicited events already %s; skipping",
+                    enable ? "set up" : "cleaned up");
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+        return;
+    }
+
+    self->priv->profile_manager_unsolicited_events_setup = enable;
+
+    if (enable) {
+        g_assert (self->priv->refresh_indication_id == 0);
+        self->priv->refresh_indication_id =
+            g_signal_connect (client,
+                              "refresh",
+                              G_CALLBACK (pdc_refresh_received),
+                              self);
+    } else {
+        g_assert (self->priv->refresh_indication_id != 0);
+        g_signal_handler_disconnect (client, self->priv->refresh_indication_id);
+        self->priv->refresh_indication_id = 0;
+    }
+
+    mm_obj_dbg (self, "%s profile events handler", enable ? "set up" : "cleaned up");
+
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_profile_manager_cleanup_unsolicited_events (MMIfaceModem3gppProfileManager *self,
+                                                       GAsyncReadyCallback             callback,
+                                                       gpointer                        user_data)
+{
+    common_setup_cleanup_unsolicited_events_3gpp_profile_manager (MM_BROADBAND_MODEM_QMI (self),
+                                                                  FALSE,
+                                                                  callback,
+                                                                  user_data);
+}
+
+static void
+modem_3gpp_profile_manager_setup_unsolicited_events (MMIfaceModem3gppProfileManager *self,
+                                                     GAsyncReadyCallback             callback,
+                                                     gpointer                        user_data)
+{
+    common_setup_cleanup_unsolicited_events_3gpp_profile_manager (MM_BROADBAND_MODEM_QMI (self),
+                                                                  TRUE,
+                                                                  callback,
+                                                                  user_data);
 }
 
 /*****************************************************************************/
@@ -12715,6 +13099,15 @@ iface_modem_3gpp_profile_manager_init (MMIfaceModem3gppProfileManager *iface)
      * rely on the generic way to check for support */
     iface->check_support = NULL;
     iface->check_support_finish = NULL;
+
+    iface->setup_unsolicited_events = modem_3gpp_profile_manager_setup_unsolicited_events;
+    iface->setup_unsolicited_events_finish = modem_3gpp_profile_manager_setup_cleanup_unsolicited_events_finish;
+    iface->cleanup_unsolicited_events = modem_3gpp_profile_manager_cleanup_unsolicited_events;
+    iface->cleanup_unsolicited_events_finish = modem_3gpp_profile_manager_setup_cleanup_unsolicited_events_finish;
+    iface->enable_unsolicited_events = modem_3gpp_profile_manager_enable_unsolicited_events;
+    iface->enable_unsolicited_events_finish = modem_3gpp_profile_manager_enable_disable_unsolicited_events_finish;
+    iface->disable_unsolicited_events = modem_3gpp_profile_manager_disable_unsolicited_events;
+    iface->disable_unsolicited_events_finish = modem_3gpp_profile_manager_enable_disable_unsolicited_events_finish;
 
     /* Additional actions */
     iface->get_profile = modem_3gpp_profile_manager_get_profile;

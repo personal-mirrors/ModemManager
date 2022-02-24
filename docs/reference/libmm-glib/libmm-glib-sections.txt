@@ -230,6 +230,9 @@ mm_modem_create_bearer_sync
 mm_modem_delete_bearer
 mm_modem_delete_bearer_finish
 mm_modem_delete_bearer_sync
+mm_modem_get_cell_info
+mm_modem_get_cell_info_finish
+mm_modem_get_cell_info_sync
 <SUBSECTION DebugMethods>
 mm_modem_command
 mm_modem_command_finish
@@ -278,6 +281,245 @@ mm_unlock_retries_get_type
 </SECTION>
 
 <SECTION>
+<FILE>mm-cell-info</FILE>
+<TITLE>MMCellInfo</TITLE>
+MMCellInfo
+<SUBSECTION Getters>
+mm_cell_info_get_cell_type
+mm_cell_info_get_serving
+<SUBSECTION Private>
+mm_cell_info_set_cell_type
+mm_cell_info_set_serving
+mm_cell_info_build_string
+mm_cell_info_get_dictionary
+mm_cell_info_new_from_dictionary
+MM_CELL_INFO_GET_DICTIONARY_INSERT
+MM_CELL_INFO_BUILD_STRING_APPEND
+MM_CELL_INFO_NEW_FROM_DICTIONARY_NUM_SET
+MM_CELL_INFO_NEW_FROM_DICTIONARY_STRING_SET
+<SUBSECTION Standard>
+MMCellInfoClass
+MMCellInfoPrivate
+MM_IS_CELL_INFO
+MM_IS_CELL_INFO_CLASS
+MM_TYPE_CELL_INFO
+MM_CELL_INFO
+MM_CELL_INFO_CLASS
+MM_CELL_INFO_GET_CLASS
+mm_cell_info_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-cell-info-cdma</FILE>
+<TITLE>MMCellInfoCdma</TITLE>
+MMCellInfoCdma
+<SUBSECTION Getters>
+mm_cell_info_cdma_get_nid
+mm_cell_info_cdma_get_sid
+mm_cell_info_cdma_get_base_station_id
+mm_cell_info_cdma_get_ref_pn
+mm_cell_info_cdma_get_pilot_strength
+<SUBSECTION Private>
+mm_cell_info_cdma_new_from_dictionary
+mm_cell_info_cdma_set_nid
+mm_cell_info_cdma_set_sid
+mm_cell_info_cdma_set_base_station_id
+mm_cell_info_cdma_set_ref_pn
+mm_cell_info_cdma_set_pilot_strength
+<SUBSECTION Standard>
+MMCellInfoCdmaClass
+MMCellInfoCdmaPrivate
+MM_IS_CELL_INFO_CDMA
+MM_IS_CELL_INFO_CDMA_CLASS
+MM_TYPE_CELL_INFO_CDMA
+MM_CELL_INFO_CDMA
+MM_CELL_INFO_CDMA_CLASS
+MM_CELL_INFO_CDMA_GET_CLASS
+mm_cell_info_cdma_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-cell-info-gsm</FILE>
+<TITLE>MMCellInfoGsm</TITLE>
+MMCellInfoGsm
+<SUBSECTION Getters>
+mm_cell_info_gsm_get_operator_id
+mm_cell_info_gsm_get_lac
+mm_cell_info_gsm_get_ci
+mm_cell_info_gsm_get_timing_advance
+mm_cell_info_gsm_get_arfcn
+mm_cell_info_gsm_get_base_station_id
+mm_cell_info_gsm_get_rx_level
+<SUBSECTION Private>
+mm_cell_info_gsm_new_from_dictionary
+mm_cell_info_gsm_set_operator_id
+mm_cell_info_gsm_set_lac
+mm_cell_info_gsm_set_ci
+mm_cell_info_gsm_set_timing_advance
+mm_cell_info_gsm_set_arfcn
+mm_cell_info_gsm_set_base_station_id
+mm_cell_info_gsm_set_rx_level
+<SUBSECTION Standard>
+MMCellInfoGsmClass
+MMCellInfoGsmPrivate
+MM_IS_CELL_INFO_GSM
+MM_IS_CELL_INFO_GSM_CLASS
+MM_TYPE_CELL_INFO_GSM
+MM_CELL_INFO_GSM
+MM_CELL_INFO_GSM_CLASS
+MM_CELL_INFO_GSM_GET_CLASS
+mm_cell_info_gsm_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-cell-info-umts</FILE>
+<TITLE>MMCellInfoUmts</TITLE>
+MMCellInfoUmts
+<SUBSECTION Getters>
+mm_cell_info_umts_get_operator_id
+mm_cell_info_umts_get_lac
+mm_cell_info_umts_get_ci
+mm_cell_info_umts_get_frequency_fdd_ul
+mm_cell_info_umts_get_frequency_fdd_dl
+mm_cell_info_umts_get_frequency_tdd
+mm_cell_info_umts_get_uarfcn
+mm_cell_info_umts_get_psc
+mm_cell_info_umts_get_rscp
+mm_cell_info_umts_get_ecio
+mm_cell_info_umts_get_path_loss
+<SUBSECTION Private>
+mm_cell_info_umts_new_from_dictionary
+mm_cell_info_umts_set_operator_id
+mm_cell_info_umts_set_lac
+mm_cell_info_umts_set_ci
+mm_cell_info_umts_set_frequency_fdd_ul
+mm_cell_info_umts_set_frequency_fdd_dl
+mm_cell_info_umts_set_frequency_tdd
+mm_cell_info_umts_set_uarfcn
+mm_cell_info_umts_set_psc
+mm_cell_info_umts_set_rscp
+mm_cell_info_umts_set_ecio
+mm_cell_info_umts_set_path_loss
+<SUBSECTION Standard>
+MMCellInfoUmtsClass
+MMCellInfoUmtsPrivate
+MM_IS_CELL_INFO_UMTS
+MM_IS_CELL_INFO_UMTS_CLASS
+MM_TYPE_CELL_INFO_UMTS
+MM_CELL_INFO_UMTS
+MM_CELL_INFO_UMTS_CLASS
+MM_CELL_INFO_UMTS_GET_CLASS
+mm_cell_info_umts_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-cell-info-tdscdma</FILE>
+<TITLE>MMCellInfoTdscdma</TITLE>
+MMCellInfoTdscdma
+<SUBSECTION Getters>
+mm_cell_info_tdscdma_get_operator_id
+mm_cell_info_tdscdma_get_lac
+mm_cell_info_tdscdma_get_ci
+mm_cell_info_tdscdma_get_uarfcn
+mm_cell_info_tdscdma_get_cell_parameter_id
+mm_cell_info_tdscdma_get_timing_advance
+mm_cell_info_tdscdma_get_rscp
+mm_cell_info_tdscdma_get_path_loss
+<SUBSECTION Private>
+mm_cell_info_tdscdma_new_from_dictionary
+mm_cell_info_tdscdma_set_operator_id
+mm_cell_info_tdscdma_set_lac
+mm_cell_info_tdscdma_set_ci
+mm_cell_info_tdscdma_set_uarfcn
+mm_cell_info_tdscdma_set_cell_parameter_id
+mm_cell_info_tdscdma_set_timing_advance
+mm_cell_info_tdscdma_set_rscp
+mm_cell_info_tdscdma_set_path_loss
+<SUBSECTION Standard>
+MMCellInfoTdscdmaClass
+MMCellInfoTdscdmaPrivate
+MM_IS_CELL_INFO_TDSCDMA
+MM_IS_CELL_INFO_TDSCDMA_CLASS
+MM_TYPE_CELL_INFO_TDSCDMA
+MM_CELL_INFO_TDSCDMA
+MM_CELL_INFO_TDSCDMA_CLASS
+MM_CELL_INFO_TDSCDMA_GET_CLASS
+mm_cell_info_tdscdma_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-cell-info-lte</FILE>
+<TITLE>MMCellInfoLte</TITLE>
+MMCellInfoLte
+<SUBSECTION Getters>
+mm_cell_info_lte_get_operator_id
+mm_cell_info_lte_get_tac
+mm_cell_info_lte_get_ci
+mm_cell_info_lte_get_physical_ci
+mm_cell_info_lte_get_earfcn
+mm_cell_info_lte_get_rsrp
+mm_cell_info_lte_get_rsrq
+mm_cell_info_lte_get_timing_advance
+<SUBSECTION Private>
+mm_cell_info_lte_new_from_dictionary
+mm_cell_info_lte_set_operator_id
+mm_cell_info_lte_set_tac
+mm_cell_info_lte_set_ci
+mm_cell_info_lte_set_physical_ci
+mm_cell_info_lte_set_earfcn
+mm_cell_info_lte_set_rsrp
+mm_cell_info_lte_set_rsrq
+mm_cell_info_lte_set_timing_advance
+<SUBSECTION Standard>
+MMCellInfoLteClass
+MMCellInfoLtePrivate
+MM_IS_CELL_INFO_LTE
+MM_IS_CELL_INFO_LTE_CLASS
+MM_TYPE_CELL_INFO_LTE
+MM_CELL_INFO_LTE
+MM_CELL_INFO_LTE_CLASS
+MM_CELL_INFO_LTE_GET_CLASS
+mm_cell_info_lte_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-cell-info-nr5g</FILE>
+<TITLE>MMCellInfoNr5g</TITLE>
+MMCellInfoNr5g
+<SUBSECTION Getters>
+mm_cell_info_nr5g_get_operator_id
+mm_cell_info_nr5g_get_tac
+mm_cell_info_nr5g_get_ci
+mm_cell_info_nr5g_get_physical_ci
+mm_cell_info_nr5g_get_nrarfcn
+mm_cell_info_nr5g_get_rsrp
+mm_cell_info_nr5g_get_rsrq
+mm_cell_info_nr5g_get_sinr
+mm_cell_info_nr5g_get_timing_advance
+<SUBSECTION Private>
+mm_cell_info_nr5g_new_from_dictionary
+mm_cell_info_nr5g_set_operator_id
+mm_cell_info_nr5g_set_tac
+mm_cell_info_nr5g_set_ci
+mm_cell_info_nr5g_set_physical_ci
+mm_cell_info_nr5g_set_nrarfcn
+mm_cell_info_nr5g_set_rsrp
+mm_cell_info_nr5g_set_rsrq
+mm_cell_info_nr5g_set_sinr
+mm_cell_info_nr5g_set_timing_advance
+<SUBSECTION Standard>
+MMCellInfoNr5gClass
+MMCellInfoNr5gPrivate
+MM_IS_CELL_INFO_NR5G
+MM_IS_CELL_INFO_NR5G_CLASS
+MM_TYPE_CELL_INFO_NR5G
+MM_CELL_INFO_NR5G
+MM_CELL_INFO_NR5G_CLASS
+MM_CELL_INFO_NR5G_GET_CLASS
+mm_cell_info_nr5g_get_type
+</SECTION>
+
+<SECTION>
 <FILE>mm-modem-3gpp</FILE>
 <TITLE>MMModem3gpp</TITLE>
 MMModem3gpp
@@ -311,6 +553,7 @@ mm_modem_3gpp_get_initial_eps_bearer_settings
 mm_modem_3gpp_peek_initial_eps_bearer_settings
 mm_modem_3gpp_get_packet_service_state
 mm_modem_3gpp_get_nr5g_registration_settings
+mm_modem_3gpp_peek_nr5g_registration_settings
 <SUBSECTION Methods>
 mm_modem_3gpp_register
 mm_modem_3gpp_register_finish
@@ -790,6 +1033,7 @@ mm_firmware_update_settings_get_variant
 mm_firmware_update_settings_new
 mm_firmware_update_settings_new_from_variant
 mm_firmware_update_settings_set_fastboot_at
+mm_firmware_update_settings_set_method
 mm_firmware_update_settings_set_device_ids
 mm_firmware_update_settings_set_version
 <SUBSECTION Standard>
@@ -1171,6 +1415,7 @@ mm_bearer_peek_stats
 mm_bearer_get_stats
 mm_bearer_get_connection_error
 mm_bearer_peek_connection_error
+mm_bearer_get_reload_stats_supported
 <SUBSECTION Methods>
 mm_bearer_connect
 mm_bearer_connect_finish
@@ -1684,6 +1929,8 @@ MMModem3gppProfileManager
 <SUBSECTION Getters>
 mm_modem_3gpp_profile_manager_get_path
 mm_modem_3gpp_profile_manager_dup_path
+mm_modem_3gpp_profile_manager_get_index_field
+mm_modem_3gpp_profile_manager_dup_index_field
 <SUBSECTION Methods>
 mm_modem_3gpp_profile_manager_list
 mm_modem_3gpp_profile_manager_list_finish
@@ -1703,6 +1950,32 @@ MM_MODEM_3GPP_PROFILE_MANAGER_CLASS
 MM_MODEM_3GPP_PROFILE_MANAGER_GET_CLASS
 MM_TYPE_MODEM_3GPP_PROFILE_MANAGER
 mm_modem_3gpp_profile_manager_get_type
+</SECTION>
+
+<SECTION>
+<FILE>mm-nr5g-registration-settings</FILE>
+<TITLE>MMNr5gRegistrationSettings</TITLE>
+MMNr5gRegistrationSettings
+mm_nr5g_registration_settings_new
+mm_nr5g_registration_settings_set_mico_mode
+mm_nr5g_registration_settings_get_mico_mode
+mm_nr5g_registration_settings_set_drx_cycle
+mm_nr5g_registration_settings_get_drx_cycle
+<SUBSECTION Private>
+mm_nr5g_registration_settings_new_from_string
+mm_nr5g_registration_settings_new_from_dictionary
+mm_nr5g_registration_settings_get_dictionary
+mm_nr5g_registration_settings_cmp
+<SUBSECTION Standard>
+MMNr5gRegistrationSettingsClass
+MMNr5gRegistrationSettingsPrivate
+MM_IS_NR5G_REGISTRATION_SETTINGS
+MM_IS_NR5G_REGISTRATION_SETTINGS_CLASS
+MM_NR5G_REGISTRATION_SETTINGS
+MM_NR5G_REGISTRATION_SETTINGS_CLASS
+MM_NR5G_REGISTRATION_SETTINGS_GET_CLASS
+MM_TYPE_NR5G_REGISTRATION_SETTINGS
+mm_nr5g_registration_settings_get_type
 </SECTION>
 
 <SECTION>
@@ -1761,6 +2034,7 @@ mm_oma_session_state_failed_reason_get_string
 mm_call_direction_get_string
 mm_call_state_get_string
 mm_call_state_reason_get_string
+mm_cell_type_get_string
 <SUBSECTION Private>
 mm_modem_capability_get_string
 mm_modem_lock_build_string_from_mask
@@ -1815,6 +2089,7 @@ mm_call_direction_build_string_from_mask
 mm_call_state_build_string_from_mask
 mm_call_state_reason_build_string_from_mask
 mm_modem_firmware_update_method_get_string
+mm_cell_type_build_string_from_mask
 <SUBSECTION Standard>
 MM_TYPE_BEARER_TYPE
 MM_TYPE_BEARER_IP_FAMILY
@@ -1823,8 +2098,8 @@ MM_TYPE_BEARER_ALLOWED_AUTH
 MM_TYPE_BEARER_MULTIPLEX_SUPPORT
 MM_TYPE_BEARER_APN_TYPE
 MM_TYPE_SIM_TYPE
-MM_TYPE_ESIM_STATUS
-MM_TYPE_SIM_REMOVAL_STATUS
+MM_TYPE_SIM_ESIM_STATUS
+MM_TYPE_SIM_REMOVABILITY
 MM_TYPE_BEARER_ACCESS_TYPE_PREFERENCE
 MM_TYPE_BEARER_ROAMING_ALLOWANCE
 MM_TYPE_BEARER_PROFILE_SOURCE
@@ -1869,6 +2144,7 @@ MM_TYPE_CALL_DIRECTION
 MM_TYPE_CALL_STATE
 MM_TYPE_CALL_STATE_REASON
 MM_TYPE_MODEM_FIRMWARE_UPDATE_METHOD
+MM_TYPE_CELL_TYPE
 mm_bearer_type_get_type
 mm_bearer_ip_family_get_type
 mm_bearer_ip_method_get_type
@@ -1922,6 +2198,7 @@ mm_call_direction_get_type
 mm_call_state_get_type
 mm_call_state_reason_get_type
 mm_modem_firmware_update_method_get_type
+mm_cell_type_get_type
 </SECTION>
 
 <SECTION>
@@ -2007,6 +2284,7 @@ mm_gdbus_bearer_get_bearer_type
 mm_gdbus_bearer_get_profile_id
 mm_gdbus_bearer_get_stats
 mm_gdbus_bearer_dup_stats
+mm_gdbus_bearer_get_reload_stats_supported
 <SUBSECTION Methods>
 mm_gdbus_bearer_call_connect
 mm_gdbus_bearer_call_connect_finish
@@ -2028,6 +2306,7 @@ mm_gdbus_bearer_set_bearer_type
 mm_gdbus_bearer_set_profile_id
 mm_gdbus_bearer_set_stats
 mm_gdbus_bearer_set_multiplexed
+mm_gdbus_bearer_set_reload_stats_supported
 mm_gdbus_bearer_override_properties
 mm_gdbus_bearer_complete_connect
 mm_gdbus_bearer_complete_disconnect
@@ -2359,6 +2638,9 @@ mm_gdbus_modem3gpp_ussd_skeleton_get_type
 <TITLE>MmGdbusModem3gppProfileManager</TITLE>
 MmGdbusModem3gppProfileManager
 MmGdbusModem3gppProfileManagerIface
+<SUBSECTION Getters>
+mm_gdbus_modem3gpp_profile_manager_dup_index_field
+mm_gdbus_modem3gpp_profile_manager_get_index_field
 <SUBSECTION Methods>
 mm_gdbus_modem3gpp_profile_manager_call_delete
 mm_gdbus_modem3gpp_profile_manager_call_delete_finish
@@ -2376,6 +2658,7 @@ mm_gdbus_modem3gpp_profile_manager_complete_list
 mm_gdbus_modem3gpp_profile_manager_complete_set
 mm_gdbus_modem3gpp_profile_manager_interface_info
 mm_gdbus_modem3gpp_profile_manager_override_properties
+mm_gdbus_modem3gpp_profile_manager_set_index_field
 <SUBSECTION Standard>
 MM_GDBUS_IS_MODEM3GPP_PROFILE_MANAGER
 MM_GDBUS_MODEM3GPP_PROFILE_MANAGER
@@ -2527,6 +2810,9 @@ mm_gdbus_modem_call_set_primary_sim_slot_sync
 mm_gdbus_modem_call_command
 mm_gdbus_modem_call_command_finish
 mm_gdbus_modem_call_command_sync
+mm_gdbus_modem_call_get_cell_info
+mm_gdbus_modem_call_get_cell_info_finish
+mm_gdbus_modem_call_get_cell_info_sync
 <SUBSECTION Private>
 mm_gdbus_modem_set_access_technologies
 mm_gdbus_modem_set_bearers
@@ -2576,6 +2862,7 @@ mm_gdbus_modem_complete_set_current_modes
 mm_gdbus_modem_complete_set_current_bands
 mm_gdbus_modem_complete_set_current_capabilities
 mm_gdbus_modem_complete_set_primary_sim_slot
+mm_gdbus_modem_complete_get_cell_info
 mm_gdbus_modem_interface_info
 mm_gdbus_modem_override_properties
 <SUBSECTION Standard>
@@ -3626,6 +3913,9 @@ mm_gdbus_sim_complete_send_puk
 mm_gdbus_sim_complete_set_preferred_networks
 mm_gdbus_sim_interface_info
 mm_gdbus_sim_override_properties
+mm_gdbus_sim_set_esim_status
+mm_gdbus_sim_set_removability
+mm_gdbus_sim_set_sim_type
 <SUBSECTION Standard>
 MM_GDBUS_IS_SIM
 MM_GDBUS_SIM
