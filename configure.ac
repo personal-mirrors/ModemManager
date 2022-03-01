@@ -519,6 +519,7 @@ MM_ENABLE_PLUGIN([foxconn],
 MM_ENABLE_PLUGIN([gosuncn])
 MM_ENABLE_PLUGIN([haier])
 MM_ENABLE_PLUGIN([huawei])
+MM_ENABLE_PLUGIN([intel])
 MM_ENABLE_PLUGIN([iridium])
 MM_ENABLE_PLUGIN([linktop])
 MM_ENABLE_PLUGIN([longcheer])
@@ -667,6 +668,7 @@ echo "
       gosuncn:                 ${enable_plugin_gosuncn}
       haier:                   ${enable_plugin_haier}
       huawei:                  ${enable_plugin_huawei}
+      intel:                   ${enable_plugin_intel}
       iridium:                 ${enable_plugin_iridium}
       linktop:                 ${enable_plugin_linktop}
       longcheer:               ${enable_plugin_longcheer}

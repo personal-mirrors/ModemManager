@@ -24,6 +24,7 @@ AM_CFLAGS = \
 	-I${top_builddir}/libmm-glib/generated \
 	-I${top_builddir}/libmm-glib/generated/tests \
 	-I$(srcdir)/kerneldevice \
+	-I$(top_builddir)/plugins/intel \
 	$(NULL)
 
 AM_LDFLAGS = \
