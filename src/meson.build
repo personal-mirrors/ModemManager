@@ -147,15 +147,15 @@ endif
 
 enums_types = 'mm-port-enums-types'
 
-enums_sources = []
-enums_sources += gnome.mkenums(
+port_enums_sources = []
+port_enums_sources += gnome.mkenums(
   enums_types + '.c',
   sources: headers,
   c_template: build_aux_dir / enums_types + '.c.template',
   fhead: '#include "mm-port-enums-types.h"',
 )
 
-enums_sources += gnome.mkenums(
+port_enums_sources += gnome.mkenums(
   enums_types + '.h',
   sources: headers,
   h_template: build_aux_dir / enums_types + '.h.template',
@@ -165,13 +165,13 @@ enums_sources += gnome.mkenums(
 
 libport = static_library(
   'port',
-  sources: sources + enums_sources,
+  sources: sources + port_enums_sources,
   include_directories: top_inc,
   dependencies: deps + private_deps,
 )
 
 libport_dep = declare_dependency(
-  sources: enums_sources[1],
+  sources: port_enums_sources[1],
   include_directories: '.',
   dependencies: deps,
   link_with: libport,
@@ -226,14 +226,15 @@ sources = files(
 
 enums_types = 'mm-daemon-enums-types'
 
-sources += gnome.mkenums(
+daemon_enums_sources = []
+daemon_enums_sources += gnome.mkenums(
   enums_types + '.c',
   sources: headers,
   c_template: build_aux_dir / enums_types + '.c.template',
   fhead: '#include "mm-daemon-enums-types.h"',
 )
 
-sources += gnome.mkenums(
+daemon_enums_sources += gnome.mkenums(
   enums_types + '.h',
   sources: headers,
   h_template: build_aux_dir / enums_types + '.h.template',
@@ -297,7 +298,7 @@ endif
 
 executable(
   'ModemManager',
-  sources: sources,
+  sources: sources + daemon_enums_sources,
   include_directories: top_inc,
   dependencies: deps,
   c_args: c_args,
