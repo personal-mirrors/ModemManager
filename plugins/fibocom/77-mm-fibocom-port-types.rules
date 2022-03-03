@@ -81,4 +81,10 @@ ATTRS{idVendor}=="1782", ATTRS{idProduct}=="4d11", ENV{.MM_USBIFNUM}=="06", ENV{
 ATTRS{idVendor}=="1782", ATTRS{idProduct}=="4d11", ENV{.MM_USBIFNUM}=="07", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1"
 ATTRS{idVendor}=="1782", ATTRS{idProduct}=="4d11", ENV{.MM_USBIFNUM}=="08", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1"
 
+# ChromeOS specific configuration
+# The MBIM port alone is sufficient for 3GPP related functionalities.
+# The AT channels are used by modemfwd for firmware update related managed,
+# mark them as ignored by ModemManager to avoid perturbations.
+ACTION=="add|change|move", SUBSYSTEMS=="tty", ENV{ID_VENDOR_ID}=="2cb7", ENV{ID_MM_PORT_IGNORE}="1"
+
 LABEL="mm_fibocom_port_types_end"
