@@ -447,6 +447,31 @@ endif
 endif
 
 ################################################################################
+# common fibocom support
+################################################################################
+
+# Common Fibocom modem support library (MBIM only)
+if WITH_SHARED_FIBOCOM
+if WITH_MBIM
+pkglib_LTLIBRARIES += libmm-shared-fibocom.la
+libmm_shared_fibocom_la_SOURCES = \
+	fibocom/mm-shared.c \
+	fibocom/mm-shared-fibocom.h \
+	fibocom/mm-shared-fibocom.c \
+	$(NULL)
+
+libmm_shared_fibocom_la_CPPFLAGS = \
+	$(SHARED_COMMON_COMPILER_FLAGS) \
+	-DMM_MODULE_NAME=\"shared-fibocom\" \
+	$(NULL)
+libmm_shared_fibocom_la_LDFLAGS = $(SHARED_COMMON_LINKER_FLAGS)
+libmm_shared_fibocom_la_LIBADD = $(NULL)
+
+FIBOCOM_COMMON_COMPILER_FLAGS = -I$(top_srcdir)/plugins/fibocom
+endif
+endif
+
+################################################################################
 # plugin: generic
 ################################################################################
 
@@ -701,11 +726,14 @@ if WITH_MBIM
 libmm_plugin_fibocom_la_SOURCES += \
 	fibocom/mm-broadband-modem-mbim-xmm-fibocom.c \
 	fibocom/mm-broadband-modem-mbim-xmm-fibocom.h \
+	fibocom/mm-broadband-modem-mbim-fibocom.c \
+	fibocom/mm-broadband-modem-mbim-fibocom.h \
 	$(NULL)
 endif
 libmm_plugin_fibocom_la_CPPFLAGS = \
 	$(PLUGIN_COMMON_COMPILER_FLAGS) \
 	$(XMM_COMMON_COMPILER_FLAGS) \
+	$(FIBOCOM_COMMON_COMPILER_FLAGS) \
 	-DMM_MODULE_NAME=\"fibocom\" \
 	$(NULL)
 libmm_plugin_fibocom_la_LDFLAGS = $(PLUGIN_COMMON_LINKER_FLAGS)
