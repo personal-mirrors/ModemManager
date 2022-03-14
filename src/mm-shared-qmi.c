@@ -11,7 +11,7 @@
  * GNU General Public License for more details:
  *
  * Copyright (C) 2018 Aleksander Morgado <aleksander@aleksander.es>
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <config.h>
@@ -1031,7 +1031,12 @@ load_current_capabilities_step (GTask *task)
 
         priv->current_capabilities = mm_current_capability_from_qmi_current_capabilities_context (&ctx->capabilities_context, self);
 
-        g_task_return_int (task, priv->current_capabilities);
+        if (priv->current_capabilities == MM_MODEM_CAPABILITY_NONE)
+            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                     "modem has no current capabilities");
+        else
+            g_task_return_int (task, priv->current_capabilities);
+
         g_object_unref (task);
         return;
 
@@ -1696,7 +1701,7 @@ mm_shared_qmi_load_supported_modes (MMIfaceModem        *self,
 
     priv = get_private (MM_SHARED_QMI (self));
     g_assert (priv->supported_radio_interfaces);
-    g_assert (priv->current_capabilities);
+    g_assert (priv->current_capabilities != MM_MODEM_CAPABILITY_NONE);
 
     /* Build all, based on the supported radio interfaces */
     ctx.all = MM_MODEM_MODE_NONE;
@@ -2657,21 +2662,17 @@ setup_carrier_config_step (GTask *task)
         /* fall-through */
 
     case SETUP_CARRIER_CONFIG_STEP_UPDATE_CURRENT: {
-        QmiMessagePdcSetSelectedConfigInput *input;
-        ConfigInfo                          *requested_config;
-        ConfigInfo                          *active_config;
-        QmiConfigTypeAndId                   type_and_id;
+        g_autoptr(QmiMessagePdcSetSelectedConfigInput)  input = NULL;
+        ConfigInfo                                     *requested_config;
+        ConfigInfo                                     *active_config;
 
         requested_config = &g_array_index (priv->config_list, ConfigInfo, ctx->config_requested_i);
         active_config = (priv->config_active_default ? NULL : &g_array_index (priv->config_list, ConfigInfo, priv->config_active_i));
         mm_obj_warn (self, "carrier config switching needed: '%s' -> '%s'",
                      active_config ? active_config->description : DEFAULT_CONFIG_DESCRIPTION, requested_config->description);
 
-        type_and_id.config_type = requested_config->config_type;;
-        type_and_id.id = requested_config->id;
-
         input = qmi_message_pdc_set_selected_config_input_new ();
-        qmi_message_pdc_set_selected_config_input_set_type_with_id (input, &type_and_id, NULL);
+        qmi_message_pdc_set_selected_config_input_set_type_with_id_v2 (input, requested_config->config_type, requested_config->id, NULL);
         qmi_message_pdc_set_selected_config_input_set_token (input, ctx->token++, NULL);
         qmi_client_pdc_set_selected_config (ctx->client,
                                             input,
@@ -2679,13 +2680,12 @@ setup_carrier_config_step (GTask *task)
                                             NULL,
                                             (GAsyncReadyCallback)set_selected_config_ready,
                                             task);
-        qmi_message_pdc_set_selected_config_input_unref (input);
         return;
     }
 
     case SETUP_CARRIER_CONFIG_STEP_ACTIVATE_CURRENT: {
-        QmiMessagePdcActivateConfigInput *input;
-        ConfigInfo                       *requested_config;
+        g_autoptr(QmiMessagePdcActivateConfigInput)  input = NULL;
+        ConfigInfo                                  *requested_config;
 
         requested_config = &g_array_index (priv->config_list, ConfigInfo, ctx->config_requested_i);
 
@@ -2698,7 +2698,6 @@ setup_carrier_config_step (GTask *task)
                                         NULL,
                                         (GAsyncReadyCallback) activate_config_ready,
                                         task);
-        qmi_message_pdc_activate_config_input_unref (input);
         return;
     }
 
@@ -3098,8 +3097,7 @@ list_configs_indication (QmiClientPdc                      *client,
     for (i = 0; i < configs->len; i++) {
         ConfigInfo                                      *current_info;
         QmiIndicationPdcListConfigsOutputConfigsElement *element;
-        QmiConfigTypeAndId                               type_with_id;
-        QmiMessagePdcGetConfigInfoInput                 *input;
+        g_autoptr(QmiMessagePdcGetConfigInfoInput)       input = NULL;
 
         element = &g_array_index (configs, QmiIndicationPdcListConfigsOutputConfigsElement, i);
 
@@ -3109,12 +3107,9 @@ list_configs_indication (QmiClientPdc                      *client,
         current_info->config_type = element->config_type;
 
         input = qmi_message_pdc_get_config_info_input_new ();
-        type_with_id.config_type = element->config_type;
-        type_with_id.id = current_info->id;
-        qmi_message_pdc_get_config_info_input_set_type_with_id (input, &type_with_id, NULL);
+        qmi_message_pdc_get_config_info_input_set_type_with_id_v2 (input, element->config_type, current_info->id, NULL);
         qmi_message_pdc_get_config_info_input_set_token (input, current_info->token, NULL);
         qmi_client_pdc_get_config_info (ctx->client, input, 10, NULL, NULL, NULL); /* ignore response! */
-        qmi_message_pdc_get_config_info_input_unref (input);
     }
 }
 
@@ -3326,7 +3321,7 @@ uim_get_slot_status_ready (QmiClientUim *client,
     /* It's fine if we don't have EID information, but it should be well-formed if present. If it's malformed,
      * there is probably a modem firmware bug. */
     if (qmi_message_uim_get_slot_status_output_get_physical_slot_information (output, &ext_information, NULL) &&
-        qmi_message_uim_get_slot_status_output_get_slot_eid_information (output, &slot_eids, NULL) &&
+        qmi_message_uim_get_slot_status_output_get_slot_eid (output, &slot_eids, NULL) &&
         (ext_information->len != physical_slots->len || slot_eids->len != physical_slots->len)) {
         g_task_return_new_error (task,
                                  MM_CORE_ERROR,
@@ -3382,11 +3377,11 @@ uim_get_slot_status_ready (QmiClientUim *client,
         if (ext_information && slot_eids) {
             slot_info = &g_array_index (ext_information, QmiPhysicalSlotInformationSlot, i);
             if (slot_info->is_euicc) {
-                GArray *slot_eid;
+                QmiSlotEidElement *slot_eid_element;
 
-                slot_eid = g_array_index (slot_eids, GArray *, i);
-                if (slot_eid->len)
-                    eid = mm_decode_eid (slot_eid->data, slot_eid->len);
+                slot_eid_element = &g_array_index (slot_eids, QmiSlotEidElement, i);
+                if (slot_eid_element->eid->len)
+                    eid = mm_decode_eid (slot_eid_element->eid->data, slot_eid_element->eid->len);
                 if (!eid)
                     mm_obj_dbg (self, "SIM in slot %d is marked as eUICC, but has malformed EID", i + 1);
             }

@@ -410,7 +410,7 @@ dnl-----------------------------------------------------------------------------
 dnl QMI support (enabled by default)
 dnl
 
-LIBQMI_VERSION=1.31.2
+LIBQMI_VERSION=1.31.3
 
 AC_ARG_WITH(qmi, AS_HELP_STRING([--without-qmi], [Build without QMI support]), [], [with_qmi=yes])
 AM_CONDITIONAL(WITH_QMI, test "x$with_qmi" = "xyes")
@@ -513,12 +513,14 @@ MM_ENABLE_PLUGIN([dell],
                   with_shared_foxconn])
 MM_ENABLE_PLUGIN([dlink])
 MM_ENABLE_PLUGIN([fibocom],
-                 [with_shared_xmm])
+                 [with_shared_fibocom,
+                  with_shared_xmm])
 MM_ENABLE_PLUGIN([foxconn],
                  [with_shared_foxconn])
 MM_ENABLE_PLUGIN([gosuncn])
 MM_ENABLE_PLUGIN([haier])
 MM_ENABLE_PLUGIN([huawei])
+MM_ENABLE_PLUGIN([intel])
 MM_ENABLE_PLUGIN([iridium])
 MM_ENABLE_PLUGIN([linktop])
 MM_ENABLE_PLUGIN([longcheer])
@@ -564,6 +566,7 @@ MM_BUILD_SHARED([novatel])
 MM_BUILD_SHARED([xmm])
 MM_BUILD_SHARED([telit])
 MM_BUILD_SHARED([foxconn])
+MM_BUILD_SHARED([fibocom])
 
 dnl-----------------------------------------------------------------------------
 dnl Output

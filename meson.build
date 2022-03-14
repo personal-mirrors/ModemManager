@@ -244,7 +244,7 @@ config_h.set('WITH_MBIM', enable_mbim)
 # QMI support (enabled by default)
 enable_qmi = get_option('qmi')
 if enable_qmi
-  qmi_glib_dep = dependency('qmi-glib', version: '>= 1.31.2')
+  qmi_glib_dep = dependency('qmi-glib', version: '>= 1.31.3')
 endif
 config_h.set('WITH_QMI', enable_qmi)
 
@@ -280,6 +280,7 @@ enable_gtk_doc = get_option('gtk_doc')
 enable_plugins = not get_option('auto_features').disabled()
 
 plugins_shared_reqs = {
+  'fibocom': enable_mbim,
   'foxconn': enable_mbim,
   'icera': true,
   'novatel': true,
@@ -296,12 +297,13 @@ plugins_options_reqs = {
   'cinterion': {'available': true, 'shared': []},
   'dell': {'available': true, 'shared': ['foxconn', 'novatel', 'sierra', 'telit', 'xmm']},
   'dlink': {'available': true, 'shared': []},
-  'fibocom': {'available': true, 'shared': ['xmm']},
+  'fibocom': {'available': true, 'shared': ['fibocom', 'xmm']},
   'foxconn': {'available': true, 'shared': ['foxconn']},
   'generic': {'available': true, 'shared': []},
   'gosuncn': {'available': true, 'shared': []},
   'haier': {'available': true, 'shared': []},
   'huawei': {'available': true, 'shared': []},
+  'intel': {'available': true, 'shared': []},
   'iridium': {'available': true, 'shared': []},
   'linktop': {'available': true, 'shared': []},
   'longcheer': {'available': true, 'shared': []},

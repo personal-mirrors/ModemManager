@@ -53,6 +53,23 @@ if enable_qmi
   plugins_deps += qmi_glib_dep
 endif
 
+# common Fibocom support library (MBIM only)
+if plugins_shared['fibocom']
+  fibocom_inc = include_directories('fibocom')
+
+  c_args = '-DMM_MODULE_NAME="shared-fibocom"'
+
+  sources = files(
+    'fibocom/mm-shared.c',
+    'fibocom/mm-shared-fibocom.c',
+  )
+
+  plugins += {'shared-fibocom': {
+    'plugin': false,
+    'module': {'sources': sources, 'include_directories': plugins_incs, 'c_args': c_args},
+  }}
+endif
+
 # Common Foxconn modem support library (MBIM only)
 if plugins_shared['foxconn']
   foxconn_inc = include_directories('foxconn')
@@ -88,7 +105,7 @@ if plugins_shared['icera']
   plugins += {'shared-icera': {
     'plugin': false,
     'helper': {'sources': files('icera/mm-modem-helpers-icera.c'), 'include_directories': plugins_incs, 'c_args': common_c_args},
-    'module': {'sources': sources, 'include_directories': plugins_incs, 'c_args': common_c_args},
+    'module': {'sources': sources + daemon_enums_sources, 'include_directories': plugins_incs, 'c_args': common_c_args},
     'test': {'sources': files('icera/tests/test-modem-helpers-icera.c'), 'include_directories': plugins_incs + [icera_inc], 'dependencies': libhelpers_dep},
   }}
 endif
@@ -185,7 +202,7 @@ if plugins_shared['telit']
   plugins += {'shared-telit': {
     'plugin': false,
     'helper': {'sources': files('telit/mm-modem-helpers-telit.c'), 'include_directories': plugins_incs, 'c_args': common_c_args},
-    'module': {'sources': sources, 'include_directories': plugins_incs + [telit_inc], 'c_args': common_c_args},
+    'module': {'sources': sources + daemon_enums_sources, 'include_directories': plugins_incs + [telit_inc], 'c_args': common_c_args},
     'test': {'sources': files('telit/tests/test-mm-modem-helpers-telit.c'), 'include_directories': telit_inc, 'dependencies': libmm_test_common_dep},
   }}
 endif
@@ -285,7 +302,7 @@ if plugins_options['cinterion']
   plugins += {'plugin-cinterion': {
     'plugin': true,
     'helper': {'sources': files('cinterion/mm-modem-helpers-cinterion.c'), 'include_directories': plugins_incs, 'c_args': common_c_args},
-    'module': {'sources': sources, 'include_directories': plugins_incs, 'c_args': common_c_args},
+    'module': {'sources': sources + daemon_enums_sources, 'include_directories': plugins_incs, 'c_args': common_c_args},
     'test': {'sources': files('cinterion/tests/test-modem-helpers-cinterion.c'), 'include_directories': plugins_incs + [include_directories('cinterion')], 'dependencies': libport_dep},
   }}
 
@@ -343,11 +360,14 @@ if plugins_options['fibocom']
     'fibocom/mm-plugin-fibocom.c',
   )
   if enable_mbim
-    sources += files('fibocom/mm-broadband-modem-mbim-xmm-fibocom.c')
+    sources += files(
+      'fibocom/mm-broadband-modem-mbim-xmm-fibocom.c',
+      'fibocom/mm-broadband-modem-mbim-fibocom.c',
+    )
   endif
   plugins += {'plugin-fibocom': {
     'plugin': true,
-    'module': {'sources': sources, 'include_directories': plugins_incs + [xmm_inc], 'c_args': c_args},
+    'module': {'sources': sources, 'include_directories': plugins_incs + [xmm_inc] + [fibocom_inc], 'c_args': c_args},
   }}
 
   plugins_udev_rules += files('fibocom/77-mm-fibocom-port-types.rules')
@@ -448,12 +468,30 @@ if plugins_options['huawei']
 
   plugins += {'plugin-huawei': {
     'plugin': true,
-    'helper': {'sources': files('huawei/mm-modem-helpers-huawei.c'), 'include_directories': plugins_incs + [huawei_inc], 'c_args': common_c_args + ['-DMM_MODULE_NAME="huawei"']},
-    'module': {'sources': sources + enums_sources, 'include_directories': plugins_incs + [huawei_inc], 'c_args': common_c_args + ['-DMM_MODULE_NAME="huawei"']},
+    'helper': {'sources': files('huawei/mm-modem-helpers-huawei.c') + daemon_enums_sources, 'include_directories': plugins_incs + [huawei_inc], 'c_args': common_c_args + ['-DMM_MODULE_NAME="huawei"']},
+    'module': {'sources': sources + enums_sources + port_enums_sources + daemon_enums_sources, 'include_directories': plugins_incs + [huawei_inc], 'c_args': common_c_args + ['-DMM_MODULE_NAME="huawei"']},
     'test': {'sources': files('huawei/tests/test-modem-helpers-huawei.c') + enums_sources, 'include_directories': huawei_inc, 'dependencies': libhelpers_dep},
   }}
 
   plugins_udev_rules += files('huawei/77-mm-huawei-net-port-types.rules')
+endif
+
+# plugin: intel
+if plugins_options['intel']
+  sources = files(
+    'intel/mm-plugin-intel.c',
+  )
+
+  if enable_mbim
+    sources += files('intel/mm-broadband-modem-mbim-intel.c')
+  endif
+
+  common_c_args = '-DMM_MODULE_NAME="intel"'
+
+  plugins += {'plugin-intel': {
+    'plugin': true,
+    'module': {'sources': sources, 'include_directories': plugins_incs + [xmm_inc], 'c_args': common_c_args},
+  }}
 endif
 
 # plugin: iridium
@@ -522,7 +560,7 @@ if plugins_options['mbm']
   plugins += {'plugin-ericsson-mbm': {
     'plugin': true,
     'helper': {'sources': files('mbm/mm-modem-helpers-mbm.c'), 'include_directories': plugins_incs, 'c_args': common_c_args + ['-DMM_MODULE_NAME="ericsson-mbm"']},
-    'module': {'sources': sources, 'include_directories': plugins_incs, 'c_args': common_c_args + ['-DMM_MODULE_NAME="ericsson-mbm"']},
+    'module': {'sources': sources + daemon_enums_sources, 'include_directories': plugins_incs, 'c_args': common_c_args + ['-DMM_MODULE_NAME="ericsson-mbm"']},
     'test': {'sources': files('mbm/tests/test-modem-helpers-mbm.c'), 'include_directories': plugins_incs + [include_directories('mbm')], 'dependencies': libhelpers_dep},
   }}
 
@@ -632,7 +670,7 @@ if plugins_options['option-hso']
 
   plugins += {'plugin-option-hso': {
     'plugin': true,
-    'module': {'sources': sources, 'include_directories': plugins_incs, 'c_args': '-DMM_MODULE_NAME="option-hso"'},
+    'module': {'sources': sources + daemon_enums_sources, 'include_directories': plugins_incs, 'c_args': '-DMM_MODULE_NAME="option-hso"'},
   }}
 endif
 
@@ -840,7 +878,7 @@ if plugins_options['ublox']
   plugins += {'plugin-ublox': {
     'plugin': true,
     'helper': {'sources': files('ublox/mm-modem-helpers-ublox.c'), 'include_directories': plugins_incs, 'c_args': common_c_args},
-    'module': {'sources': sources, 'include_directories': plugins_incs + [ublox_inc], 'c_args': common_c_args},
+    'module': {'sources': sources + daemon_enums_sources, 'include_directories': plugins_incs + [ublox_inc], 'c_args': common_c_args},
     'test': {'sources': files('ublox/tests/test-modem-helpers-ublox.c'), 'include_directories': ublox_inc, 'dependencies': libmm_test_common_dep},
   }}
 
