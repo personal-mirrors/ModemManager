@@ -563,8 +563,15 @@ telit_get_4g_mm_bands (GMatchInfo  *match_info,
     gchar        *match_str = NULL;
     guint64       value;
     gchar       **tokens = NULL;
+    gboolean      hex_format = FALSE;
+    gboolean      ok;
 
-    match_str = g_match_info_fetch_named (match_info, "Bands4G");
+    match_str = g_match_info_fetch_named (match_info, "Bands4GDec");
+    if (!match_str) {
+        match_str = g_match_info_fetch_named (match_info, "Bands4GHex");
+        hex_format = match_str != NULL;
+    }
+
     if (!match_str || match_str[0] == '\0') {
         g_set_error (&inner_error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                      "Could not find 4G band flags from response");
@@ -575,7 +582,10 @@ telit_get_4g_mm_bands (GMatchInfo  *match_info,
     tokens = g_strsplit (match_str, "-", -1);
 
     /* If this is a range, get upper threshold, which contains the total supported mask */
-    if (!mm_get_u64_from_str (tokens[1] ? tokens[1] : tokens[0], &value)) {
+    ok = hex_format?
+        mm_get_u64_from_hex_str (tokens[1] ? tokens[1] : tokens[0], &value):
+        mm_get_u64_from_str (tokens[1] ? tokens[1] : tokens[0], &value);
+    if (!ok) {
         g_set_error (&inner_error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                      "Could not parse 4G band mask from string: '%s'", match_str);
         goto out;
@@ -608,7 +618,7 @@ telit_get_ext_4g_mm_bands (GMatchInfo  *match_info,
     gchar        *match_str_ext = NULL;
     guint64       value;
 
-    match_str = g_match_info_fetch_named (match_info, "Bands4G");
+    match_str = g_match_info_fetch_named (match_info, "Bands4GHex");
     if (!match_str || match_str[0] == '\0') {
         g_set_error (&inner_error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                      "Could not find 4G band hex mask flag from response");
@@ -667,12 +677,25 @@ bnd_response_has_ext_4g_bands (const gchar *response)
     return g_strv_length (tokens) == 4;
 }
 
+/* Regex tokens for #BND parsing */
+#define MM_SUPPORTED_BANDS_2G       "\\s*\\((?P<Bands2G>[0-9\\-,]*)\\)"
+#define MM_SUPPORTED_BANDS_3G       "(,\\s*\\((?P<Bands3G>[0-9\\-,]*)\\))?"
+#define MM_SUPPORTED_BANDS_4G_HEX   "(,\\s*\\((?P<Bands4GHex>[0-9A-F\\-,]*)\\))?"
+#define MM_SUPPORTED_BANDS_4G_DEC   "(,\\s*\\((?P<Bands4GDec>[0-9\\-,]*)\\))?"
+#define MM_SUPPORTED_BANDS_4G_EXT   "(,\\s*\\((?P<Bands4GHex>[0-9A-F]+)\\))?(,\\s*\\((?P<Bands4GExt>[0-9A-F]+)\\))?"
+#define MM_CURRENT_BANDS_2G         "\\s*(?P<Bands2G>\\d+)"
+#define MM_CURRENT_BANDS_3G         "(,\\s*(?P<Bands3G>\\d+))?"
+#define MM_CURRENT_BANDS_4G_HEX     "(,\\s*(?P<Bands4GHex>[0-9A-F]+))?"
+#define MM_CURRENT_BANDS_4G_DEC     "(,\\s*(?P<Bands4GDec>\\d+))?"
+#define MM_CURRENT_BANDS_4G_EXT     "(,\\s*(?P<Bands4GHex>[0-9A-F]+))?(,\\s*(?P<Bands4GExt>[0-9A-F]+))?"
+
 static GArray *
 common_parse_bnd_response (const gchar    *response,
                            gboolean        modem_is_2g,
                            gboolean        modem_is_3g,
                            gboolean        modem_is_4g,
                            gboolean        modem_alternate_3g_bands,
+                           gboolean        modem_has_hex_format_4g_bands,
                            gboolean        modem_ext_4g_bands,
                            LoadBandsType   load_type,
                            gpointer        log_object,
@@ -681,24 +704,31 @@ common_parse_bnd_response (const gchar    *response,
     GError     *inner_error = NULL;
     GArray     *bands = NULL;
     GMatchInfo *match_info = NULL;
-    GRegex     *r;
+    GRegex     *r = NULL;
+    const gchar *load_bands_regex = NULL;
 
-    if (!modem_ext_4g_bands) {
-        static const gchar *load_bands_regex[] = {
-            [LOAD_BANDS_TYPE_SUPPORTED] = "#BND:\\s*\\((?P<Bands2G>[0-9\\-,]*)\\)(,\\s*\\((?P<Bands3G>[0-9\\-,]*)\\))?(,\\s*\\((?P<Bands4G>[0-9\\-,]*)\\))?",
-            [LOAD_BANDS_TYPE_CURRENT]   = "#BND:\\s*(?P<Bands2G>\\d+)(,\\s*(?P<Bands3G>\\d+))?(,\\s*(?P<Bands4G>\\d+))?",
-        };
+    static const gchar *load_bands_regex_4g_hex[] = {
+        [LOAD_BANDS_TYPE_SUPPORTED] = "#BND:"MM_SUPPORTED_BANDS_2G MM_SUPPORTED_BANDS_3G MM_SUPPORTED_BANDS_4G_HEX,
+        [LOAD_BANDS_TYPE_CURRENT]   = "#BND:"MM_CURRENT_BANDS_2G MM_CURRENT_BANDS_3G MM_CURRENT_BANDS_4G_HEX,
 
-        r = g_regex_new (load_bands_regex[load_type], G_REGEX_RAW, 0, NULL);
-    } else {
-        static const gchar *load_bands_regex_hex[] = {
-            [LOAD_BANDS_TYPE_SUPPORTED] = "#BND:\\s*\\((?P<Bands2G>[0-9\\-,]*)\\)(,\\s*\\((?P<Bands3G>[0-9\\-,]*)\\))?(,\\s*\\((?P<Bands4G>[0-9A-F]+)\\))?(,\\s*\\((?P<Bands4GExt>[0-9A-F]+)\\))?",
-            [LOAD_BANDS_TYPE_CURRENT]   = "#BND:\\s*(?P<Bands2G>\\d+)(,\\s*(?P<Bands3G>\\d+))?(,\\s*(?P<Bands4G>[0-9A-F]+))?(,\\s*(?P<Bands4GExt>[0-9A-F]+))?",
-        };
+    };
+    static const gchar *load_bands_regex_4g_dec[] = {
+        [LOAD_BANDS_TYPE_SUPPORTED] = "#BND:"MM_SUPPORTED_BANDS_2G MM_SUPPORTED_BANDS_3G MM_SUPPORTED_BANDS_4G_DEC,
+        [LOAD_BANDS_TYPE_CURRENT]   = "#BND:"MM_CURRENT_BANDS_2G MM_CURRENT_BANDS_3G MM_CURRENT_BANDS_4G_DEC,
+    };
+    static const gchar *load_bands_regex_4g_ext[] = {
+        [LOAD_BANDS_TYPE_SUPPORTED] = "#BND:"MM_SUPPORTED_BANDS_2G MM_SUPPORTED_BANDS_3G MM_SUPPORTED_BANDS_4G_EXT,
+        [LOAD_BANDS_TYPE_CURRENT]   = "#BND:"MM_CURRENT_BANDS_2G MM_CURRENT_BANDS_3G MM_CURRENT_BANDS_4G_EXT,
+    };
 
-        r = g_regex_new (load_bands_regex_hex[load_type], G_REGEX_RAW, 0, NULL);
-    }
+    if (modem_ext_4g_bands)
+        load_bands_regex = load_bands_regex_4g_ext[load_type];
+    else if (modem_has_hex_format_4g_bands)
+        load_bands_regex = load_bands_regex_4g_hex[load_type];
+    else
+        load_bands_regex = load_bands_regex_4g_dec[load_type];
 
+    r = g_regex_new (load_bands_regex, G_REGEX_RAW, 0, NULL);
     g_assert (r);
 
     if (!g_regex_match (r, response, 0, &match_info)) {
@@ -721,12 +751,15 @@ common_parse_bnd_response (const gchar    *response,
     if (modem_is_3g && !telit_get_3g_mm_bands (match_info, log_object, modem_alternate_3g_bands, &bands, &inner_error))
         goto out;
 
-    if (modem_is_4g && !modem_ext_4g_bands && !telit_get_4g_mm_bands (match_info, &bands, &inner_error))
-        goto out;
+    if (modem_is_4g) {
+        gboolean ok;
 
-    if (modem_is_4g && modem_ext_4g_bands && !telit_get_ext_4g_mm_bands (match_info, &bands, &inner_error))
-        goto out;
-
+        ok = modem_ext_4g_bands?
+            telit_get_ext_4g_mm_bands (match_info, &bands, &inner_error) :
+            telit_get_4g_mm_bands (match_info, &bands, &inner_error);
+        if (!ok)
+            goto out;
+    }
 out:
     g_match_info_free (match_info);
     g_regex_unref (r);
@@ -746,6 +779,7 @@ mm_telit_parse_bnd_query_response (const gchar  *response,
                                    gboolean      modem_is_3g,
                                    gboolean      modem_is_4g,
                                    gboolean      modem_alternate_3g_bands,
+                                   gboolean      modem_has_hex_format_4g_bands,
                                    gboolean      modem_ext_4g_bands,
                                    gpointer      log_object,
                                    GError      **error)
@@ -753,6 +787,7 @@ mm_telit_parse_bnd_query_response (const gchar  *response,
     return common_parse_bnd_response (response,
                                       modem_is_2g, modem_is_3g, modem_is_4g,
                                       modem_alternate_3g_bands,
+                                      modem_has_hex_format_4g_bands,
                                       modem_ext_4g_bands,
                                       LOAD_BANDS_TYPE_CURRENT,
                                       log_object,
@@ -765,6 +800,7 @@ mm_telit_parse_bnd_test_response (const gchar  *response,
                                   gboolean      modem_is_3g,
                                   gboolean      modem_is_4g,
                                   gboolean      modem_alternate_3g_bands,
+                                  gboolean      modem_has_hex_format_4g_bands,
                                   gboolean     *modem_ext_4g_bands,
                                   gpointer      log_object,
                                   GError      **error)
@@ -773,6 +809,7 @@ mm_telit_parse_bnd_test_response (const gchar  *response,
     return common_parse_bnd_response (response,
                                       modem_is_2g, modem_is_3g, modem_is_4g,
                                       modem_alternate_3g_bands,
+                                      modem_has_hex_format_4g_bands,
                                       *modem_ext_4g_bands,
                                       LOAD_BANDS_TYPE_SUPPORTED,
                                       log_object,
@@ -851,4 +888,83 @@ mm_telit_build_modes_list (void)
     g_array_append_val (combinations, mode);
 
     return combinations;
+}
+
+/*****************************************************************************/
+/* Software Package version response parser */
+
+gchar *
+mm_telit_parse_swpkgv_response (const gchar *response)
+{
+    gchar *version = NULL;
+    g_autofree gchar *base_version = NULL;
+    g_autofree gchar *ext_version = NULL;
+    g_autofree gchar *production_version = NULL;
+    g_autoptr(GRegex) r = NULL;
+    g_autoptr(GMatchInfo) match_info = NULL;
+    guint matches;
+
+    /* We are interested only in the first line: "Telit Software Package version"
+     * which is composed by up to three parts:
+     * - base version: "ab.cde.fgh"
+     * - extended version (e.g. alpha, beta, test version): "Axyz", "Bxyz", or "Txyz"
+     * - production parameter version (e.g. P0F.012345)
+     */
+    r = g_regex_new ("(?P<Base>\\d{2}.\\d{2}.\\d{3})(?P<Ext>-[ABT]\\d{3})?(?P<Prod>-\\w\\d\\w\\.\\d+)?",
+                     G_REGEX_RAW | G_REGEX_MULTILINE | G_REGEX_NEWLINE_CRLF,
+                     G_REGEX_MATCH_NEWLINE_CR,
+                     NULL);
+    g_assert (r != NULL);
+
+    if (!g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, NULL)) {
+        return NULL;
+    }
+
+    matches = g_match_info_get_match_count (match_info);
+    if (matches < 2 || matches > 4) {
+        return NULL;
+    }
+
+    base_version = g_match_info_fetch_named (match_info, "Base");
+    ext_version = g_match_info_fetch_named (match_info, "Ext");
+    production_version = g_match_info_fetch_named (match_info, "Prod");
+
+    if (base_version && !ext_version && !production_version)
+        version = g_strdup (base_version);
+    else if (base_version && ext_version && !production_version)
+        version = g_strdup_printf("%s%s", base_version, ext_version);
+    else if (base_version && !ext_version && production_version)
+        version = g_strdup_printf("%s%s", base_version, production_version);
+    else if (base_version && ext_version && production_version)
+        version = g_strdup_printf("%s%s%s", base_version, ext_version, production_version);
+
+    return version;
+}
+
+/*****************************************************************************/
+/* MM Telit Model from revision string */
+
+MMTelitModel
+mm_telit_model_from_revision (const gchar *revision)
+{
+    guint i;
+    static const struct {
+        const gchar *revision_prefix;
+        MMTelitModel model;
+    } revision_to_model_map [] = {
+        {"24.01", MM_TELIT_MODEL_LM940},
+        {"25.", MM_TELIT_MODEL_LE910C1},
+        {"32.", MM_TELIT_MODEL_LM960},
+        {"38.", MM_TELIT_MODEL_FN980},
+        {"40.", MM_TELIT_MODEL_LN920}
+    };
+
+    g_assert (revision);
+
+    for (i = 0; i < G_N_ELEMENTS (revision_to_model_map); ++i) {
+        if (g_str_has_prefix (revision, revision_to_model_map[i].revision_prefix))
+            return revision_to_model_map[i].model;
+    }
+
+    return MM_TELIT_MODEL_DEFAULT;
 }

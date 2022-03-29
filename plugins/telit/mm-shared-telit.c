@@ -43,6 +43,7 @@ typedef struct {
     gboolean      ext_4g_bands;
     GArray       *supported_bands;
     GArray       *supported_modes;
+    gchar        *software_package_version;
 } Private;
 
 static void
@@ -52,7 +53,15 @@ private_free (Private *priv)
         g_array_unref (priv->supported_bands);
     if (priv->supported_modes)
         g_array_unref (priv->supported_modes);
+    g_free (priv->software_package_version);
     g_slice_free (Private, priv);
+}
+
+static gboolean
+is_bnd_4g_format_hex (MMBaseModem *self,
+                      const gchar *revision)
+{
+    return mm_telit_model_from_revision (revision) == MM_TELIT_MODEL_LE910C1;
 }
 
 static void
@@ -219,6 +228,7 @@ load_supported_bands_ready (MMBaseModem  *self,
                                                   mm_iface_modem_is_3g (MM_IFACE_MODEM (self)),
                                                   mm_iface_modem_is_4g (MM_IFACE_MODEM (self)),
                                                   priv->alternate_3g_bands,
+                                                  is_bnd_4g_format_hex (self, priv->software_package_version),
                                                   &priv->ext_4g_bands,
                                                   self,
                                                   &error);
@@ -324,6 +334,7 @@ load_current_bands_ready (MMBaseModem  *self,
                                                    mm_iface_modem_is_3g (MM_IFACE_MODEM (self)),
                                                    mm_iface_modem_is_4g (MM_IFACE_MODEM (self)),
                                                    priv->alternate_3g_bands,
+                                                   is_bnd_4g_format_hex (self, priv->software_package_version),
                                                    priv->ext_4g_bands,
                                                    self,
                                                    &error);
@@ -613,6 +624,121 @@ mm_shared_telit_set_current_modes (MMIfaceModem *self,
         (GAsyncReadyCallback) ws46_set_ready,
         task);
     g_free (command);
+}
+
+/*****************************************************************************/
+/* Revision loading */
+
+gchar *
+mm_shared_telit_modem_load_revision_finish (MMIfaceModem *self,
+                                            GAsyncResult *res,
+                                            GError **error)
+{
+    return g_task_propagate_pointer (G_TASK (res), error);
+}
+
+static void
+load_revision_ready (MMBaseModem *self,
+                     GAsyncResult *res,
+                     GTask *task)
+{
+    GError *error;
+    GVariant *result;
+
+    result = mm_base_modem_at_sequence_finish (self, res, NULL, &error);
+    if (!result) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+    } else {
+        gchar *revision = NULL;
+        Private *priv;
+
+        priv = get_private (MM_SHARED_TELIT (self));
+        revision = g_variant_dup_string (result, NULL);
+        priv->software_package_version = g_strdup (revision);
+        g_task_return_pointer (task, revision, g_free);
+        g_object_unref (task);
+    }
+}
+
+/*
+ * parse AT#SWPKGV command
+ * Execution command returns the software package version without #SWPKGV: command echo.
+ * The response is as follows:
+ *
+ * AT#SWPKGV
+ * <Telit Software Package Version>-<Production Parameters Version>
+ * <Modem FW Version> (Usually the same value returned by AT+GMR)
+ * <Production Parameters Version>
+ * <Application FW Version>
+ */
+static MMBaseModemAtResponseProcessorResult
+software_package_version_ready (MMBaseModem   *self,
+                                gpointer       none,
+                                const gchar   *command,
+                                const gchar   *response,
+                                gboolean       last_command,
+                                const GError  *error,
+                                GVariant     **result,
+                                GError       **result_error)
+{
+    gchar *version = NULL;
+
+    if (error) {
+        *result = NULL;
+
+        /* Ignore AT errors (ie, ERROR or CMx ERROR) */
+        if (error->domain != MM_MOBILE_EQUIPMENT_ERROR || last_command) {
+            *result_error = g_error_copy (error);
+            return MM_BASE_MODEM_AT_RESPONSE_PROCESSOR_RESULT_FAILURE;
+        }
+
+        *result_error = NULL;
+        return MM_BASE_MODEM_AT_RESPONSE_PROCESSOR_RESULT_CONTINUE;
+    }
+
+    version = mm_telit_parse_swpkgv_response (response);
+    if (!version)
+        return MM_BASE_MODEM_AT_RESPONSE_PROCESSOR_RESULT_CONTINUE;
+
+    *result = g_variant_new_take_string (version);
+    return MM_BASE_MODEM_AT_RESPONSE_PROCESSOR_RESULT_SUCCESS;
+}
+
+static const MMBaseModemAtCommand revisions[] = {
+    { "#SWPKGV",  3, TRUE, software_package_version_ready },
+    { "+CGMR",   3, TRUE, mm_base_modem_response_processor_string_ignore_at_errors },
+    { "+GMR",   3, TRUE, mm_base_modem_response_processor_string_ignore_at_errors },
+    { NULL }
+};
+
+void
+mm_shared_telit_modem_load_revision (MMIfaceModem *self,
+                                     GAsyncReadyCallback callback,
+                                     gpointer user_data)
+{
+    GTask *task;
+    Private *priv;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    priv = get_private (MM_SHARED_TELIT (self));
+
+    mm_obj_dbg (self, "loading revision...");
+    if (priv->software_package_version) {
+        g_task_return_pointer (task,
+                               g_strdup (priv->software_package_version),
+                               g_free);
+        g_object_unref (task);
+        return;
+    }
+
+    mm_base_modem_at_sequence (
+        MM_BASE_MODEM (self),
+        revisions,
+        NULL, /* response_processor_context */
+        NULL, /* response_processor_context_free */
+        (GAsyncReadyCallback) load_revision_ready,
+        task);
 }
 
 /*****************************************************************************/
