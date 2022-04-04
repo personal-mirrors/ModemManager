@@ -8185,7 +8185,11 @@ sar_enable (MMIfaceModemSar    *_self,
      * the backoff index set to the current index of modem
      */
     config_state = g_new (MbimSarConfigState, 1);
+#if defined MBIM_FIBOCOM_SAR_HACK //TODO(b/188002987): Remove hacks before merging to upstream
+    config_state->antenna_index = 0;
+#else
     config_state->antenna_index = 0xFFFFFFFF;
+#endif
     config_state->backoff_index = mm_iface_modem_sar_get_power_level (_self);
 
     message = mbim_message_ms_sar_config_set_new (MBIM_SAR_CONTROL_MODE_OS,
@@ -8259,7 +8263,11 @@ sar_set_power_level (MMIfaceModemSar    *_self,
      * the backoff index set to the input power level
      */
     config_state = g_new (MbimSarConfigState, 1);
+#if defined MBIM_FIBOCOM_SAR_HACK //TODO(b/188002987): Remove hacks before merging to upstream
+    config_state->antenna_index = 0;
+#else
     config_state->antenna_index = 0xFFFFFFFF;
+#endif
     config_state->backoff_index = power_level;
 
     task = g_task_new (self, NULL, callback, user_data);
