@@ -568,7 +568,8 @@ Makefile
 data/Makefile
 data/ModemManager.pc
 data/mm-glib.pc
-data/fcc-unlock/Makefile
+data/dispatcher-connection/Makefile
+data/dispatcher-fcc-unlock/Makefile
 data/tests/Makefile
 data/tests/org.freedesktop.ModemManager1.service
 include/Makefile
