@@ -1522,7 +1522,6 @@ unlock_required_subscriber_ready_state_ready (MbimDevice   *device,
         case MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED:
         case MBIM_SUBSCRIBER_READY_STATE_INITIALIZED:
         case MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED:
-        case MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE:
             /* Don't set error */
             break;
         case MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED:
@@ -1534,6 +1533,7 @@ unlock_required_subscriber_ready_state_ready (MbimDevice   *device,
             break;
         case MBIM_SUBSCRIBER_READY_STATE_FAILURE:
         case MBIM_SUBSCRIBER_READY_STATE_NOT_ACTIVATED:
+        case MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE:
         default:
             error = mm_mobile_equipment_error_for_code (MM_MOBILE_EQUIPMENT_ERROR_SIM_FAILURE, self);
             break;
@@ -1564,10 +1564,9 @@ unlock_required_subscriber_ready_state_ready (MbimDevice   *device,
         return;
     }
 
-    /* Initialized */
+    /* Initialized but locked? */
     if (ready_state == MBIM_SUBSCRIBER_READY_STATE_DEVICE_LOCKED ||
-        ready_state == MBIM_SUBSCRIBER_READY_STATE_INITIALIZED ||
-        ready_state == MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE) {
+        ready_state == MBIM_SUBSCRIBER_READY_STATE_INITIALIZED) {
         MbimMessage *message;
 
         /* Query which lock is to unlock */
