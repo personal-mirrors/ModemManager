@@ -2909,6 +2909,7 @@ static const QmiService qmi_services[] = {
     QMI_SERVICE_PDS,
     QMI_SERVICE_LOC,
     QMI_SERVICE_PDC,
+    QMI_SERVICE_FOX,
 };
 
 static void allocate_next_qmi_client (GTask *task);
@@ -3978,18 +3979,6 @@ before_set_lte_attach_configuration_query_ready (MbimDevice   *device,
             }
         }
 
-        auth = mm_bearer_properties_get_allowed_auth (config);
-        if (auth == MM_BEARER_ALLOWED_AUTH_UNKNOWN)
-            configurations[i]->auth_protocol = MBIM_AUTH_PROTOCOL_NONE;
-        else {
-            configurations[i]->auth_protocol = mm_bearer_allowed_auth_to_mbim_auth_protocol (auth, self, &error);
-            if (error) {
-                configurations[i]->auth_protocol = MBIM_AUTH_PROTOCOL_NONE;
-                mm_obj_warn (self, "unexpected auth settings requested: %s", error->message);
-                g_clear_error (&error);
-            }
-        }
-
         g_clear_pointer (&(configurations[i]->access_string), g_free);
         configurations[i]->access_string = g_strdup (mm_bearer_properties_get_apn (config));
 
@@ -3998,6 +3987,18 @@ before_set_lte_attach_configuration_query_ready (MbimDevice   *device,
 
         g_clear_pointer (&(configurations[i]->password), g_free);
         configurations[i]->password = g_strdup (mm_bearer_properties_get_password (config));
+
+        auth = mm_bearer_properties_get_allowed_auth (config);
+        if ((auth != MM_BEARER_ALLOWED_AUTH_UNKNOWN) || configurations[i]->user_name || configurations[i]->password) {
+            configurations[i]->auth_protocol = mm_bearer_allowed_auth_to_mbim_auth_protocol (auth, self, &error);
+            if (error) {
+                configurations[i]->auth_protocol = MBIM_AUTH_PROTOCOL_NONE;
+                mm_obj_warn (self, "unexpected auth settings requested: %s", error->message);
+                g_clear_error (&error);
+            }
+        } else {
+            configurations[i]->auth_protocol = MBIM_AUTH_PROTOCOL_NONE;
+        }
 
         configurations[i]->source = MBIM_CONTEXT_SOURCE_USER;
         configurations[i]->compression = MBIM_COMPRESSION_NONE;
@@ -5142,34 +5143,51 @@ ms_basic_connect_extensions_notification_lte_attach_info (MMBroadbandModemMbim *
     }
 }
 
-static void
-update_sim_from_slot_status (MMBroadbandModemMbim *self,
-                             MbimUiccSlotState     slot_status,
-                             guint                 slot_index)
+static MMBaseSim *
+create_sim_from_slot_state (MMBroadbandModemMbim *self,
+                            gboolean              active,
+                            guint                 slot_index,
+                            MbimUiccSlotState     slot_state)
 {
-    g_autoptr(MMBaseSim) sim = NULL;
+    MMSimType       sim_type    = MM_SIM_TYPE_UNKNOWN;
+    MMSimEsimStatus esim_status = MM_SIM_ESIM_STATUS_UNKNOWN;
 
-    mm_obj_dbg (self, "Updating sim at slot %d", slot_index + 1);
-
-    /* Not fully ready (NOT_READY) or unusable (ERROR) SIM cards should also be
-     * reported as being available in the non-active slot. */
-    if (slot_status == MBIM_UICC_SLOT_STATE_ACTIVE ||
-        slot_status == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM ||
-        slot_status == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM_NO_PROFILES ||
-        slot_status == MBIM_UICC_SLOT_STATE_NOT_READY ||
-        slot_status == MBIM_UICC_SLOT_STATE_ERROR) {
-        sim = mm_sim_mbim_new_initialized (MM_BASE_MODEM (self),
-                                           slot_index,
-                                           FALSE,
-                                           NULL,
-                                           NULL,
-                                           NULL,
-                                           NULL,
-                                           NULL,
-                                           NULL);
+    switch (slot_state) {
+    case MBIM_UICC_SLOT_STATE_ACTIVE:
+        sim_type = MM_SIM_TYPE_PHYSICAL;
+        break;
+    case MBIM_UICC_SLOT_STATE_ACTIVE_ESIM:
+        sim_type = MM_SIM_TYPE_ESIM;
+        esim_status = MM_SIM_ESIM_STATUS_WITH_PROFILES;
+        break;
+    case MBIM_UICC_SLOT_STATE_ACTIVE_ESIM_NO_PROFILES:
+        sim_type = MM_SIM_TYPE_ESIM;
+        esim_status = MM_SIM_ESIM_STATUS_NO_PROFILES;
+        break;
+    case MBIM_UICC_SLOT_STATE_NOT_READY:
+    case MBIM_UICC_SLOT_STATE_ERROR:
+        /* Not fully ready (NOT_READY) or unusable (ERROR) SIM cards should also be
+         * reported as being available in the non-active slot. */
+        break;
+    case MBIM_UICC_SLOT_STATE_UNKNOWN:
+    case MBIM_UICC_SLOT_SATE_OFF_EMPTY:
+    case MBIM_UICC_SLOT_STATE_OFF:
+    case MBIM_UICC_SLOT_STATE_EMPTY:
+    default:
+        return NULL;
     }
 
-    mm_iface_modem_modify_sim (MM_IFACE_MODEM (self), slot_index, sim);
+    return MM_BASE_SIM (mm_sim_mbim_new_initialized (MM_BASE_MODEM (self),
+                                                     slot_index,
+                                                     active,
+                                                     sim_type,
+                                                     esim_status,
+                                                     NULL,
+                                                     NULL,
+                                                     NULL,
+                                                     NULL,
+                                                     NULL,
+                                                     NULL));
 }
 
 static void
@@ -5198,7 +5216,11 @@ ms_basic_connect_extensions_notification_slot_info_status (MMBroadbandModemMbim 
     } else {
         /* Modifies SIM object at the given slot based on the reported state,
          * when the slot is not the active one. */
-        update_sim_from_slot_status (self, slot_state, slot_index);
+        g_autoptr(MMBaseSim) sim = NULL;
+
+        mm_obj_dbg (self, "Updating inactive sim at slot %d", slot_index + 1);
+        sim = create_sim_from_slot_state (self, FALSE, slot_index, slot_state);
+        mm_iface_modem_modify_sim (MM_IFACE_MODEM (self), slot_index, sim);
     }
 }
 
@@ -8364,7 +8386,7 @@ query_slot_information_status_ready (MbimDevice   *device,
                                      GAsyncResult *res,
                                      GTask        *task)
 {
-    MMIfaceModem          *self;
+    MMBroadbandModemMbim  *self;
     g_autoptr(MbimMessage) response = NULL;
     GError                *error = NULL;
     guint32                slot_index;
@@ -8393,25 +8415,8 @@ query_slot_information_status_ready (MbimDevice   *device,
     if ((slot_index + 1) == ctx->active_slot_index)
         sim_active = TRUE;
 
-    /* Not fully ready (NOT_READY) or unusable (ERROR) SIM cards should also be
-     * reported as being available. */
-    if (slot_state == MBIM_UICC_SLOT_STATE_ACTIVE ||
-        slot_state == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM ||
-        slot_state == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM_NO_PROFILES ||
-        slot_state == MBIM_UICC_SLOT_STATE_NOT_READY ||
-        slot_state == MBIM_UICC_SLOT_STATE_ERROR) {
-        sim = mm_sim_mbim_new_initialized (MM_BASE_MODEM (self),
-                                           slot_index,
-                                           sim_active,
-                                           NULL,
-                                           NULL,
-                                           NULL,
-                                           NULL,
-                                           NULL,
-                                           NULL);
-        g_ptr_array_add (ctx->sim_slots, sim);
-    } else
-        g_ptr_array_add (ctx->sim_slots, NULL);
+    sim = create_sim_from_slot_state (self, sim_active, slot_index, slot_state);
+    g_ptr_array_add (ctx->sim_slots, sim);
 
     ctx->query_slot_index++;
     if (ctx->query_slot_index < ctx->number_slots) {

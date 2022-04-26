@@ -237,14 +237,14 @@ config_h.set('WITH_AT_COMMAND_VIA_DBUS', enable_at_command_via_dbus)
 # MBIM support (enabled by default)
 enable_mbim = get_option('mbim')
 if enable_mbim
-  mbim_glib_dep = dependency('mbim-glib', version: '>= 1.27.3')
+  mbim_glib_dep = dependency('mbim-glib', version: '>= 1.27.6')
 endif
 config_h.set('WITH_MBIM', enable_mbim)
 
 # QMI support (enabled by default)
 enable_qmi = get_option('qmi')
 if enable_qmi
-  qmi_glib_dep = dependency('qmi-glib', version: '>= 1.31.3')
+  qmi_glib_dep = dependency('qmi-glib', version: '>= 1.31.4')
 endif
 config_h.set('WITH_QMI', enable_qmi)
 
@@ -353,6 +353,7 @@ foreach plugin_name, plugin_reqs: plugins_options_reqs
         break
       endif
     endforeach
+    config_h.set('ENABLE_PLUGIN_' + plugin_name.underscorify().to_upper(), true)
   endif
   plugins_options += {plugin_name: plugin_enabled}
 endforeach
@@ -366,7 +367,8 @@ version_conf = {
 
 subdir('po')
 subdir('data')
-subdir('data/fcc-unlock')
+subdir('data/dispatcher-connection')
+subdir('data/dispatcher-fcc-unlock')
 subdir('introspection')
 subdir('include')
 

@@ -404,39 +404,6 @@ location_load_capabilities (MMIfaceModemLocation *self,
 }
 
 /*****************************************************************************/
-/* After Sim Unlock (Modem interface) */
-
-static gboolean
-modem_after_sim_unlock_finish (MMIfaceModem *self,
-                               GAsyncResult *res,
-                               GError **error)
-{
-    return g_task_propagate_boolean (G_TASK (res), error);
-}
-
-static gboolean
-after_sim_unlock_ready (GTask *task)
-{
-    g_task_return_boolean (task, TRUE);
-    g_object_unref (task);
-    return G_SOURCE_REMOVE;
-}
-
-static void
-modem_after_sim_unlock (MMIfaceModem *self,
-                        GAsyncReadyCallback callback,
-                        gpointer user_data)
-{
-    GTask *task;
-
-    task = g_task_new (self, NULL, callback, user_data);
-
-    /* A short delay is necessary with some SIMs when
-    they have just been unlocked. Using 1 second as secure margin. */
-    g_timeout_add_seconds (1, (GSourceFunc) after_sim_unlock_ready, task);
-}
-
-/*****************************************************************************/
 /* Setup SIM hot swap (Modem interface) */
 
 typedef enum {
@@ -1263,10 +1230,11 @@ parent_load_supported_modes_ready (MMIfaceModem *self,
                                    GAsyncResult *res,
                                    GTask *task)
 {
-    GError *error = NULL;
-    GArray *all;
-    GArray *combinations;
-    GArray *filtered;
+    GError        *error = NULL;
+    GArray        *all;
+    GArray        *combinations;
+    GArray        *filtered;
+    MMSharedTelit *shared = MM_SHARED_TELIT (self);
 
     all = iface_modem_parent->load_supported_modes_finish (self, res, &error);
     if (!all) {
@@ -1288,6 +1256,7 @@ parent_load_supported_modes_ready (MMIfaceModem *self,
     g_array_unref (all);
     g_array_unref (combinations);
 
+    mm_shared_telit_store_supported_modes (shared, filtered);
     g_task_return_pointer (task, filtered, (GDestroyNotify) g_array_unref);
     g_object_unref (task);
 }
@@ -1418,6 +1387,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface->set_current_bands_finish = mm_shared_telit_modem_set_current_bands_finish;
     iface->load_current_bands = mm_shared_telit_modem_load_current_bands;
     iface->load_current_bands_finish = mm_shared_telit_modem_load_current_bands_finish;
+    iface->load_revision = mm_shared_telit_modem_load_revision;
+    iface->load_revision_finish = mm_shared_telit_modem_load_revision_finish;
     iface->load_supported_bands = mm_shared_telit_modem_load_supported_bands;
     iface->load_supported_bands_finish = mm_shared_telit_modem_load_supported_bands_finish;
     iface->load_unlock_retries_finish = modem_load_unlock_retries_finish;
@@ -1436,8 +1407,6 @@ iface_modem_init (MMIfaceModem *iface)
     iface->load_current_modes_finish = mm_shared_telit_load_current_modes_finish;
     iface->set_current_modes = mm_shared_telit_set_current_modes;
     iface->set_current_modes_finish = mm_shared_telit_set_current_modes_finish;
-    iface->modem_after_sim_unlock = modem_after_sim_unlock;
-    iface->modem_after_sim_unlock_finish = modem_after_sim_unlock_finish;
     iface->setup_sim_hot_swap = modem_setup_sim_hot_swap;
     iface->setup_sim_hot_swap_finish = modem_setup_sim_hot_swap_finish;
 }

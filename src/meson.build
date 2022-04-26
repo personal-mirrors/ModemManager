@@ -200,7 +200,9 @@ sources = files(
   'mm-call-list.c',
   'mm-context.c',
   'mm-device.c',
-  'mm-fcc-unlock-dispatcher.c',
+  'mm-dispatcher.c',
+  'mm-dispatcher-connection.c',
+  'mm-dispatcher-fcc-unlock.c',
   'mm-filter.c',
   'mm-iface-modem-3gpp.c',
   'mm-iface-modem-3gpp-profile-manager.c',
@@ -254,6 +256,8 @@ c_args = [
   '-DPLUGINDIR="@0@"'.format(mm_prefix / mm_pkglibdir),
   '-DFCCUNLOCKDIRPACKAGE="@0@"'.format(mm_prefix / mm_pkglibdir / 'fcc-unlock.d'),
   '-DFCCUNLOCKDIRUSER="@0@"'.format(mm_prefix / mm_pkgsysconfdir / 'fcc-unlock.d'),
+  '-DCONNECTIONDIRPACKAGE="@0@"'.format(mm_prefix / mm_pkglibdir / 'connection.d'),
+  '-DCONNECTIONDIRUSER="@0@"'.format(mm_prefix / mm_pkgsysconfdir / 'connection.d'),
 ]
 
 if enable_qrtr
