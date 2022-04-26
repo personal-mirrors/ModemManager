@@ -5147,9 +5147,7 @@ update_sim_from_slot_status (MMBroadbandModemMbim *self,
                              MbimUiccSlotState     slot_status,
                              guint                 slot_index)
 {
-    g_autoptr(MMBaseSim)   sim = NULL;
-    MMSimType              sim_type = MM_SIM_TYPE_UNKNOWN;
-    MMSimEsimStatus        esim_status = MM_SIM_ESIM_STATUS_UNKNOWN;
+    g_autoptr(MMBaseSim) sim = NULL;
 
     mm_obj_dbg (self, "Updating sim at slot %d", slot_index + 1);
 
@@ -5160,21 +5158,9 @@ update_sim_from_slot_status (MMBroadbandModemMbim *self,
         slot_status == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM_NO_PROFILES ||
         slot_status == MBIM_UICC_SLOT_STATE_NOT_READY ||
         slot_status == MBIM_UICC_SLOT_STATE_ERROR) {
-
-        if (slot_status == MBIM_UICC_SLOT_STATE_ACTIVE)
-            sim_type = MM_SIM_TYPE_PHYSICAL;
-        else if (slot_status == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM) {
-            sim_type = MM_SIM_TYPE_ESIM;
-            esim_status = MM_SIM_ESIM_STATUS_WITH_PROFILES;
-        } else if (slot_status == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM_NO_PROFILES) {
-            sim_type = MM_SIM_TYPE_ESIM;
-            esim_status = MM_SIM_ESIM_STATUS_NO_PROFILES;
-        }
         sim = mm_sim_mbim_new_initialized (MM_BASE_MODEM (self),
                                            slot_index,
                                            FALSE,
-                                           sim_type,
-                                           esim_status,
                                            NULL,
                                            NULL,
                                            NULL,
@@ -8386,8 +8372,6 @@ query_slot_information_status_ready (MbimDevice   *device,
     LoadSimSlotsContext   *ctx;
     MMBaseSim             *sim;
     gboolean               sim_active = FALSE;
-    MMSimType              sim_type = MM_SIM_TYPE_UNKNOWN;
-    MMSimEsimStatus        esim_status = MM_SIM_ESIM_STATUS_UNKNOWN;
 
     self = g_task_get_source_object (task);
     ctx = g_task_get_task_data (task);
@@ -8416,22 +8400,9 @@ query_slot_information_status_ready (MbimDevice   *device,
         slot_state == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM_NO_PROFILES ||
         slot_state == MBIM_UICC_SLOT_STATE_NOT_READY ||
         slot_state == MBIM_UICC_SLOT_STATE_ERROR) {
-
-        if (slot_state == MBIM_UICC_SLOT_STATE_ACTIVE)
-            sim_type = MM_SIM_TYPE_PHYSICAL;
-        else if (slot_state == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM) {
-            sim_type = MM_SIM_TYPE_ESIM;
-            esim_status = MM_SIM_ESIM_STATUS_WITH_PROFILES;
-        } else if (slot_state == MBIM_UICC_SLOT_STATE_ACTIVE_ESIM_NO_PROFILES) {
-            sim_type = MM_SIM_TYPE_ESIM;
-            esim_status = MM_SIM_ESIM_STATUS_NO_PROFILES;
-        }
-
         sim = mm_sim_mbim_new_initialized (MM_BASE_MODEM (self),
                                            slot_index,
                                            sim_active,
-                                           sim_type,
-                                           esim_status,
                                            NULL,
                                            NULL,
                                            NULL,
