@@ -4337,10 +4337,26 @@ static void
 update_access_technologies (MMBroadbandModemMbim *self)
 {
     MMModemAccessTechnology act;
+    MbimDevice             *device;
 
-    act = mm_modem_access_technology_from_mbim_data_class (self->priv->highest_available_data_class);
-    if (act == MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN)
-        act = mm_modem_access_technology_from_mbim_data_class (self->priv->available_data_classes);
+    if (!peek_device (self, &device, NULL, NULL))
+        return;
+
+    if (mbim_device_check_ms_mbimex_version (device, 3, 0)) {
+        MbimDataClassV3 data_class_v3;
+
+        data_class_v3 = mm_mbim_data_class_v3_from_mbim_data_class (self->priv->highest_available_data_class);
+        act = mm_modem_access_technology_from_mbim_data_class_v3 (data_class_v3);
+        if (act == MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN) {
+            data_class_v3 = mm_mbim_data_class_v3_from_mbim_data_class (self->priv->available_data_classes);
+            act = mm_modem_access_technology_from_mbim_data_class_v3 (data_class_v3);
+        }
+    }
+    else {
+        act = mm_modem_access_technology_from_mbim_data_class (self->priv->highest_available_data_class);
+        if (act == MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN)
+            act = mm_modem_access_technology_from_mbim_data_class (self->priv->available_data_classes);
+    }
 
     mm_iface_modem_3gpp_update_access_technologies (MM_IFACE_MODEM_3GPP (self), act);
 }

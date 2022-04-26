@@ -222,6 +222,45 @@ mm_mbim_data_class_from_mbim_data_class_v3_and_subclass (MbimDataClassV3  data_c
     return data_class;
 }
 
+MbimDataClassV3
+mm_mbim_data_class_v3_from_mbim_data_class (MbimDataClass data_class)
+{
+    MbimDataClassV3  mask;
+
+    if (data_class & MBIM_DATA_CLASS_GPRS)
+        mask |= MBIM_DATA_CLASS_V3_GPRS;
+    if (data_class & MBIM_DATA_CLASS_EDGE)
+        mask |= MBIM_DATA_CLASS_V3_EDGE;
+    if (data_class & MBIM_DATA_CLASS_UMTS)
+        mask |= MBIM_DATA_CLASS_V3_UMTS;
+    if (data_class & MBIM_DATA_CLASS_HSDPA)
+        mask |= MBIM_DATA_CLASS_V3_HSDPA;
+    if (data_class & MBIM_DATA_CLASS_HSUPA)
+        mask |= MBIM_DATA_CLASS_V3_HSUPA;
+    if (data_class & MBIM_DATA_CLASS_LTE)
+        mask |= MBIM_DATA_CLASS_V3_LTE;
+    if (data_class & (MBIM_DATA_CLASS_5G_NSA |
+                      MBIM_DATA_CLASS_5G_SA))
+        mask |= MBIM_DATA_CLASS_V3_5G;
+    if (data_class & MBIM_DATA_CLASS_1XRTT)
+        mask |= MBIM_DATA_CLASS_V3_1XRTT;
+    if (data_class & MBIM_DATA_CLASS_1XEVDO)
+        mask |= MBIM_DATA_CLASS_V3_1XEVDO;
+    if (data_class & MBIM_DATA_CLASS_1XEVDO_REVA)
+        mask |= MBIM_DATA_CLASS_V3_1XEVDO_REVA;
+    if (data_class & MBIM_DATA_CLASS_1XEVDV)
+        mask |= MBIM_DATA_CLASS_V3_1XEVDV;
+    if (data_class & MBIM_DATA_CLASS_3XRTT)
+        mask |= MBIM_DATA_CLASS_V3_3XRTT;
+    if (data_class & MBIM_DATA_CLASS_1XEVDO_REVB)
+        mask |= MBIM_DATA_CLASS_V3_1XEVDO_REVB;
+    if (data_class & MBIM_DATA_CLASS_UMB)
+        mask |= MBIM_DATA_CLASS_V3_UMB;
+    if (data_class & MBIM_DATA_CLASS_CUSTOM)
+        mask |= MBIM_DATA_CLASS_V3_CUSTOM;
+
+    return mask;
+}
 MMModemAccessTechnology
 mm_modem_access_technology_from_mbim_data_class (MbimDataClass data_class)
 {
@@ -258,6 +297,45 @@ mm_modem_access_technology_from_mbim_data_class (MbimDataClass data_class)
      *  MBIM_DATA_CLASS_3XRTT
      *  MBIM_DATA_CLASS_UMB
      *  MBIM_DATA_CLASS_CUSTOM
+     */
+
+    return mask;
+}
+
+MMModemAccessTechnology
+mm_modem_access_technology_from_mbim_data_class_v3 (MbimDataClassV3 data_class_v3)
+{
+    MMModemAccessTechnology mask = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_GPRS)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_GPRS;
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_EDGE)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_EDGE;
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_UMTS)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_HSDPA)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_HSDPA;
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_HSUPA)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_HSUPA;
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_LTE)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_LTE;
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_5G)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_5GNR;
+
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_1XRTT)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_1XRTT;
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_1XEVDO)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_EVDO0;
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_1XEVDO_REVA)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_EVDOA;
+    if (data_class_v3 & MBIM_DATA_CLASS_V3_1XEVDO_REVB)
+        mask |= MM_MODEM_ACCESS_TECHNOLOGY_EVDOB;
+
+    /* Skip:
+     *  MBIM_DATA_CLASS_V3_1XEVDV
+     *  MBIM_DATA_CLASS_V3_3XRTT
+     *  MBIM_DATA_CLASS_V3_UMB
+     *  MBIM_DATA_CLASS_V3_CUSTOM
      */
 
     return mask;
