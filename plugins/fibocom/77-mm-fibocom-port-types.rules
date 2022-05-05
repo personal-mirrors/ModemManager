@@ -2,6 +2,12 @@
 ACTION!="add|change|move|bind", GOTO="mm_fibocom_port_types_end"
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="2cb7", GOTO="mm_fibocom_port_types"
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="1782", GOTO="mm_fibocom_port_types"
+SUBSYSTEMS=="pci", SUBSYSTEM=="wwan", ATTRS{vendor}=="0x14c3", GOTO="mm_fibocom_pci_port_types"
+GOTO="mm_fibocom_port_types_end"
+
+LABEL="mm_fibocom_pci_port_types"
+# ChromeOS specific configuration
+ACTION=="add|change|move", SUBSYSTEMS=="wwan", ATTR{type}=="AT", ENV{ID_MM_PORT_IGNORE}="1"
 GOTO="mm_fibocom_port_types_end"
 
 LABEL="mm_fibocom_port_types"
