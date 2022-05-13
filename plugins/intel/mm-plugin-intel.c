@@ -65,7 +65,7 @@ G_MODULE_EXPORT MMPlugin *
 mm_plugin_create (void)
 {
     static const gchar   *subsystems[] = { "net", "wwan", NULL };
-    static const guint16  vendor_ids[]  = { 0x8086, 0 };
+    static const guint16  vendor_ids[]  = { 0x8086, 0x14C3, 0 };
 
     return MM_PLUGIN (
                g_object_new (MM_TYPE_PLUGIN_INTEL,

@@ -520,7 +520,9 @@ MM_ENABLE_PLUGIN([foxconn],
 MM_ENABLE_PLUGIN([gosuncn])
 MM_ENABLE_PLUGIN([haier])
 MM_ENABLE_PLUGIN([huawei])
-MM_ENABLE_PLUGIN([intel])
+MM_ENABLE_PLUGIN([intel],
+                 [with_shared_xmm,
+                  with_shared_fibocom])
 MM_ENABLE_PLUGIN([iridium])
 MM_ENABLE_PLUGIN([linktop])
 MM_ENABLE_PLUGIN([longcheer])
@@ -657,6 +659,7 @@ echo "
       xmm:                     ${with_shared_xmm}
       telit:                   ${with_shared_telit}
       foxconn:                 ${with_shared_foxconn}
+      fibocom:                 ${with_shared_fibocom}
 
     Plugins:
       generic:                 ${enable_plugin_generic}

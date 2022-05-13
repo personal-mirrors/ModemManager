@@ -483,7 +483,7 @@ if plugins_options['intel']
 
   plugins += {'plugin-intel': {
     'plugin': true,
-    'module': {'sources': sources, 'include_directories': plugins_incs + [xmm_inc], 'c_args': common_c_args},
+    'module': {'sources': sources, 'include_directories': plugins_incs + [xmm_inc] + [fibocom_inc], 'c_args': common_c_args},
   }}
 endif
 

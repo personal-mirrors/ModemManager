@@ -929,6 +929,7 @@ endif
 libmm_plugin_intel_la_CPPFLAGS = \
 	$(PLUGIN_COMMON_COMPILER_FLAGS) \
 	$(XMM_COMMON_COMPILER_FLAGS) \
+	$(FIBOCOM_COMMON_COMPILER_FLAGS) \
 	-DMM_MODULE_NAME=\"intel\" \
 	$(NULL)
 libmm_plugin_intel_la_LDFLAGS  = $(PLUGIN_COMMON_LINKER_FLAGS)
