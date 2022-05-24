@@ -39,7 +39,6 @@
 #define MM_IFACE_MODEM_SIM_SLOTS               "iface-modem-sim-slots"
 #define MM_IFACE_MODEM_BEARER_LIST             "iface-modem-bearer-list"
 #define MM_IFACE_MODEM_SIM_HOT_SWAP_SUPPORTED  "iface-modem-sim-hot-swap-supported"
-#define MM_IFACE_MODEM_SIM_HOT_SWAP_CONFIGURED "iface-modem-sim-hot-swap-configured"
 #define MM_IFACE_MODEM_CARRIER_CONFIG_MAPPING  "iface-modem-carrier-config-mapping"
 #define MM_IFACE_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED      "iface-modem-periodic-signal-check-disabled"
 #define MM_IFACE_MODEM_PERIODIC_ACCESS_TECH_CHECK_DISABLED "iface-modem-periodic-access-tech-check-disabled"
@@ -377,14 +376,14 @@ struct _MMIfaceModem {
     /* Create new bearer list object */
     MMBearerList * (* create_bearer_list) (MMIfaceModem *self);
 
-    /* Setup SIM hot swap */
-    void (*setup_sim_hot_swap) (MMIfaceModem *self,
-                                GAsyncReadyCallback callback,
-                                gpointer user_data);
-
-    gboolean (*setup_sim_hot_swap_finish) (MMIfaceModem *self,
-                                            GAsyncResult *res,
-                                            GError **error);
+    /* Setup/cleanup SIM hot swap */
+    void     (* setup_sim_hot_swap)          (MMIfaceModem         *self,
+                                              GAsyncReadyCallback   callback,
+                                              gpointer              user_data);
+    gboolean (* setup_sim_hot_swap_finish)   (MMIfaceModem         *self,
+                                              GAsyncResult         *res,
+                                              GError              **error);
+    void     (* cleanup_sim_hot_swap)        (MMIfaceModem         *self);
 
     /* Load carrier config */
     void     (* load_carrier_config)        (MMIfaceModem         *self,
@@ -609,5 +608,8 @@ gboolean mm_iface_modem_check_for_sim_swap_finish (MMIfaceModem *self,
 void mm_iface_modem_modify_sim (MMIfaceModem *self,
                                 guint slot_index,
                                 MMBaseSim *new_sim);
+
+void mm_iface_modem_process_sim_event (MMIfaceModem *self);
+
 
 #endif /* MM_IFACE_MODEM_H */

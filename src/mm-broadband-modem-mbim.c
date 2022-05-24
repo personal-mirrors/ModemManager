@@ -147,6 +147,9 @@ struct _MMBroadbandModemMbimPrivate {
     /* USSD helpers */
     GTask *pending_ussd_action;
 
+    /* SIM hot swap setup */
+    gboolean sim_hot_swap_configured;
+
     /* Access technology and registration updates */
     MbimDataClass available_data_classes;
     MbimDataClass highest_available_data_class;
@@ -167,8 +170,9 @@ struct _MMBroadbandModemMbimPrivate {
     gboolean intel_firmware_update_unsupported;
 
     /* Multi-SIM support */
-    guint32 executor_index;
-    guint active_slot_index;
+    guint32  executor_index;
+    guint    active_slot_index;
+    gboolean pending_sim_slot_switch_action;
 
     MMUnlockRetries *unlock_retries;
 };
@@ -176,22 +180,36 @@ struct _MMBroadbandModemMbimPrivate {
 /*****************************************************************************/
 
 static gboolean
-peek_device (gpointer self,
-             MbimDevice **o_device,
-             GAsyncReadyCallback callback,
-             gpointer user_data)
+peek_device (gpointer              self,
+             MbimDevice          **o_device,
+             GAsyncReadyCallback   callback,
+             gpointer              user_data)
 {
     MMPortMbim *port;
 
     port = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
     if (!port) {
-        g_task_report_new_error (self,
-                                 callback,
-                                 user_data,
-                                 peek_device,
-                                 MM_CORE_ERROR,
-                                 MM_CORE_ERROR_FAILED,
-                                 "Couldn't peek MBIM port");
+        g_task_report_new_error (self, callback, user_data, peek_device,
+                                 MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't peek MBIM port");
+        return FALSE;
+    }
+
+    *o_device = mm_port_mbim_peek_device (port);
+    return TRUE;
+}
+
+static gboolean
+peek_device_in_task (gpointer     self,
+                     MbimDevice **o_device,
+                     GTask       *task)
+
+{
+    MMPortMbim *port;
+
+    port = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
+    if (!port) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't peek MBIM port");
+        g_object_unref (task);
         return FALSE;
     }
 
@@ -915,7 +933,6 @@ load_supported_modes_mbim (GTask      *task,
 {
     MMBroadbandModemMbim   *self;
     GArray                 *all;
-    GArray                 *combinations;
     GArray                 *filtered;
     MMModemMode             mask_all;
     MMModemModeCombination  mode = {
@@ -941,12 +958,14 @@ load_supported_modes_mbim (GTask      *task,
     all = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 1);
     g_array_append_val (all, mode);
 
-    combinations = g_array_new (FALSE, FALSE, sizeof (MMModemModeCombination));
-
     /* When using MBIMEx we can enable the mode switching operation because
      * we'll be able to know if the modes requested are the ones configured
      * as preferred after the operation. */
     if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+        GArray *combinations;
+
+        combinations = g_array_new (FALSE, FALSE, sizeof (MMModemModeCombination));
+
 #define ADD_MODE_PREFERENCE(MODE_MASK) do {                             \
             mode.allowed = MODE_MASK;                                   \
             mode.preferred = MM_MODEM_MODE_NONE;                        \
@@ -4652,6 +4671,7 @@ basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
     MbimSubscriberReadyState ready_state;
     g_auto(GStrv)            telephone_numbers = NULL;
     g_autoptr(GError)        error = NULL;
+    gboolean                 active_sim_event = FALSE;
 
     if (mbim_device_check_ms_mbimex_version (device, 3, 0)) {
         if (!mbim_message_ms_basic_connect_v3_subscriber_ready_status_notification_parse (
@@ -4693,7 +4713,7 @@ basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
          ready_state != MBIM_SUBSCRIBER_READY_STATE_NO_ESIM_PROFILE)) {
         /* eSIM profiles have been added or removed, re-probe to ensure correct interfaces are exposed */
         mm_obj_dbg (self, "eSIM profile updates detected");
-        mm_broadband_modem_sim_hot_swap_detected (MM_BROADBAND_MODEM (self));
+        active_sim_event = TRUE;
     }
 
     if ((self->priv->last_ready_state != MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED &&
@@ -4702,10 +4722,17 @@ basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
          ready_state != MBIM_SUBSCRIBER_READY_STATE_SIM_NOT_INSERTED)) {
         /* SIM has been removed or reinserted, re-probe to ensure correct interfaces are exposed */
         mm_obj_dbg (self, "SIM hot swap detected");
-        mm_broadband_modem_sim_hot_swap_detected (MM_BROADBAND_MODEM (self));
+        active_sim_event = TRUE;
     }
 
     self->priv->last_ready_state = ready_state;
+
+    if (active_sim_event) {
+        if (self->priv->pending_sim_slot_switch_action)
+            mm_obj_dbg (self, "ignoring slot status change");
+        else
+            mm_iface_modem_process_sim_event (MM_IFACE_MODEM (self));
+    }
 }
 
 typedef struct {
@@ -5208,20 +5235,26 @@ ms_basic_connect_extensions_notification_slot_info_status (MMBroadbandModemMbim 
         return;
     }
 
+    if (self->priv->pending_sim_slot_switch_action) {
+        mm_obj_dbg (self, "ignoring slot status change in SIM slot %d: %s", slot_index + 1, mbim_uicc_slot_state_get_string (slot_state));
+        return;
+    }
 
-    if (self->priv->active_slot_index == slot_index + 1) {
-        /* Major SIM event on the active slot, will request reprobing the
-         * modem from scratch. */
-        mm_base_modem_process_sim_event (MM_BASE_MODEM (self));
-    } else {
+    if (self->priv->active_slot_index != (slot_index + 1)) {
         /* Modifies SIM object at the given slot based on the reported state,
          * when the slot is not the active one. */
         g_autoptr(MMBaseSim) sim = NULL;
 
-        mm_obj_dbg (self, "Updating inactive sim at slot %d", slot_index + 1);
+        mm_obj_dbg (self, "processing slot status change in non-active SIM slot %d: %s", slot_index + 1, mbim_uicc_slot_state_get_string (slot_state));
         sim = create_sim_from_slot_state (self, FALSE, slot_index, slot_state);
         mm_iface_modem_modify_sim (MM_IFACE_MODEM (self), slot_index, sim);
+        return;
     }
+
+    /* Major SIM event on the active slot, will request reprobing the
+     * modem from scratch. */
+    mm_obj_dbg (self, "processing slot status change in active SIM slot %d: %s", slot_index + 1, mbim_uicc_slot_state_get_string (slot_state));
+    mm_iface_modem_process_sim_event (MM_IFACE_MODEM (self));
 }
 
 static void
@@ -5378,6 +5411,12 @@ cleanup_unsolicited_events_3gpp (MMIfaceModem3gpp *_self,
 {
     MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
 
+    /* NOTE: FLAG_SUBSCRIBER_INFO is managed both via 3GPP unsolicited
+     * events and via SIM hot swap setup. We only really cleanup the
+     * indication if SIM hot swap context is not using it. */
+    if (!self->priv->sim_hot_swap_configured)
+        self->priv->setup_flags &= ~PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO;
+
     self->priv->setup_flags &= ~PROCESS_NOTIFICATION_FLAG_SIGNAL_QUALITY;
     self->priv->setup_flags &= ~PROCESS_NOTIFICATION_FLAG_CONNECT;
     self->priv->setup_flags &= ~PROCESS_NOTIFICATION_FLAG_PACKET_SERVICE;
@@ -5397,9 +5436,12 @@ setup_unsolicited_events_3gpp (MMIfaceModem3gpp *_self,
 {
     MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
 
+    /* NOTE: FLAG_SUBSCRIBER_INFO is managed both via 3GPP unsolicited
+     * events and via SIM hot swap setup. */
+    self->priv->setup_flags |= PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO;
+
     self->priv->setup_flags |= PROCESS_NOTIFICATION_FLAG_SIGNAL_QUALITY;
     self->priv->setup_flags |= PROCESS_NOTIFICATION_FLAG_CONNECT;
-    self->priv->setup_flags |= PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO;
     self->priv->setup_flags |= PROCESS_NOTIFICATION_FLAG_PACKET_SERVICE;
     if (self->priv->is_pco_supported)
         self->priv->setup_flags |= PROCESS_NOTIFICATION_FLAG_PCO;
@@ -5701,6 +5743,8 @@ enable_subscriber_info_unsolicited_events_ready (MMBroadbandModemMbim *self,
         /* reset setup flags if enabling failed */
         self->priv->setup_flags &= ~PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO;
         common_setup_cleanup_unsolicited_events_sync (self, ctx->device, FALSE);
+        /* and also reset enable flags */
+        self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO;
     }
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
@@ -5758,16 +5802,15 @@ modem_3gpp_disable_unsolicited_events (MMIfaceModem3gpp *_self,
                                        gpointer user_data)
 {
     MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
-    gboolean is_sim_hot_swap_configured = FALSE;
 
-    g_object_get (self,
-                  MM_IFACE_MODEM_SIM_HOT_SWAP_CONFIGURED, &is_sim_hot_swap_configured,
-                  NULL);
+    /* NOTE: FLAG_SUBSCRIBER_INFO is managed both via 3GPP unsolicited
+     * events and via SIM hot swap setup. We only really disable the
+     * indication if SIM hot swap context is not using it. */
+    if (!self->priv->sim_hot_swap_configured)
+        self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO;
 
     self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_SIGNAL_QUALITY;
     self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_CONNECT;
-    if (is_sim_hot_swap_configured)
-        self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO;
     self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_PACKET_SERVICE;
     if (self->priv->is_pco_supported)
         self->priv->enable_flags &= ~PROCESS_NOTIFICATION_FLAG_PCO;
@@ -5785,9 +5828,12 @@ modem_3gpp_enable_unsolicited_events (MMIfaceModem3gpp *_self,
 {
     MMBroadbandModemMbim *self = MM_BROADBAND_MODEM_MBIM (_self);
 
+    /* NOTE: FLAG_SUBSCRIBER_INFO is managed both via 3GPP unsolicited
+     * events and via SIM hot swap setup. */
+    self->priv->enable_flags |= PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO;
+
     self->priv->enable_flags |= PROCESS_NOTIFICATION_FLAG_SIGNAL_QUALITY;
     self->priv->enable_flags |= PROCESS_NOTIFICATION_FLAG_CONNECT;
-    self->priv->enable_flags |= PROCESS_NOTIFICATION_FLAG_SUBSCRIBER_INFO;
     self->priv->enable_flags |= PROCESS_NOTIFICATION_FLAG_PACKET_SERVICE;
     if (self->priv->is_pco_supported)
         self->priv->enable_flags |= PROCESS_NOTIFICATION_FLAG_PCO;
@@ -8609,13 +8655,13 @@ query_sys_caps_ready (MbimDevice   *device,
 static void
 load_sim_slots_mbim (GTask *task)
 {
-    MMBroadbandModemMbim *self;
-    MbimDevice           *device;
-    MbimMessage          *message;
+    MMBroadbandModemMbim   *self;
+    MbimDevice             *device;
+    g_autoptr(MbimMessage)  message = NULL;
 
     self = g_task_get_source_object (task);
 
-    if (!peek_device (self, &device, NULL, NULL))
+    if (!peek_device_in_task (self, &device, task))
         return;
 
     message = mbim_message_ms_basic_connect_extensions_sys_caps_query_new (NULL);
@@ -8625,7 +8671,6 @@ load_sim_slots_mbim (GTask *task)
                          NULL,
                          (GAsyncReadyCallback)query_sys_caps_ready,
                          task);
-    mbim_message_unref (message);
 }
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
@@ -8691,13 +8736,16 @@ set_device_slot_mappings_ready (MbimDevice   *device,
 {
     MMBroadbandModemMbim    *self;
     g_autoptr(MbimMessage)   response = NULL;
-    g_autoptr(GError)        error = NULL;
+    GError                  *error = NULL;
     guint32                  map_count = 0;
     g_autoptr(MbimSlotArray) slot_mappings = NULL;
     guint                    i;
     guint                    slot_number;
 
     self = g_task_get_source_object (task);
+
+    g_assert (self->priv->pending_sim_slot_switch_action);
+    self->priv->pending_sim_slot_switch_action = FALSE;
 
     /* the slot index in MM starts at 1 */
     slot_number = GPOINTER_TO_UINT (g_task_get_task_data (task)) - 1;
@@ -8730,9 +8778,8 @@ set_device_slot_mappings_ready (MbimDevice   *device,
     }
 
     g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
-                                 "Can't find executor index '%u'", self->priv->executor_index);
+                             "Can't find executor index '%u'", self->priv->executor_index);
     g_object_unref (task);
-    return;
 }
 
 static void
@@ -8742,7 +8789,7 @@ before_set_query_device_slot_mappings_ready (MbimDevice   *device,
 {
     MMBroadbandModemMbim    *self;
     g_autoptr(MbimMessage)   response = NULL;
-    g_autoptr(GError)        error = NULL;
+    GError                  *error = NULL;
     g_autoptr(MbimMessage)   message = NULL;
     guint32                  map_count = 0;
     g_autoptr(MbimSlotArray) slot_mappings = NULL;
@@ -8781,6 +8828,16 @@ before_set_query_device_slot_mappings_ready (MbimDevice   *device,
         }
     }
 
+    /* Flag a pending SIM slot switch operation, so that we can ignore slot state updates
+     * during the process. */
+    if (self->priv->pending_sim_slot_switch_action) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_IN_PROGRESS,
+                                 "there is already an ongoing SIM slot switch operation");
+        g_object_unref (task);
+        return;
+    }
+    self->priv->pending_sim_slot_switch_action = TRUE;
+
     for (i = 0; i < map_count; i++) {
         if (i == self->priv->executor_index)
             slot_mappings[i]->slot = slot_number;
@@ -8800,13 +8857,13 @@ before_set_query_device_slot_mappings_ready (MbimDevice   *device,
 static void
 set_primary_sim_slot_mbim (GTask *task)
 {
-    MMBroadbandModemMbim *self;
-    MbimDevice           *device;
-    MbimMessage          *message;
+    MMBroadbandModemMbim   *self;
+    MbimDevice             *device;
+    g_autoptr(MbimMessage)  message = NULL;
 
     self = g_task_get_source_object (task);
 
-    if (!peek_device (self, &device, NULL, NULL))
+    if (!peek_device_in_task (self, &device, task))
         return;
 
     message = mbim_message_ms_basic_connect_extensions_device_slot_mappings_query_new (NULL);
@@ -8816,7 +8873,6 @@ set_primary_sim_slot_mbim (GTask *task)
                          NULL,
                          (GAsyncReadyCallback)before_set_query_device_slot_mappings_ready,
                          task);
-    mbim_message_unref (message);
 }
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
@@ -9001,7 +9057,6 @@ mm_broadband_modem_mbim_new (const gchar *device,
                          MM_BASE_MODEM_DATA_NET_SUPPORTED, TRUE,
                          MM_BASE_MODEM_DATA_TTY_SUPPORTED, FALSE,
                          MM_IFACE_MODEM_SIM_HOT_SWAP_SUPPORTED, TRUE,
-                         MM_IFACE_MODEM_SIM_HOT_SWAP_CONFIGURED, FALSE,
                          MM_IFACE_MODEM_PERIODIC_SIGNAL_CHECK_DISABLED, TRUE,
                          NULL);
 }

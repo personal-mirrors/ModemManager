@@ -57,6 +57,7 @@ enum {
     PROP_PLUGIN,
     PROP_VENDOR_ID,
     PROP_PRODUCT_ID,
+    PROP_SUBSYSTEM_VENDOR_ID,
     PROP_CONNECTION,
     PROP_REPROBE,
     PROP_DATA_NET_SUPPORTED,
@@ -89,6 +90,7 @@ struct _MMBaseModemPrivate {
 
     guint vendor_id;
     guint product_id;
+    guint subsystem_vendor_id;
 
     gboolean hotplugged;
     gboolean valid;
@@ -1233,29 +1235,21 @@ static void
 initialize_ready (MMBaseModem *self,
                   GAsyncResult *res)
 {
-    GError *error = NULL;
+    g_autoptr(GError) error = NULL;
 
-    if (mm_base_modem_initialize_finish (self, res, &error)) {
+    if (!mm_base_modem_initialize_finish (self, res, &error)) {
+        if (g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_ABORTED)) {
+            /* FATAL error, won't even be exported in DBus */
+            mm_obj_err (self, "fatal error initializing: %s", error->message);
+        } else {
+            /* non-fatal error */
+            mm_obj_warn (self, "error initializing: %s", error->message);
+            mm_base_modem_set_valid (self, TRUE);
+        }
+    } else {
         mm_obj_dbg (self, "modem initialized");
         mm_base_modem_set_valid (self, TRUE);
-        return;
     }
-
-    /* Wrong state is returned when modem is found locked */
-    if (g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_WRONG_STATE)) {
-        /* Even with initialization errors, we do set the state to valid, so
-         * that the modem gets exported and the failure notified to the user.
-         */
-        mm_obj_dbg (self, "couldn't finish initialization in the current state: '%s'", error->message);
-        g_error_free (error);
-        mm_base_modem_set_valid (self, TRUE);
-        return;
-    }
-
-    /* Really fatal, we cannot even export the failed modem (e.g. error before
-     * even trying to enable the Modem interface */
-    mm_obj_warn (self, "couldn't initialize: '%s'", error->message);
-    g_error_free (error);
 }
 
 static inline void
@@ -1679,26 +1673,12 @@ mm_base_modem_get_product_id (MMBaseModem *self)
     return self->priv->product_id;
 }
 
-/*****************************************************************************/
-
-static void
-after_sim_switch_disable_ready (MMBaseModem  *self,
-                                GAsyncResult *res)
+guint
+mm_base_modem_get_subsystem_vendor_id (MMBaseModem *self)
 {
-    g_autoptr(GError) error = NULL;
+    g_return_val_if_fail (MM_IS_BASE_MODEM (self), 0);
 
-    mm_base_modem_disable_finish (self, res, &error);
-    if (error)
-        mm_obj_err (self, "failed to disable after SIM switch event: %s", error->message);
-    else
-        mm_base_modem_set_valid (self, FALSE);
-}
-
-void
-mm_base_modem_process_sim_event (MMBaseModem *self)
-{
-    mm_base_modem_set_reprobe (self, TRUE);
-    mm_base_modem_disable (self, (GAsyncReadyCallback) after_sim_switch_disable_ready, NULL);
+    return self->priv->subsystem_vendor_id;
 }
 
 /*****************************************************************************/
@@ -1862,6 +1842,9 @@ set_property (GObject *object,
     case PROP_PRODUCT_ID:
         self->priv->product_id = g_value_get_uint (value);
         break;
+    case PROP_SUBSYSTEM_VENDOR_ID:
+        self->priv->subsystem_vendor_id = g_value_get_uint (value);
+        break;
     case PROP_CONNECTION:
         g_clear_object (&self->priv->connection);
         self->priv->connection = g_value_dup_object (value);
@@ -1910,6 +1893,9 @@ get_property (GObject *object,
         break;
     case PROP_PRODUCT_ID:
         g_value_set_uint (value, self->priv->product_id);
+        break;
+    case PROP_SUBSYSTEM_VENDOR_ID:
+        g_value_set_uint (value, self->priv->subsystem_vendor_id);
         break;
     case PROP_CONNECTION:
         g_value_set_object (value, self->priv->connection);
@@ -2063,6 +2049,14 @@ mm_base_modem_class_init (MMBaseModemClass *klass)
                            0, G_MAXUINT, 0,
                            G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
     g_object_class_install_property (object_class, PROP_PRODUCT_ID, properties[PROP_PRODUCT_ID]);
+
+    properties[PROP_SUBSYSTEM_VENDOR_ID] =
+        g_param_spec_uint (MM_BASE_MODEM_SUBSYSTEM_VENDOR_ID,
+                           "Hardware subsystem vendor ID",
+                           "Hardware subsystem vendor ID. Available for pci devices.",
+                           0, G_MAXUINT, 0,
+                           G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+    g_object_class_install_property (object_class, PROP_SUBSYSTEM_VENDOR_ID, properties[PROP_SUBSYSTEM_VENDOR_ID]);
 
     properties[PROP_CONNECTION] =
         g_param_spec_object (MM_BASE_MODEM_CONNECTION,
