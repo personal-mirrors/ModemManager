@@ -279,30 +279,13 @@ mm_iface_modem_modify_sim (MMIfaceModem  *self,
 
 /*****************************************************************************/
 
-static void
-after_sim_event_disable_ready (MMBaseModem  *self,
-                               GAsyncResult *res)
-{
-    g_autoptr(GError) error = NULL;
-
-    mm_base_modem_disable_finish (self, res, &error);
-    if (error)
-        mm_obj_err (self, "failed to disable after SIM switch event: %s", error->message);
-
-    /* set invalid either way, so that it's reprobed */
-    mm_base_modem_set_valid (self, FALSE);
-}
-
 void
 mm_iface_modem_process_sim_event (MMIfaceModem *self)
 {
     if (MM_IFACE_MODEM_GET_INTERFACE (self)->cleanup_sim_hot_swap)
         MM_IFACE_MODEM_GET_INTERFACE (self)->cleanup_sim_hot_swap (self);
 
-    mm_base_modem_set_reprobe (MM_BASE_MODEM (self), TRUE);
-    mm_base_modem_disable (MM_BASE_MODEM (self),
-                           (GAsyncReadyCallback) after_sim_event_disable_ready,
-                           NULL);
+    mm_base_modem_trigger_reprobe (MM_BASE_MODEM (self));
 }
 
 /*****************************************************************************/
