@@ -1448,6 +1448,23 @@ handle_get_cell_info (MmGdbusModem          *skeleton,
 /*****************************************************************************/
 
 void
+mm_iface_modem_update_own_numbers (MMIfaceModem *self,
+                                   const GStrv own_numbers)
+{
+    MmGdbusModem *skeleton = NULL;
+
+    g_object_get (self,
+                  MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
+                  NULL);
+    if (skeleton) {
+        mm_gdbus_modem_set_own_numbers (skeleton, (const gchar * const *)own_numbers);
+        g_object_unref (skeleton);
+    }
+}
+
+/*****************************************************************************/
+
+void
 mm_iface_modem_update_access_technologies (MMIfaceModem *self,
                                            MMModemAccessTechnology new_access_tech,
                                            guint32 mask)
@@ -1905,28 +1922,23 @@ bearer_list_count_connected (MMBaseBearer *bearer,
 }
 
 static void
-update_state_internal (MMIfaceModem *self,
-                       MMModemState new_state,
-                       MMModemStateChangeReason reason,
-                       MMModemStateFailedReason failed_reason)
+update_state_internal (MMIfaceModem             *self,
+                       MMModemState              new_state,
+                       MMModemStateChangeReason  reason,
+                       MMModemStateFailedReason  failed_reason)
 {
-    MMModemState old_state = MM_MODEM_STATE_UNKNOWN;
-    MmGdbusModem *skeleton = NULL;
-    MMBearerList *bearer_list = NULL;
+    MMModemState                    old_state = MM_MODEM_STATE_UNKNOWN;
+    g_autoptr(MmGdbusModemSkeleton) skeleton = NULL;
+    g_autoptr(MMBearerList)         bearer_list = NULL;
 
     g_object_get (self,
-                  MM_IFACE_MODEM_STATE, &old_state,
+                  MM_IFACE_MODEM_STATE,         &old_state,
                   MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
-                  MM_IFACE_MODEM_BEARER_LIST, &bearer_list,
+                  MM_IFACE_MODEM_BEARER_LIST,   &bearer_list,
                   NULL);
 
-    if (!skeleton || !bearer_list) {
-        if (skeleton)
-            g_object_unref (skeleton);
-        if (bearer_list)
-            g_object_unref (bearer_list);
+    if (!skeleton)
         return;
-    }
 
     /* While connected we don't want registration status changes to change
      * the modem's state away from CONNECTED. */
@@ -1964,17 +1976,14 @@ update_state_internal (MMIfaceModem *self,
         /* Signal status change */
         if (skeleton) {
             /* Set failure reason */
-            if (failed_reason != mm_gdbus_modem_get_state_failed_reason (skeleton))
-                mm_gdbus_modem_set_state_failed_reason (skeleton, failed_reason);
+            if (failed_reason != mm_gdbus_modem_get_state_failed_reason (MM_GDBUS_MODEM (skeleton)))
+                mm_gdbus_modem_set_state_failed_reason (MM_GDBUS_MODEM (skeleton), failed_reason);
 
             /* Flush current change before signaling the state change,
              * so that clients get the proper state already in the
              * state-changed callback */
             g_dbus_interface_skeleton_flush (G_DBUS_INTERFACE_SKELETON (skeleton));
-            mm_gdbus_modem_emit_state_changed (skeleton,
-                                               old_state,
-                                               new_state,
-                                               reason);
+            mm_gdbus_modem_emit_state_changed (MM_GDBUS_MODEM (skeleton), old_state, new_state, reason);
         }
 
         /* If we go to a registered/connected state (from unregistered), setup
@@ -1986,11 +1995,6 @@ update_state_internal (MMIfaceModem *self,
         else if (old_state >= MM_MODEM_STATE_REGISTERED && new_state < MM_MODEM_STATE_REGISTERED)
             periodic_signal_check_disable (self, TRUE);
     }
-
-    if (skeleton)
-        g_object_unref (skeleton);
-    if (bearer_list)
-        g_object_unref (bearer_list);
 }
 
 void
@@ -4686,14 +4690,15 @@ typedef enum {
     INITIALIZATION_STEP_SUPPORTED_BANDS,
     INITIALIZATION_STEP_SUPPORTED_IP_FAMILIES,
     INITIALIZATION_STEP_POWER_STATE,
+    INITIALIZATION_STEP_CURRENT_MODES,
+    INITIALIZATION_STEP_CURRENT_BANDS,
     INITIALIZATION_STEP_SIM_HOT_SWAP,
     INITIALIZATION_STEP_SIM_SLOTS,
     INITIALIZATION_STEP_UNLOCK_REQUIRED,
     INITIALIZATION_STEP_SIM,
     INITIALIZATION_STEP_SETUP_CARRIER_CONFIG,
     INITIALIZATION_STEP_OWN_NUMBERS,
-    INITIALIZATION_STEP_CURRENT_MODES,
-    INITIALIZATION_STEP_CURRENT_BANDS,
+    INITIALIZATION_STEP_VALIDATE_ESIM_STATUS,
     INITIALIZATION_STEP_LAST
 } InitializationStep;
 
@@ -4815,14 +4820,15 @@ load_current_capabilities_ready (MMIfaceModem *self,
 {
     InitializationContext *ctx;
     MMModemCapability caps;
-    GError *error = NULL;
+    g_autoptr(GError) error = NULL;
 
     ctx = g_task_get_task_data (task);
 
     caps = MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_capabilities_finish (self, res, &error);
     if (error) {
-        g_propagate_error (&ctx->fatal_error, error);
-        g_prefix_error (&ctx->fatal_error, "couldn't load current capabilities: ");
+        ctx->fatal_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                        "Failed to load current capabilities: %s",
+                                        error->message);
         /* Jump to the last step */
         ctx->step = INITIALIZATION_STEP_LAST;
         interface_initialization_step (task);
@@ -4886,14 +4892,15 @@ load_supported_capabilities_ready (MMIfaceModem *self,
 {
     InitializationContext *ctx;
     GArray *supported_capabilities;
-    GError *error = NULL;
+    g_autoptr(GError) error = NULL;
 
     ctx = g_task_get_task_data (task);
 
     supported_capabilities = MM_IFACE_MODEM_GET_INTERFACE (self)->load_supported_capabilities_finish (self, res, &error);
     if (error) {
-        g_propagate_error (&ctx->fatal_error, error);
-        g_prefix_error (&ctx->fatal_error, "couldn't load supported capabilities: ");
+        ctx->fatal_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                        "Failed to load supported capabilities: %s",
+                                        error->message);
         /* Jump to the last step */
         ctx->step = INITIALIZATION_STEP_LAST;
         interface_initialization_step (task);
@@ -5046,6 +5053,75 @@ load_supported_ip_families_ready (MMIfaceModem *self,
 }
 
 UINT_REPLY_READY_FN (power_state, "power state")
+
+static void
+load_current_modes_ready (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          GTask *task)
+{
+    InitializationContext *ctx;
+    MMModemMode allowed = MM_MODEM_MODE_NONE;
+    MMModemMode preferred = MM_MODEM_MODE_NONE;
+    GError *error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_modes_finish (self,
+                                                                         res,
+                                                                         &allowed,
+                                                                         &preferred,
+                                                                         &error)) {
+        /* Errors when getting allowed/preferred won't be critical */
+        mm_obj_warn (self, "couldn't load current allowed/preferred modes: %s", error->message);
+        g_error_free (error);
+    } else
+        mm_gdbus_modem_set_current_modes (ctx->skeleton, g_variant_new ("(uu)", allowed, preferred));
+
+    /* Done, Go on to next step */
+    ctx->step++;
+    interface_initialization_step (task);
+}
+
+static void
+load_current_bands_ready (MMIfaceModem *self,
+                          GAsyncResult *res,
+                          GTask *task)
+{
+    InitializationContext *ctx;
+    GArray *current_bands;
+    GError *error = NULL;
+
+    ctx = g_task_get_task_data (task);
+
+    current_bands = MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands_finish (self, res, &error);
+    if (!current_bands) {
+        /* Errors when getting current bands won't be critical */
+        mm_obj_warn (self, "couldn't load current bands: %s", error->message);
+        g_error_free (error);
+    } else {
+        GArray *filtered_bands;
+        GArray *supported_bands;
+
+        supported_bands = (mm_common_bands_variant_to_garray (
+                               mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
+        filtered_bands = mm_filter_current_bands (supported_bands, current_bands);
+
+        g_array_unref (current_bands);
+        if (supported_bands)
+            g_array_unref (supported_bands);
+
+        if (filtered_bands) {
+            mm_common_bands_garray_sort (filtered_bands);
+            mm_gdbus_modem_set_current_bands (ctx->skeleton,
+                                              mm_common_bands_garray_to_variant (filtered_bands));
+            g_array_unref (filtered_bands);
+        }
+    }
+
+    /* Done, Go on to next step */
+    ctx->step++;
+    interface_initialization_step (task);
+}
 
 static void
 setup_sim_hot_swap_ready (MMIfaceModem *self,
@@ -5271,21 +5347,6 @@ load_carrier_config_ready (MMIfaceModem *self,
     interface_initialization_step (task);
 }
 
-void
-mm_iface_modem_update_own_numbers (MMIfaceModem *self,
-                                   const GStrv own_numbers)
-{
-    MmGdbusModem *skeleton = NULL;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_DBUS_SKELETON, &skeleton,
-                  NULL);
-    if (skeleton) {
-        mm_gdbus_modem_set_own_numbers (skeleton, (const gchar * const *)own_numbers);
-        g_object_unref (skeleton);
-    }
-}
-
 static void
 load_own_numbers_ready (MMIfaceModem *self,
                         GAsyncResult *res,
@@ -5314,75 +5375,6 @@ load_own_numbers_ready (MMIfaceModem *self,
 }
 
 static void
-load_current_modes_ready (MMIfaceModem *self,
-                          GAsyncResult *res,
-                          GTask *task)
-{
-    InitializationContext *ctx;
-    MMModemMode allowed = MM_MODEM_MODE_NONE;
-    MMModemMode preferred = MM_MODEM_MODE_NONE;
-    GError *error = NULL;
-
-    ctx = g_task_get_task_data (task);
-
-    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_modes_finish (self,
-                                                                         res,
-                                                                         &allowed,
-                                                                         &preferred,
-                                                                         &error)) {
-        /* Errors when getting allowed/preferred won't be critical */
-        mm_obj_warn (self, "couldn't load current allowed/preferred modes: %s", error->message);
-        g_error_free (error);
-    } else
-        mm_gdbus_modem_set_current_modes (ctx->skeleton, g_variant_new ("(uu)", allowed, preferred));
-
-    /* Done, Go on to next step */
-    ctx->step++;
-    interface_initialization_step (task);
-}
-
-static void
-load_current_bands_ready (MMIfaceModem *self,
-                          GAsyncResult *res,
-                          GTask *task)
-{
-    InitializationContext *ctx;
-    GArray *current_bands;
-    GError *error = NULL;
-
-    ctx = g_task_get_task_data (task);
-
-    current_bands = MM_IFACE_MODEM_GET_INTERFACE (self)->load_current_bands_finish (self, res, &error);
-    if (!current_bands) {
-        /* Errors when getting current bands won't be critical */
-        mm_obj_warn (self, "couldn't load current bands: %s", error->message);
-        g_error_free (error);
-    } else {
-        GArray *filtered_bands;
-        GArray *supported_bands;
-
-        supported_bands = (mm_common_bands_variant_to_garray (
-                               mm_gdbus_modem_get_supported_bands (ctx->skeleton)));
-        filtered_bands = mm_filter_current_bands (supported_bands, current_bands);
-
-        g_array_unref (current_bands);
-        if (supported_bands)
-            g_array_unref (supported_bands);
-
-        if (filtered_bands) {
-            mm_common_bands_garray_sort (filtered_bands);
-            mm_gdbus_modem_set_current_bands (ctx->skeleton,
-                                              mm_common_bands_garray_to_variant (filtered_bands));
-            g_array_unref (filtered_bands);
-        }
-    }
-
-    /* Done, Go on to next step */
-    ctx->step++;
-    interface_initialization_step (task);
-}
-
-static void
 interface_initialization_step (GTask *task)
 {
     MMIfaceModem *self;
@@ -5394,10 +5386,7 @@ interface_initialization_step (GTask *task)
     /* Don't run new steps if we're cancelled */
     if (g_task_return_error_if_cancelled (task)) {
         /* Simply ignore any fatal error encountered as the initialization is cancelled anyway. */
-        if (ctx->fatal_error) {
-            g_error_free (ctx->fatal_error);
-            ctx->fatal_error = NULL;
-        }
+        g_clear_error (&ctx->fatal_error);
         g_object_unref (task);
         return;
     }
@@ -5807,141 +5796,6 @@ interface_initialization_step (GTask *task)
         ctx->step++;
         /* fall-through */
 
-    case INITIALIZATION_STEP_SIM_HOT_SWAP: {
-        Private *priv;
-
-        priv = get_private (self);
-        if (!priv->sim_hot_swap_configured &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap_finish) {
-            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap (
-                MM_IFACE_MODEM (self),
-                (GAsyncReadyCallback) setup_sim_hot_swap_ready,
-                task);
-                return;
-        }
-        ctx->step++;
-    } /* fall-through */
-
-        case INITIALIZATION_STEP_SIM_SLOTS:
-        /* If the modem doesn't need any SIM (not implemented by plugin, or not
-         * needed in CDMA-only modems), or if we don't know how to query
-         * for SIM slots */
-        if (!mm_gdbus_modem_get_sim_slots (ctx->skeleton) &&
-            !mm_iface_modem_is_cdma_only (self) &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots_finish) {
-            MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots (MM_IFACE_MODEM (self),
-                                                                 (GAsyncReadyCallback)load_sim_slots_ready,
-                                                                 task);
-            return;
-        }
-        ctx->step++;
-        /* fall-through */
-
-    case INITIALIZATION_STEP_UNLOCK_REQUIRED:
-        /* Only check unlock required if we were previously not unlocked */
-        if (mm_gdbus_modem_get_unlock_required (ctx->skeleton) != MM_MODEM_LOCK_NONE) {
-            mm_iface_modem_update_lock_info (self,
-                                             MM_MODEM_LOCK_UNKNOWN, /* ask */
-                                             (GAsyncReadyCallback)modem_update_lock_info_ready,
-                                             task);
-            return;
-        }
-        ctx->step++;
-        /* fall-through */
-
-    case INITIALIZATION_STEP_SIM:
-        /* If the modem doesn't need any SIM (not implemented by plugin, or not
-         * needed in CDMA-only modems) */
-        if (!mm_iface_modem_is_cdma_only (self) &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->create_sim &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->create_sim_finish) {
-            MMBaseSim *sim = NULL;
-
-            g_object_get (self,
-                          MM_IFACE_MODEM_SIM, &sim,
-                          NULL);
-            if (!sim) {
-                MM_IFACE_MODEM_GET_INTERFACE (self)->create_sim (
-                    MM_IFACE_MODEM (self),
-                    (GAsyncReadyCallback)sim_new_ready,
-                    task);
-                return;
-            }
-
-            /* If already available the sim object, relaunch initialization.
-             * This will try to load any missing property value that couldn't be
-             * retrieved before due to having the SIM locked. */
-            mm_base_sim_initialize (sim,
-                                    g_task_get_cancellable (task),
-                                    (GAsyncReadyCallback)sim_reinit_ready,
-                                    task);
-            g_object_unref (sim);
-            return;
-        }
-        ctx->step++;
-        /* fall-through */
-
-    case INITIALIZATION_STEP_SETUP_CARRIER_CONFIG:
-        /* Setup and perform automatic carrier config switching as soon as the
-         * SIM initialization has been performed, only applicable if there is
-         * actually a SIM found with a valid IMSI read */
-        if (!mm_iface_modem_is_cdma_only (self) &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_carrier_config &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_carrier_config_finish) {
-            MMBaseSim *sim = NULL;
-            gchar     *carrier_config_mapping = NULL;
-
-            g_object_get (self,
-                          MM_IFACE_MODEM_SIM, &sim,
-                          MM_IFACE_MODEM_CARRIER_CONFIG_MAPPING, &carrier_config_mapping,
-                          NULL);
-
-            /* If we have a SIM object, and carrier config switching is supported,
-             * validate whether we're already using the best config or not. */
-            if (!sim)
-                mm_obj_dbg (self, "not setting up carrier config: SIM not found");
-            else if (!carrier_config_mapping)
-                mm_obj_dbg (self, "not setting up carrier config: mapping file not configured");
-            else {
-                const gchar *imsi;
-
-                imsi = mm_gdbus_sim_get_imsi (MM_GDBUS_SIM (sim));
-                if (imsi) {
-                    MM_IFACE_MODEM_GET_INTERFACE (self)->setup_carrier_config (self,
-                                                                               imsi,
-                                                                               carrier_config_mapping,
-                                                                               (GAsyncReadyCallback)setup_carrier_config_ready,
-                                                                               task);
-                    g_object_unref (sim);
-                    g_free (carrier_config_mapping);
-                    return;
-                }
-                mm_obj_warn (self, "couldn't setup carrier config: unknown IMSI");
-            }
-            g_clear_object (&sim);
-            g_free (carrier_config_mapping);
-        }
-        ctx->step++;
-        /* fall-through */
-
-    case INITIALIZATION_STEP_OWN_NUMBERS:
-        /* Own numbers is meant to be loaded only once during the whole
-         * lifetime of the modem. Therefore, if we already have them loaded,
-         * don't try to load them again. */
-        if (mm_gdbus_modem_get_own_numbers (ctx->skeleton) == NULL &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->load_own_numbers &&
-            MM_IFACE_MODEM_GET_INTERFACE (self)->load_own_numbers_finish) {
-            MM_IFACE_MODEM_GET_INTERFACE (self)->load_own_numbers (
-                self,
-                (GAsyncReadyCallback)load_own_numbers_ready,
-                task);
-            return;
-        }
-        ctx->step++;
-        /* fall-through */
-
     case INITIALIZATION_STEP_CURRENT_MODES: {
         MMModemMode allowed = MM_MODEM_MODE_ANY;
         MMModemMode preferred = MM_MODEM_MODE_NONE;
@@ -6013,6 +5867,158 @@ interface_initialization_step (GTask *task)
         ctx->step++;
     } /* fall-through */
 
+    case INITIALIZATION_STEP_SIM_HOT_SWAP: {
+        Private *priv;
+
+        priv = get_private (self);
+        if (!priv->sim_hot_swap_configured &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap_finish) {
+            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_sim_hot_swap (
+                MM_IFACE_MODEM (self),
+                (GAsyncReadyCallback) setup_sim_hot_swap_ready,
+                task);
+                return;
+        }
+        ctx->step++;
+    } /* fall-through */
+
+    case INITIALIZATION_STEP_SIM_SLOTS:
+        /* If the modem doesn't need any SIM (not implemented by plugin, or not
+         * needed in CDMA-only modems), or if we don't know how to query
+         * for SIM slots */
+        if (!mm_gdbus_modem_get_sim_slots (ctx->skeleton) &&
+            !mm_iface_modem_is_cdma_only (self) &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots_finish) {
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_sim_slots (MM_IFACE_MODEM (self),
+                                                                 (GAsyncReadyCallback)load_sim_slots_ready,
+                                                                 task);
+            return;
+        }
+        ctx->step++;
+        /* fall-through */
+
+    case INITIALIZATION_STEP_UNLOCK_REQUIRED:
+        /* Only check unlock required if we were previously not unlocked */
+        if (mm_gdbus_modem_get_unlock_required (ctx->skeleton) != MM_MODEM_LOCK_NONE) {
+            mm_iface_modem_update_lock_info (self,
+                                             MM_MODEM_LOCK_UNKNOWN, /* ask */
+                                             (GAsyncReadyCallback)modem_update_lock_info_ready,
+                                             task);
+            return;
+        }
+        ctx->step++;
+        /* fall-through */
+
+    case INITIALIZATION_STEP_SIM:
+        /* If the modem doesn't need any SIM (not implemented by plugin, or not
+         * needed in CDMA-only modems) */
+        if (!mm_iface_modem_is_cdma_only (self) &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->create_sim &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->create_sim_finish) {
+            MMBaseSim *sim = NULL;
+
+            g_object_get (self,
+                          MM_IFACE_MODEM_SIM, &sim,
+                          NULL);
+            if (!sim) {
+                MM_IFACE_MODEM_GET_INTERFACE (self)->create_sim (
+                    MM_IFACE_MODEM (self),
+                    (GAsyncReadyCallback)sim_new_ready,
+                    task);
+                return;
+            }
+
+            /* If already available the sim object, relaunch initialization.
+             * This will try to load any missing property value that couldn't be
+             * retrieved before due to having the SIM locked. */
+            mm_base_sim_initialize (sim,
+                                    g_task_get_cancellable (task),
+                                    (GAsyncReadyCallback)sim_reinit_ready,
+                                    task);
+            g_object_unref (sim);
+            return;
+        }
+        ctx->step++;
+        /* fall-through */
+
+    case INITIALIZATION_STEP_SETUP_CARRIER_CONFIG:
+        /* Setup and perform automatic carrier config switching as soon as the
+         * SIM initialization has been performed, only applicable if there is
+         * actually a SIM found with a valid IMSI read */
+        if (!mm_iface_modem_is_cdma_only (self) &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_carrier_config &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->setup_carrier_config_finish) {
+            g_autoptr(MMBaseSim)  sim = NULL;
+            g_autofree gchar     *carrier_config_mapping = NULL;
+
+            g_object_get (self,
+                          MM_IFACE_MODEM_SIM, &sim,
+                          MM_IFACE_MODEM_CARRIER_CONFIG_MAPPING, &carrier_config_mapping,
+                          NULL);
+
+            /* If we have a SIM object, and carrier config switching is supported,
+             * validate whether we're already using the best config or not. */
+            if (!sim)
+                mm_obj_dbg (self, "not setting up carrier config: SIM not found");
+            else if (!mm_base_sim_is_esim_without_profiles (sim))
+                mm_obj_dbg (self, "not setting up carrier config: eSIM without profiles");
+            else if (!carrier_config_mapping)
+                mm_obj_dbg (self, "not setting up carrier config: mapping file not configured");
+            else {
+                const gchar *imsi;
+
+                imsi = mm_gdbus_sim_get_imsi (MM_GDBUS_SIM (sim));
+                if (!imsi)
+                    mm_obj_dbg (self, "not setting up carrier config: unknown IMSI");
+                else {
+                    MM_IFACE_MODEM_GET_INTERFACE (self)->setup_carrier_config (self,
+                                                                               imsi,
+                                                                               carrier_config_mapping,
+                                                                               (GAsyncReadyCallback)setup_carrier_config_ready,
+                                                                               task);
+                    return;
+                }
+            }
+        }
+        ctx->step++;
+        /* fall-through */
+
+    case INITIALIZATION_STEP_OWN_NUMBERS:
+        /* Own numbers is meant to be loaded only once during the whole
+         * lifetime of the modem. Therefore, if we already have them loaded,
+         * don't try to load them again. */
+        if (mm_gdbus_modem_get_own_numbers (ctx->skeleton) == NULL &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_own_numbers &&
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_own_numbers_finish) {
+            MM_IFACE_MODEM_GET_INTERFACE (self)->load_own_numbers (
+                self,
+                (GAsyncReadyCallback)load_own_numbers_ready,
+                task);
+            return;
+        }
+        ctx->step++;
+        /* fall-through */
+
+    case INITIALIZATION_STEP_VALIDATE_ESIM_STATUS: {
+        g_autoptr(MMBaseSim) sim = NULL;
+
+        g_object_get (self,
+                      MM_IFACE_MODEM_SIM, &sim,
+                      NULL);
+
+        /* If the current SIM is an eSIM without profiles, we transition to FAILED
+         * status because the modem is really unusable. */
+        if (sim && mm_base_sim_is_esim_without_profiles (sim)) {
+            g_clear_error (&ctx->fatal_error);
+            ctx->fatal_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_WRONG_SIM_STATE,
+                                            "eSIM without profiles detected");
+        }
+
+        ctx->step++;
+    } /* fall-through */
+
     case INITIALIZATION_STEP_LAST:
         /* Setup all method handlers */
         g_object_connect (ctx->skeleton,
@@ -6037,10 +6043,9 @@ interface_initialization_step (GTask *task)
             mm_gdbus_object_skeleton_set_modem (MM_GDBUS_OBJECT_SKELETON (self),
                                                 MM_GDBUS_MODEM (ctx->skeleton));
 
-        if (ctx->fatal_error) {
-            g_task_return_error (task, ctx->fatal_error);
-            ctx->fatal_error = NULL;
-        } else
+        if (ctx->fatal_error)
+            g_task_return_error (task, g_steal_pointer (&ctx->fatal_error));
+        else
             g_task_return_boolean (task, TRUE);
 
         g_object_unref (task);
