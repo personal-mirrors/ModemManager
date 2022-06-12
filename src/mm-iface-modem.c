@@ -2429,6 +2429,96 @@ typedef struct {
     MmGdbusModem *skeleton;
     GDBusMethodInvocation *invocation;
     MMIfaceModem *self;
+    guint boot_mode;
+    guint timeout;
+} HandleResetextContext;
+
+static void
+handle_reset_ext_context_free (HandleResetextContext *ctx)
+{
+    g_object_unref (ctx->skeleton);
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->self);
+    g_free (ctx);
+}
+
+static void
+handle_reset_ext_ready (MMIfaceModem *self,
+                        GAsyncResult *res,
+                        HandleResetextContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->reset_ext_finish (self, res, &error))
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+    else
+        mm_gdbus_modem_complete_reset_ext (ctx->skeleton, ctx->invocation);
+
+    handle_reset_ext_context_free (ctx);
+}
+
+static void
+handle_reset_ext_auth_ready (MMBaseModem *self,
+                             GAsyncResult *res,
+                             HandleResetextContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_base_modem_authorize_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_reset_ext_context_free (ctx);
+        return;
+    }
+
+    /* If reseting is not implemented, report an error */
+    if (!MM_IFACE_MODEM_GET_INTERFACE (self)->reset_ext ||
+        !MM_IFACE_MODEM_GET_INTERFACE (self)->reset_ext_finish) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot call reset ext: operation not supported");
+        handle_reset_ext_context_free (ctx);
+        return;
+    }
+
+    MM_IFACE_MODEM_GET_INTERFACE (self)->reset_ext (MM_IFACE_MODEM (self),
+                                                    ctx->boot_mode,
+                                                    ctx->timeout,
+                                                    (GAsyncReadyCallback)handle_reset_ext_ready,
+                                                    ctx);
+}
+
+static gboolean
+handle_reset_ext (MmGdbusModem *skeleton,
+                  GDBusMethodInvocation *invocation,
+                  guint boot_mode,
+                  guint timeout,
+                  MMIfaceModem *self)
+{
+    HandleResetextContext *ctx;
+
+    ctx = g_new (HandleResetextContext, 1);
+    ctx->skeleton = g_object_ref (skeleton);
+    ctx->invocation = g_object_ref (invocation);
+    ctx->self = g_object_ref (self);
+    ctx->boot_mode = boot_mode;
+    ctx->timeout = timeout;
+
+    mm_base_modem_authorize (MM_BASE_MODEM (self),
+                             invocation,
+                             MM_AUTHORIZATION_DEVICE_CONTROL,
+                            (GAsyncReadyCallback)handle_reset_ext_auth_ready,
+                             ctx);
+
+    return TRUE;
+}
+
+/*****************************************************************************/
+
+typedef struct {
+    MmGdbusModem *skeleton;
+    GDBusMethodInvocation *invocation;
+    MMIfaceModem *self;
     gchar *code;
 } HandleFactoryResetContext;
 
@@ -6025,6 +6115,7 @@ interface_initialization_step (GTask *task)
                           "signal::handle-set-current-capabilities", G_CALLBACK (handle_set_current_capabilities), self,
                           "signal::handle-set-power-state",          G_CALLBACK (handle_set_power_state),          self,
                           "signal::handle-reset",                    G_CALLBACK (handle_reset),                    self,
+                          "signal::handle-reset-ext",                G_CALLBACK (handle_reset_ext),                self,
                           "signal::handle-factory-reset",            G_CALLBACK (handle_factory_reset),            self,
                           "signal::handle-create-bearer",            G_CALLBACK (handle_create_bearer),            self,
                           "signal::handle-command",                  G_CALLBACK (handle_command),                  self,
