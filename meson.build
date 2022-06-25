@@ -3,7 +3,7 @@
 
 project(
   'ModemManager', 'c',
-  version: '1.18.9',
+  version: '1.18.10',
   license: 'GPL2',
   default_options: [
     'buildtype=debugoptimized',
@@ -244,7 +244,7 @@ config_h.set('WITH_MBIM', enable_mbim)
 # QMI support (enabled by default)
 enable_qmi = get_option('qmi')
 if enable_qmi
-  qmi_glib_dep = dependency('qmi-glib', version: '>= 1.30.2')
+  qmi_glib_dep = dependency('qmi-glib', version: '>= 1.30.8')
 endif
 config_h.set('WITH_QMI', enable_qmi)
 
