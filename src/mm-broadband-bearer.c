@@ -876,6 +876,11 @@ connect_succeeded (GTask *task,
     self->priv->port = g_object_ref (mm_bearer_connect_result_peek_data (result));
     self->priv->connection_type = connection_type;
 
+    /* Save profile ID for 3GPP connections. This is required for cases where
+     * the standard profile selection of this class is not executed during
+     * connection, e.g. if a derived class implements their own connect_3gpp. */
+    self->priv->profile_id = mm_bearer_connect_result_get_profile_id (result);
+
     /* Port is connected; update the state. For ATD based connections, the port
      * may already be set as connected, but no big deal. */
     mm_port_set_connected (self->priv->port, TRUE);
@@ -2043,7 +2048,7 @@ mm_broadband_bearer_class_init (MMBroadbandBearerClass *klass)
     base_bearer_class->report_connection_status = report_connection_status;
     base_bearer_class->load_connection_status = load_connection_status;
     base_bearer_class->load_connection_status_finish = load_connection_status_finish;
-#if defined WITH_SYSTEMD_SUSPEND_RESUME
+#if defined WITH_SUSPEND_RESUME
     base_bearer_class->reload_connection_status = load_connection_status;
     base_bearer_class->reload_connection_status_finish = load_connection_status_finish;
 #endif
