@@ -25,18 +25,21 @@
 #include "mm-log-object.h"
 #include "mm-modem-helpers.h"
 #include "mm-iface-modem.h"
+#include "mm-iface-modem-firmware.h"
 #include "mm-base-modem-at.h"
 #include "mm-broadband-modem-mbim-telit.h"
 #include "mm-modem-helpers-telit.h"
 #include "mm-shared-telit.h"
 
 static void iface_modem_init  (MMIfaceModem  *iface);
+static void iface_modem_firmware_init (MMIfaceModemFirmware *iface);
 static void shared_telit_init (MMSharedTelit *iface);
 
 static MMIfaceModem *iface_modem_parent;
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbimTelit, mm_broadband_modem_mbim_telit, MM_TYPE_BROADBAND_MODEM_MBIM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_FIRMWARE, iface_modem_firmware_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_SHARED_TELIT, shared_telit_init))
 
 /*****************************************************************************/
@@ -175,6 +178,61 @@ load_revision (MMIfaceModem        *self,
 }
 
 /*****************************************************************************/
+/* Firmware update settings loading (Firmware interface) */
+
+static MMModemFirmwareUpdateMethod
+telit_get_firmware_update_method (const gchar *revision)
+{
+    if (revision &&
+        mm_telit_model_from_revision (revision) == MM_TELIT_MODEL_LN920) {
+
+        return MM_MODEM_FIRMWARE_UPDATE_METHOD_MBIM_QDU;
+    }
+
+    return MM_MODEM_FIRMWARE_UPDATE_METHOD_NONE;
+}
+
+static MMFirmwareUpdateSettings *
+firmware_load_update_settings_finish (MMIfaceModemFirmware  *self,
+                                      GAsyncResult          *res,
+                                      GError               **error)
+{
+    return g_task_propagate_pointer (G_TASK (res), error);
+}
+
+static void
+firmware_load_update_settings (MMIfaceModemFirmware *self,
+                               GAsyncReadyCallback   callback,
+                               gpointer              user_data)
+{
+    GTask *task;
+    MMModemFirmwareUpdateMethod update_method;
+    MMFirmwareUpdateSettings *update_settings;
+    gchar *revision;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    revision = mm_shared_telit_get_stored_revision (MM_SHARED_TELIT (self));
+    if (!revision) {
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR,
+                                 MM_CORE_ERROR_FAILED,
+                                 "Couldn't find firmware revision info");
+        g_object_unref (task);
+        return;
+    }
+
+    update_method = telit_get_firmware_update_method (revision);
+    update_settings = mm_firmware_update_settings_new (update_method);
+
+    mm_firmware_update_settings_set_version (update_settings, revision);
+    g_free (revision);
+
+    g_task_return_pointer (task, update_settings, g_object_unref);
+    g_object_unref (task);
+    return;
+}
+
+/*****************************************************************************/
 
 MMBroadbandModemMbimTelit *
 mm_broadband_modem_mbim_telit_new (const gchar  *device,
@@ -201,6 +259,13 @@ mm_broadband_modem_mbim_telit_new (const gchar  *device,
 static void
 mm_broadband_modem_mbim_telit_init (MMBroadbandModemMbimTelit *self)
 {
+}
+
+static void
+iface_modem_firmware_init (MMIfaceModemFirmware *iface)
+{
+    iface->load_update_settings        = firmware_load_update_settings;
+    iface->load_update_settings_finish = firmware_load_update_settings_finish;
 }
 
 static void
