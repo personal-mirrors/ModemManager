@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!--
+ ModemManager 1.0 Interface Specification
+
+   Copyright (C) 2022 Intel Corporation
+-->
+
+<node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
+
+  <!--
+      org.freedesktop.ModemManager1.Sim.Uicc:
+      @short_description: The ModemManager Uicc interface.
+
+      This interface provides support to eSIM feature.
+
+      This interface will always be available as long as there is valid
+      sim.
+  -->
+  <interface name="org.freedesktop.ModemManager1.Sim.Uicc">
+
+    <!--
+        OpenChannel:
+        @config: Parameters required to create a new logical channel,
+                 as described by section 11.1.17 of the ETSI TS 102 221
+                 technical specification.
+        @response: Parameters reported by modem which are required by host
+                   applications to carry out further UICC operations. Details
+                   of the parameters are as per section 11.1.1 of the ETSI TS 102 221
+                   technical specification.
+
+        This functional interface helps to store the properties required for open channel
+        similar to SetInitialEpsBearerSettings.
+
+        <literal>"config"</literal> data is dictionary containing below parameters
+        <variablelist>
+        <varlistentry><term>"select-p2-arg"</term>
+          <listitem>
+            <para>
+              P2 argument to the SELECT command. Refer 11.1.13 of the
+              ETSI TS 102 221 technical specification,
+              given as an byte (signature <literal>"y"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"app-id"</term>
+          <listitem>
+            <para>
+              Application Id for the UICC operation,
+              given as an array of bytes (signature <literal>"ay"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"time-out"</term>
+          <listitem>
+            <para>
+              Time in seconds to indicate how long the channel need to be open before the apdu is received in it,
+              given as an byte (signature <literal>"y"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        </variablelist>
+
+        <literal>"response"</literal> data is dictionary containing below parameters
+        <variablelist>
+        <varlistentry><term>"channel-id"</term>
+          <listitem>
+            <para>
+              The logical channel identifier. If this member is 0, then the operation failed,
+              given as an byte (signature <literal>"y"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"sw1"</term>
+          <listitem>
+            <para>
+              Consists of status word 1 of the operation,
+              given as an byte (signature <literal>"y"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"sw2"</term>
+          <listitem>
+            <para>
+              Consists of status word 2 of the operation,
+              given as an byte (signature <literal>"y"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"data"</term>
+          <listitem>
+            <para>
+              Array of data consists of any sim response received for the open channel request,
+              given as an array of bytes (signature <literal>"ay"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        </variablelist>
+        Since: 1.20
+    -->
+    <method name="OpenChannel">
+      <arg name="config" type="a{sv}" direction="in"/>
+      <arg name="response" type="a{sv}" direction="out"/>
+    </method>
+
+    <!--
+        CloseChannel:
+        @channel_id: The channel identifier data of the channel to be closed.
+
+        This functional interface is called by application/tool to close channel as soon as the sim
+        operation is completed.
+
+        The channel identifier will be returned from UICC as part of response to
+        <link linkend="gdbus-method-org-freedesktop-ModemManager1-Sim-Uicc.OpenChannel">OpenChannel()</link>
+        command.
+
+        Since: 1.20
+    -->
+    <method name="CloseChannel">
+      <arg name="channel_id" type="y" direction="in"/>
+    </method>
+
+    <!--
+        SetApdu:
+        @apdu_msg: APDU message to be sent to a specific UICC.
+        @apdu_rsp: APDU message to be sent to a specific UICC.
+
+        This functional interface helps the host application to send an apdu to a
+        specific UICC and receive the response. The host must send a complete APDU
+        to the function.
+
+        <literal>"apdu_msg"</literal> data is dictionary containing below parameters
+        <variablelist>
+        <varlistentry><term>"channel"</term>
+          <listitem>
+            <para>
+              Specifies the channel on which the APDU will be sent,
+              given as an byte (signature <literal>"y"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"data"</term>
+          <listitem>
+            <para>
+              Host must send a complete APDU to the function. The APDU may be
+              sent with a class byte value defined in the first interindustry
+              definition in section 4 of the ISO/IEC 7816-4:2013 standard,
+              or in the extended definition in Section 10.1.1 of the ETSI
+              TS 102 221 technical specification. The APDU may be sent without
+              secure messaging or with secure messaging. The command header not
+              authenticated. The host specifies the type of class byte, logical
+              channel number, and secure messaging along with the APDU,
+              given as an array of bytes (signature <literal>"ay"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        </variablelist>
+
+        <literal>"apdu_rsp"</literal> is a dictionary containing below parameters
+        <variablelist>
+        <varlistentry><term>"sw1"</term>
+          <listitem>
+            <para>
+              Consists of status word 1 of the operation,
+              given as an byte (signature <literal>"y"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"sw2"</term>
+          <listitem>
+            <para>
+              Consists of status word 2 of the operation,
+              given as an byte (signature <literal>"y"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        <varlistentry><term>"data"</term>
+          <listitem>
+            <para>
+              Response to the APDU command,
+              given as an array of bytes (signature <literal>"ay"</literal>).
+            </para>
+          </listitem>
+        </varlistentry>
+        </variablelist>
+        Since: 1.20
+    -->
+    <method name="SetApdu">
+      <arg name="apdu_msg" type="a{sv}" direction="in"/>
+      <arg name="apdu_rsp" type="a{sv}" direction="out"/>
+    </method>
+
+    <!--
+        SetTerminalCapability:
+        @terminal_capability: Array of capabilities to be exchanged between host and modem.
+                              Each capability is of type byte array of the actual terminal
+                              capability object TLVs.
+
+        Function to inform the modem/card about the capabilities of the host.
+
+        Hosts sends the UiccSetTerminalCap function containing one or more terminal capability
+        objects which would be stored persistently by the modem. On the next card insertion/reset,
+        after the ATR, the modem would SELECT the MF and check whether TERMINAL CAPABILITY is
+        supported. If so, the modem would send the TERMINAL CAPABILITY APDU with the information
+        specified by this function (as well as any modem-generated information).
+
+        Since: 1.20
+    -->
+    <method name="SetTerminalCapability">
+      <arg name="terminal_capability" type="aay" direction="in"/>
+    </method>
+
+    <!--
+        GetTerminalCapability:
+        @terminal_capability: Array of capabilities to be exchanged between host and modem.
+                              Each capability is of type byte array of the actual terminal
+                              capability object TLVs.
+
+        Function to get the host capabilities that are set on the modem/card using the
+        <link linkend="gdbus-method-org-freedesktop-ModemManager1-Sim-Uicc.SetTerminalCapability">SetTerminalCapability()</link>
+        method.
+
+        Since: 1.20
+    -->
+    <method name="GetTerminalCapability">
+      <arg name="terminal_capability" type="aay" direction="out"/>
+    </method>
+
+    <!--
+        EnablePassThrough:
+        @passThruStatus : a <link linkend="MMUiccPassThrough">MMUiccPassThrough</link> value.
+
+        Interface to enable or disable the pass through action of UICC.
+
+        Since: 1.20
+    -->
+    <method name="EnablePassThrough">
+      <arg name="pass_through" type="u" direction="in"/>
+    </method>
+
+    <!--
+        GetPassThrough:
+
+        Interface to query the pass through status of UICC.
+
+        The status of UICC pass through will be updated in the property
+        <link linkend="gdbus-method-org-freedesktop-ModemManager1-Sim-Uicc.PassThrough">PassThrough</link>
+
+        Since: 1.20
+    -->
+    <method name="GetPassThrough" />
+
+    <!--
+        PassThrough:
+
+        A <link linkend="MMUiccPassThrough">MMUiccPassThrough</link> value that
+        indicates the pass through status of modem UICC. This property gets updated via 
+        <link linkend="gdbus-method-org-freedesktop-ModemManager1-Modem-Uicc.EnablePassThrough">EnablePassThrough()</link>
+        and via
+        <link linkend="gdbus-method-org-freedesktop-ModemManager1-Sim-Uicc.GetPassThrough">GetPassThrough()</link> method.
+
+        Since: 1.20
+    -->
+    <property name="PassThrough" type="u" access="read" />
+
+    <!--
+        Atr:
+
+        The Answer to Reset (ATR) is the first string of bytes sent by the UICC after a reset
+        has been performed. It describes capabilities of the card.
+
+        Atr is updated during boot time when the UICC interface is brough up. ATR is defined in
+        ISO/IEC 7816-3.
+
+        Since: 1.20
+    -->
+    <property name="Atr" type="ay" access="read" />
+  </interface>
+</node>
+
