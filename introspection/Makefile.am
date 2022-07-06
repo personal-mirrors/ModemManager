@@ -10,6 +10,7 @@ xml_DATA = \
 	org.freedesktop.ModemManager1.Modem.ModemCdma.xml \
 	org.freedesktop.ModemManager1.Modem.Simple.xml \
 	org.freedesktop.ModemManager1.Sim.xml \
+	org.freedesktop.ModemManager1.Sim.Uicc.xml \
 	org.freedesktop.ModemManager1.Bearer.xml \
 	org.freedesktop.ModemManager1.Modem.Location.xml \
 	org.freedesktop.ModemManager1.Modem.Messaging.xml \
