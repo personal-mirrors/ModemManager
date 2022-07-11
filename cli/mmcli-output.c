@@ -950,9 +950,6 @@ build_profile_human (GPtrArray     *array,
     if ((aux = mm_3gpp_profile_get_profile_name (profile)) != NULL)
         g_ptr_array_add (array, g_strdup_printf ("  profile name: %s", aux));
 
-    if ((aux = mm_3gpp_profile_get_profile_name (profile)) != NULL)
-        g_ptr_array_add (array, g_strdup_printf ("    profile name: %s", aux));
-
     if ((aux = mm_3gpp_profile_get_apn (profile)) != NULL)
         g_ptr_array_add (array, g_strdup_printf ("  apn: %s", aux));
 
