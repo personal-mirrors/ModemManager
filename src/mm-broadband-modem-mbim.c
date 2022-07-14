@@ -385,6 +385,14 @@ mm_broadband_modem_mbim_peek_port_mbim_for_data (MMBroadbandModemMbim  *self,
     return MM_BROADBAND_MODEM_MBIM_GET_CLASS (self)->peek_port_mbim_for_data (self, data, error);
 }
 
+gboolean
+mm_broadband_modem_mbim_get_is_lte_attach_info_supported (MMBroadbandModemMbim  *self)
+{
+    g_assert (MM_IS_BROADBAND_MODEM_MBIM (self));
+
+    return self->priv->is_lte_attach_info_supported;
+}
+
 /*****************************************************************************/
 /* Current capabilities (Modem interface) */
 

@@ -63,6 +63,8 @@ MMPortMbim *mm_broadband_modem_mbim_get_port_mbim_for_data  (MMBroadbandModemMbi
                                                              MMPort                *data,
                                                              GError               **error);
 
+gboolean mm_broadband_modem_mbim_get_is_lte_attach_info_supported (MMBroadbandModemMbim  *self);
+
 void mm_broadband_modem_mbim_set_unlock_retries (MMBroadbandModemMbim *self,
                                                  MMModemLock           lock_type,
                                                  guint32               remaining_attempts);
