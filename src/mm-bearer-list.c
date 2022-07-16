@@ -130,11 +130,10 @@ mm_bearer_list_find_by_properties (MMBearerList       *self,
     GList *l;
 
     for (l = self->priv->bearers; l; l = g_list_next (l)) {
-        /* always strict matching when comparing these bearer properties, as they're all
-         * built in the same place */
+        /* loose matching to compare only defined bearer properties */
         if (mm_bearer_properties_cmp (mm_base_bearer_peek_config (MM_BASE_BEARER (l->data)),
                                       props,
-                                      MM_BEARER_PROPERTIES_CMP_FLAGS_NONE))
+                                      MM_BEARER_PROPERTIES_CMP_FLAGS_LOOSE))
             return g_object_ref (l->data);
     }
 

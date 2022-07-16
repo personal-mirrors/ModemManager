@@ -883,6 +883,21 @@ cmp_allowed_auth (MMBearerAllowedAuth        a,
     return FALSE;
 }
 
+static gboolean
+cmp_profile_id (gint                       a,
+                gint                       b,
+                MMBearerPropertiesCmpFlags flags)
+{
+    /* Strict match */
+    if (a == b)
+        return TRUE;
+    /* Additional loose match UNKNOWN == ANY */
+    if (flags & MM_BEARER_PROPERTIES_CMP_FLAGS_LOOSE)
+        if (a == MM_3GPP_PROFILE_ID_UNKNOWN || b == MM_3GPP_PROFILE_ID_UNKNOWN)
+            return TRUE;
+    return FALSE;
+}
+
 /**
  * mm_bearer_properties_cmp: (skip)
  */
@@ -907,7 +922,7 @@ mm_bearer_properties_cmp (MMBearerProperties         *a,
         !cmp_apn_type (mm_3gpp_profile_get_apn_type (a->priv->profile), mm_3gpp_profile_get_apn_type (b->priv->profile), flags))
         return FALSE;
     if (!(flags & MM_BEARER_PROPERTIES_CMP_FLAGS_NO_PROFILE_ID) &&
-        (mm_3gpp_profile_get_profile_id (a->priv->profile) != mm_3gpp_profile_get_profile_id (b->priv->profile)))
+        !cmp_profile_id (mm_3gpp_profile_get_profile_id (a->priv->profile), mm_3gpp_profile_get_profile_id (b->priv->profile), flags))
         return FALSE;
     if (!(flags & MM_BEARER_PROPERTIES_CMP_FLAGS_NO_PROFILE_NAME) &&
         !cmp_str (mm_3gpp_profile_get_profile_name (a->priv->profile), mm_3gpp_profile_get_profile_name (b->priv->profile), flags))
