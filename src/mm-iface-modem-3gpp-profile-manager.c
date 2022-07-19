@@ -306,10 +306,14 @@ profile_manager_check_activated_profile_ready (MMIfaceModem3gppProfileManager *s
     ctx = g_task_get_task_data (task);
 
     if (!MM_IFACE_MODEM_3GPP_PROFILE_MANAGER_GET_INTERFACE (self)->check_activated_profile_finish (self, res, &activated, &error)) {
-        mm_obj_dbg (self, "couldn't check if profile '%s' is activated: %s", ctx->index_field_value_str, error->message);
-        ctx->step = SET_PROFILE_STEP_DEACTIVATE_PROFILE;
-    }
-    else if (activated) {
+        if (g_error_matches (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND)) {
+            mm_obj_dbg (self, "profile '%s' is not activated: %s", ctx->index_field_value_str, error->message);
+            ctx->step = SET_PROFILE_STEP_STORE_PROFILE;
+        } else {
+            mm_obj_dbg (self, "couldn't check if profile '%s' is activated: %s", ctx->index_field_value_str, error->message);
+            ctx->step = SET_PROFILE_STEP_DEACTIVATE_PROFILE;
+        }
+    } else if (activated) {
         mm_obj_dbg (self, "profile '%s' is activated", ctx->index_field_value_str);
         ctx->step = SET_PROFILE_STEP_DEACTIVATE_PROFILE;
     } else {
@@ -670,15 +674,29 @@ mm_iface_modem_3gpp_profile_manager_set_profile (MMIfaceModem3gppProfileManager 
                                                  GAsyncReadyCallback             callback,
                                                  gpointer                        user_data)
 {
-    GTask             *task;
-    SetProfileContext *ctx;
-    MMBearerIpFamily   ip_family;
+    GError                  *error;
+    GTask                   *task;
+    SetProfileContext       *ctx;
+    MMBearerIpFamily         ip_family;
+    g_autoptr(GVariant)      dict = NULL;
+    g_autoptr(MM3gppProfile) requested_copy = NULL;
 
     task = g_task_new (self, NULL, callback, user_data);
 
+    /* The MM3gppProfile passed to the SetProfileContext is going to
+     * be modified, so we make a copy to preserve the original one. */
+    dict = mm_3gpp_profile_get_dictionary (requested);
+    requested_copy = mm_3gpp_profile_new_from_dictionary (dict, &error);
+    if (!requested_copy) {
+        g_prefix_error (&error, "Couldn't copy 3GPP profile:");
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
     ctx = g_slice_new0 (SetProfileContext);
     ctx->step = SET_PROFILE_STEP_FIRST;
-    ctx->requested = g_object_ref (requested);
+    ctx->requested = g_object_ref (requested_copy);
     ctx->index_field = g_strdup (index_field);
     ctx->strict = strict;
     ctx->profile_id = mm_3gpp_profile_get_profile_id (requested);
@@ -1590,7 +1608,10 @@ profile_manager_list_profiles_check_ready (MMIfaceModem3gppProfileManager *self,
     if (!mm_iface_modem_3gpp_profile_manager_list_profiles_finish (self, res, NULL, &error))
         mm_obj_dbg (self, "profile management support check failed: couldn't load profile list: %s", error->message);
     else {
-        /* profile management is supported! */
+        /* profile management is supported!
+         * We are here because the modem type did not define the check_support functions,
+         * but we need anyway to set index_field, so let's use "profile-id" as default */
+        mm_gdbus_modem3gpp_profile_manager_set_index_field (ctx->skeleton, "profile-id");
         g_object_set_qdata (G_OBJECT (self), supported_quark, GUINT_TO_POINTER (TRUE));
     }
 
