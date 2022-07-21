@@ -1479,6 +1479,131 @@ handle_disable_facility_lock (MmGdbusModem3gpp      *skeleton,
 }
 
 /*****************************************************************************/
+
+typedef struct {
+    MmGdbusModem3gpp      *skeleton;
+    GDBusMethodInvocation *invocation;
+    MMIfaceModem3gpp      *self;
+    GVariant              *config;
+} HandleSetLockConfigurationContext;
+
+static void
+handle_set_lock_configuration_context_free (HandleSetLockConfigurationContext *ctx)
+{
+    g_object_unref (ctx->skeleton);
+    g_object_unref (ctx->invocation);
+    g_object_unref (ctx->self);
+    g_variant_unref (ctx->config);
+    g_free (ctx);
+}
+
+static void
+set_lock_configuration_update_ready (MMIfaceModem                      *modem,
+                                     GAsyncResult                      *res,
+                                     HandleSetLockConfigurationContext *ctx)
+{
+    GError      *error = NULL;
+
+    mm_iface_modem_update_lock_info_finish (modem, res, &error);
+    if (error) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_set_lock_configuration_context_free (ctx);
+        return;
+    }
+
+    mm_gdbus_modem3gpp_complete_set_lock_configuration (ctx->skeleton, ctx->invocation);
+    handle_set_lock_configuration_context_free (ctx);
+}
+
+static void
+handle_set_lock_configuration_ready (MMIfaceModem3gpp                  *self,
+                                     GAsyncResult                      *res,
+                                     HandleSetLockConfigurationContext *ctx)
+{
+    GError              *error = NULL;
+
+    if (!MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->set_lock_configuration_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_set_lock_configuration_context_free (ctx);
+        return;
+    }
+
+    /* Recheck lock status after configuration has been applied */
+    mm_iface_modem_update_lock_info (MM_IFACE_MODEM (self),
+                                     MM_MODEM_LOCK_UNKNOWN, /* ask */
+                                     (GAsyncReadyCallback)set_lock_configuration_update_ready,
+                                     ctx);
+}
+
+static void
+set_lock_configuration_auth_ready (MMBaseModem                       *self,
+                                   GAsyncResult                      *res,
+                                   HandleSetLockConfigurationContext *ctx)
+{
+    GError *error = NULL;
+    const guint8 *data;
+    gsize data_size;
+
+    if (!mm_base_modem_authorize_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        handle_set_lock_configuration_context_free (ctx);
+        return;
+    }
+
+    /* If Set Lock Configuration is not implemented, report an error */
+    if (!MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->set_lock_configuration ||
+        !MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->set_lock_configuration_finish) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot configure modem locks: "
+                                               "operation not supported");
+        handle_set_lock_configuration_context_free (ctx);
+        return;
+    }
+
+    /* Get data pointer and size */
+    data = (const guint8 *) g_variant_get_fixed_array (ctx->config, &data_size, sizeof (guint8));
+    if (!data || !data_size) {
+        g_dbus_method_invocation_return_error (ctx->invocation,
+                                               MM_CORE_ERROR,
+                                               MM_CORE_ERROR_UNSUPPORTED,
+                                               "Cannot disable facility locks: "
+                                               "invalid parameters");
+        handle_set_lock_configuration_context_free (ctx);
+        return;
+    }
+
+    MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->set_lock_configuration (
+        MM_IFACE_MODEM_3GPP (self),
+        data_size, data,
+        (GAsyncReadyCallback)handle_set_lock_configuration_ready,
+        ctx);
+}
+
+static gboolean
+handle_set_lock_configuration (MmGdbusModem3gpp      *skeleton,
+                               GDBusMethodInvocation *invocation,
+                               GVariant              *configuration,
+                               MMIfaceModem3gpp      *self)
+{
+    HandleSetLockConfigurationContext *ctx;
+
+    ctx = g_new0 (HandleSetLockConfigurationContext, 1);
+    ctx->skeleton   = g_object_ref (skeleton);
+    ctx->invocation = g_object_ref (invocation);
+    ctx->self       = g_object_ref (self);
+    ctx->config     = g_variant_ref (configuration);
+
+    mm_base_modem_authorize (MM_BASE_MODEM (self),
+                             invocation,
+                             MM_AUTHORIZATION_DEVICE_CONTROL,
+                             (GAsyncReadyCallback)set_lock_configuration_auth_ready,
+                             ctx);
+    return TRUE;
+}
+
+/*****************************************************************************/
 /* Set Packet Service State */
 
 typedef struct {
@@ -3397,6 +3522,12 @@ interface_initialization_step (GTask *task)
         g_signal_connect (ctx->skeleton,
                           "handle-disable-facility-lock",
                           G_CALLBACK (handle_disable_facility_lock),
+                          self);
+
+        /* Always connect the signal to configure locks */
+        g_signal_connect (ctx->skeleton,
+                          "handle-set-lock-configuration",
+                          G_CALLBACK (handle_set_lock_configuration),
                           self);
 
         /* Finally, export the new interface */
