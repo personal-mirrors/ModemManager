@@ -230,6 +230,26 @@
     </method>
 
     <!--
+        SetCarrierLock:
+        @data: A bytearray with signed lock configuration.
+
+        Sends configuration of facility locks to modem.
+
+        <variablelist>
+        <varlistentry><term>"config"</term>
+          <listitem>
+            <para>
+              Alphanumeric string with locks configuration.
+            </para>
+          </listitem>
+        </varlistentry>
+        </variablelist>
+    -->
+    <method name="SetCarrierLock">
+        <arg name="data" type="ay" direction="in" />
+    </method>
+
+    <!--
         SetPacketServiceState:
         @state: a <link linkend="MMModem3gppPacketServiceState">MMModem3gppPacketServiceState</link>.
 

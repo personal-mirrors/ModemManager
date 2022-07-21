@@ -256,6 +256,16 @@ struct _MMIfaceModem3gpp {
                                                GAsyncResult      *res,
                                                GError           **error);
 
+    /* Configure modem personalization */
+    void     (* set_carrier_lock) (MMIfaceModem3gpp         *self,
+                                   const gsize               config_size,
+                                   const guint8             *config_ptr,
+                                   GAsyncReadyCallback       callback,
+                                   gpointer                  user_data);
+    gboolean (* set_carrier_lock_finish) (MMIfaceModem3gpp  *self,
+                                          GAsyncResult      *res,
+                                          GError           **error);
+
     /* Set Packet service */
     void     (*set_packet_service_state)        (MMIfaceModem3gpp              *self,
                                                  MMModem3gppPacketServiceState  state,
