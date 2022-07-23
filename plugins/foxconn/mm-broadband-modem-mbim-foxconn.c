@@ -96,6 +96,21 @@ needs_qdu_and_mcfg_apps_version (MMIfaceModemFirmware *self)
     return (vendor_id == 0x105b || (vendor_id == 0x0489 && (product_id  == 0xe0da || product_id == 0xe0db)));
 }
 
+static gboolean
+needs_fastboot_and_qmi_pdc_mcfg_apps_version (MMIfaceModemFirmware *self)
+{
+    guint vendor_id;
+    guint product_id;
+
+    /* T77W968(0x413c:0x81d7 ; 0x413c:0x81e0 ; 0x413c:0x81e4 ; 0x413c:0x81e6): supports FASTBOOT and QMI PDC, 
+    and requires MCFG+APPS version.
+     * else support FASTBOOT and QMI PDC, and require only MCFG version.
+     */
+    vendor_id = mm_base_modem_get_vendor_id (MM_BASE_MODEM (self));
+    product_id = mm_base_modem_get_product_id (MM_BASE_MODEM (self));
+    return (vendor_id == 0x413c && (product_id == 0x81d7 || product_id == 0x81e0 || product_id == 0x81e4 || product_id == 0x81e6));
+}
+
 static MMFirmwareUpdateSettings *
 create_update_settings (MMIfaceModemFirmware *self,
                         const gchar          *version_str)
@@ -208,11 +223,12 @@ firmware_load_update_settings (MMIfaceModemFirmware *self,
         g_autoptr(QmiMessageDmsFoxconnGetFirmwareVersionInput) input = NULL;
 
         input = qmi_message_dms_foxconn_get_firmware_version_input_new ();
-        qmi_message_dms_foxconn_get_firmware_version_input_set_version_type (input,
-                                                                             (needs_qdu_and_mcfg_apps_version (self) ?
-                                                                              QMI_DMS_FOXCONN_FIRMWARE_VERSION_TYPE_FIRMWARE_MCFG_APPS:
-                                                                              QMI_DMS_FOXCONN_FIRMWARE_VERSION_TYPE_FIRMWARE_MCFG),
-                                                                             NULL);
+            qmi_message_dms_foxconn_get_firmware_version_input_set_version_type (input,
+                                                                                 ((needs_qdu_and_mcfg_apps_version (self) 
+                                                                                  | needs_fastboot_and_qmi_pdc_mcfg_apps_version (self)) ?
+                                                                                  QMI_DMS_FOXCONN_FIRMWARE_VERSION_TYPE_FIRMWARE_MCFG_APPS:
+                                                                                  QMI_DMS_FOXCONN_FIRMWARE_VERSION_TYPE_FIRMWARE_MCFG),
+                                                                                 NULL);
         qmi_client_dms_foxconn_get_firmware_version (QMI_CLIENT_DMS (dms_client),
                                                      input,
                                                      10,
