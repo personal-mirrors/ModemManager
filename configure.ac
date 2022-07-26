@@ -252,6 +252,21 @@ case $with_udev in
 esac
 
 dnl-----------------------------------------------------------------------------
+dnl build with tests (enabled by default)
+dnl
+
+AC_ARG_WITH(tests, AS_HELP_STRING([--without-tests], [Build without testcases]), [], [with_tests=yes])
+AM_CONDITIONAL(WITH_TESTS, test "x$with_tests" = "xyes")
+case $with_tests in
+    yes)
+        AC_DEFINE(WITH_TESTS, 1, [Define if you want to build all testcases])
+        ;;
+    *)
+        with_tests=no
+        ;;
+esac
+
+dnl-----------------------------------------------------------------------------
 dnl Suspend/resume support
 dnl
 
@@ -631,6 +646,7 @@ examples/sms-python/Makefile
 examples/network-scan-python/Makefile
 examples/sms-c/Makefile
 ])
+
 AC_OUTPUT
 
 echo "
@@ -645,6 +661,7 @@ echo "
       warn ldflags:            ${WARN_LDFLAGS}
       maintainer mode:         ${USE_MAINTAINER_MODE}
       release:                 ${ax_is_release}
+      tests:                   ${with_tests}
 
     System paths:
       prefix:                  ${prefix}
