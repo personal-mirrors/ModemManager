@@ -13,6 +13,7 @@
  * Copyright (C) 2009 Novell, Inc.
  * Copyright (C) 2009 - 2011 Red Hat, Inc.
  * Copyright (C) 2011 Google, Inc.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
 #include <ModemManager.h>
@@ -217,6 +218,7 @@ typedef enum {
     CONNECTION_STEP_WAIT_FOR_ENABLED,
     CONNECTION_STEP_WAIT_AFTER_ENABLED,
     CONNECTION_STEP_REGISTER,
+    CONNECTION_STEP_PACKET_SERVICE_ATTACH,
     CONNECTION_STEP_BEARER,
     CONNECTION_STEP_CONNECT,
     CONNECTION_STEP_LAST
@@ -310,6 +312,24 @@ create_bearer_ready (MMIfaceModem *self,
     }
 
     /* Bearer available! */
+    ctx->step++;
+    connection_step (ctx);
+}
+
+static void
+wait_for_packet_service_state_ready (MMIfaceModem3gpp  *self,
+                                     GAsyncResult      *res,
+                                     ConnectionContext *ctx)
+{
+    GError *error = NULL;
+
+    if (!mm_iface_modem_3gpp_wait_for_packet_service_state_finish (self, res, &error)) {
+        g_dbus_method_invocation_take_error (ctx->invocation, error);
+        connection_context_free (ctx);
+        return;
+    }
+
+    /* Packet service attached now! */
     ctx->step++;
     connection_step (ctx);
 }
@@ -598,6 +618,20 @@ connection_step (ConnectionContext *ctx)
 
         /* If not 3GPP and not CDMA, this will possibly be a POTS modem,
          * which won't require any specific registration anywhere. */
+        ctx->step++;
+        /* fall through */
+
+    case CONNECTION_STEP_PACKET_SERVICE_ATTACH:
+        mm_obj_info (ctx->self, "simple connect state (%d/%d): wait to get packet service state attached",
+                     ctx->step, CONNECTION_STEP_LAST);
+        if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (ctx->self))) {
+            mm_iface_modem_3gpp_wait_for_packet_service_state (MM_IFACE_MODEM_3GPP (ctx->self),
+                                                               MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED,
+                                                               (GAsyncReadyCallback)wait_for_packet_service_state_ready,
+                                                               ctx);
+            return;
+        }
+        /* If not 3GPP, just go on */
         ctx->step++;
         /* fall through */
 

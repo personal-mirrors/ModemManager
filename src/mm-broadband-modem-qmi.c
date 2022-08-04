@@ -119,6 +119,7 @@ struct _MMBroadbandModemQmiPrivate {
     gboolean unsolicited_registration_events_setup;
     guint serving_system_indication_id;
     guint system_info_indication_id;
+    guint system_status_indication_id;
     guint network_reject_indication_id;
 
     /* CDMA activation helpers */
@@ -169,6 +170,12 @@ struct _MMBroadbandModemQmiPrivate {
     gboolean profile_manager_unsolicited_events_enabled;
     gboolean profile_manager_unsolicited_events_setup;
     guint refresh_indication_id;
+
+    /* PS registration helpers when using NAS System Info and DSD
+     * (not applicable when using NAS Serving System) */
+    gboolean dsd_supported;
+    gboolean dsd_data_rat_available;
+    MMModem3gppRegistrationState system_info_ps_registration_state;
 };
 
 /*****************************************************************************/
@@ -3816,6 +3823,33 @@ process_nr5g_info (MMBroadbandModemQmi *self,
 }
 
 static void
+consolidated_update_ps_registration_state (MMBroadbandModemQmi *self,
+                                           gboolean             is_eps,
+                                           gboolean             is_5gs)
+{
+    MMModem3gppRegistrationState state_ps;
+
+    state_ps = self->priv->system_info_ps_registration_state;
+
+    /* If DSD supported but data RAT not set, no transition to HOME/ROAMING, force IDLE */
+    if ((state_ps == MM_MODEM_3GPP_REGISTRATION_STATE_HOME || state_ps == MM_MODEM_3GPP_REGISTRATION_STATE_ROAMING)) {
+        if (self->priv->dsd_supported && !self->priv->dsd_data_rat_available) {
+            mm_obj_dbg (self, "fallback PS registration state to idle: DSD data RAT unavailable");
+            state_ps  = MM_MODEM_3GPP_REGISTRATION_STATE_IDLE;
+        } else if (!self->priv->dsd_supported)
+            mm_obj_dbg (self, "updating PS registration state: DSD unsupported");
+        else if (self->priv->dsd_data_rat_available)
+            mm_obj_dbg (self, "updating PS registration state: DSD data RAT available");
+        else
+            g_assert_not_reached ();
+    }
+
+    mm_iface_modem_3gpp_update_ps_registration_state  (MM_IFACE_MODEM_3GPP (self), state_ps);
+    mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self), is_eps ? state_ps : MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
+    mm_iface_modem_3gpp_update_5gs_registration_state (MM_IFACE_MODEM_3GPP (self), is_5gs ? state_ps : MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
+}
+
+static void
 common_process_system_info_3gpp (MMBroadbandModemQmi *self,
                                  QmiMessageNasGetSystemInfoOutput *response_output,
                                  QmiIndicationNasSystemInfoOutput *indication_output)
@@ -3883,15 +3917,126 @@ common_process_system_info_3gpp (MMBroadbandModemQmi *self,
 
     /* Report new registration states */
     mm_iface_modem_3gpp_update_cs_registration_state (MM_IFACE_MODEM_3GPP (self), cs_registration_state);
-    mm_iface_modem_3gpp_update_ps_registration_state (MM_IFACE_MODEM_3GPP (self), ps_registration_state);
-    mm_iface_modem_3gpp_update_eps_registration_state (MM_IFACE_MODEM_3GPP (self),
-                                                       has_lte_info ?
-                                                       ps_registration_state : MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
-    mm_iface_modem_3gpp_update_5gs_registration_state (MM_IFACE_MODEM_3GPP (self),
-                                                       has_nr5g_info ?
-                                                       ps_registration_state : MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
+
+    /* Store PS system reg state and update PS/EPS/5GS states accordingly */
+    self->priv->system_info_ps_registration_state = ps_registration_state;
+    consolidated_update_ps_registration_state (self, has_lte_info, has_nr5g_info);
+
     mm_iface_modem_3gpp_update_access_technologies (MM_IFACE_MODEM_3GPP (self), act);
     mm_iface_modem_3gpp_update_location (MM_IFACE_MODEM_3GPP (self), lac, tac, cid);
+}
+
+static void
+common_process_system_status_3gpp (MMBroadbandModemQmi *self,
+                                   QmiMessageDsdGetSystemStatusOutput *response_output,
+                                   QmiIndicationDsdSystemStatusOutput *indication_output)
+{
+    GArray   *available_systems = NULL;
+    gboolean  data_rat_available = FALSE;
+    gboolean  is_lte = FALSE;
+    gboolean  is_nr5g = FALSE;
+
+    if (response_output) {
+        qmi_message_dsd_get_system_status_output_get_available_systems (response_output, &available_systems, NULL);
+
+        if (available_systems && available_systems->len) {
+            QmiMessageDsdGetSystemStatusOutputAvailableSystemsSystem *system;
+
+            system = &g_array_index (available_systems, QmiMessageDsdGetSystemStatusOutputAvailableSystemsSystem, 0);
+
+            if (system->technology == QMI_DSD_DATA_SYSTEM_NETWORK_TYPE_3GPP) {
+                switch (system->rat) {
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_WCDMA:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_TDSCDMA:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_GERAN:
+                    data_rat_available = TRUE;
+                    break;
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_LTE:
+                    data_rat_available = TRUE;
+                    is_lte = TRUE;
+                    break;
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_5G:
+                    data_rat_available = TRUE;
+                    is_nr5g = TRUE;
+                    break;
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_WLAN:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP2_1X:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP2_HRPD:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP2_EHRPD:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP2_WLAN:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_UNKNOWN:
+                default:
+                    break;
+                }
+            }
+        }
+    }  else {
+        qmi_indication_dsd_system_status_output_get_available_systems (indication_output, &available_systems, NULL);
+
+        if (available_systems && available_systems->len) {
+            QmiIndicationDsdSystemStatusOutputAvailableSystemsSystem *system;
+
+            system = &g_array_index (available_systems, QmiIndicationDsdSystemStatusOutputAvailableSystemsSystem, 0);
+
+            if (system->technology == QMI_DSD_DATA_SYSTEM_NETWORK_TYPE_3GPP) {
+                switch (system->rat) {
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_WCDMA:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_TDSCDMA:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_GERAN:
+                    data_rat_available = TRUE;
+                    break;
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_LTE:
+                    data_rat_available = TRUE;
+                    is_lte = TRUE;
+                    break;
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_5G:
+                    data_rat_available = TRUE;
+                    is_nr5g = TRUE;
+                    break;
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP_WLAN:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP2_1X:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP2_HRPD:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP2_EHRPD:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_3GPP2_WLAN:
+                case QMI_DSD_RADIO_ACCESS_TECHNOLOGY_UNKNOWN:
+                default:
+                    break;
+                }
+            }
+        }
+    }
+
+    /* Store DSD data RAT availability and update PS/EPS/5GS states accordingly */
+    self->priv->dsd_data_rat_available = data_rat_available;
+    consolidated_update_ps_registration_state (self, is_lte, is_nr5g);
+}
+
+static void
+get_system_status_3gpp_ready (QmiClientDsd *client,
+                              GAsyncResult *res,
+                              GTask *task)
+{
+    MMBroadbandModemQmi *self;
+    QmiMessageDsdGetSystemStatusOutput *output;
+    GError *error = NULL;
+
+    self = g_task_get_source_object (task);
+
+    output = qmi_client_dsd_get_system_status_finish (client, res, &error);
+    if (!output || !qmi_message_dsd_get_system_status_output_get_result (output, &error)) {
+        /* If this command fails, flag that dsd is not unsupported */
+        self->priv->dsd_supported = FALSE;
+        g_error_free (error);
+    }
+
+    if (output) {
+        common_process_system_status_3gpp (self, output, NULL);
+        qmi_message_dsd_get_system_status_output_unref (output);
+    }
+
+    /* Just ignore errors for now */
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
 }
 
 static void
@@ -3902,6 +4047,7 @@ get_system_info_ready (QmiClientNas *client,
     MMBroadbandModemQmi *self;
     QmiMessageNasGetSystemInfoOutput *output;
     GError *error = NULL;
+    QmiClient *client_dsd;
 
     self = g_task_get_source_object (task);
 
@@ -3945,10 +4091,30 @@ get_system_info_ready (QmiClientNas *client,
     }
 
     common_process_system_info_3gpp (self, output, NULL);
+    qmi_message_nas_get_system_info_output_unref (output);
+
+    if (self->priv->dsd_supported) {
+        client_dsd = mm_shared_qmi_peek_client (MM_SHARED_QMI (self),
+                                                QMI_SERVICE_DSD,
+                                                MM_PORT_QMI_FLAG_DEFAULT,
+                                                &error);
+        if (!client_dsd) {
+            g_task_return_error (task, error);
+            g_object_unref (task);
+            return;
+        }
+
+        qmi_client_dsd_get_system_status (QMI_CLIENT_DSD (client_dsd),
+                                          NULL,
+                                          10,
+                                          NULL,
+                                          (GAsyncReadyCallback)get_system_status_3gpp_ready,
+                                          task);
+        return;
+    }
 
     g_task_return_boolean (task, TRUE);
     g_object_unref (task);
-    qmi_message_nas_get_system_info_output_unref (output);
 }
 
 static void
@@ -4026,6 +4192,9 @@ static void
 common_enable_disable_unsolicited_registration_events_serving_system (GTask *task);
 
 static void
+common_enable_disable_unsolicited_registration_events_system_status (GTask *task);
+
+static void
 ri_serving_system_or_system_info_ready (QmiClientNas *client,
                                         GAsyncResult *res,
                                         GTask        *task)
@@ -4053,8 +4222,42 @@ ri_serving_system_or_system_info_ready (QmiClientNas *client,
             mm_obj_dbg (self, "couldn't register serving system indications: '%s', assuming always enabled", error->message);
     }
 
-    if (!ctx->system_info_checked)
+    if (!ctx->system_info_checked) {
         ctx->system_info_checked = TRUE;
+        /* registered system info indications. now try to register for system status indications */
+        if (self->priv->dsd_supported) {
+            common_enable_disable_unsolicited_registration_events_system_status (task);
+            return;
+        }
+    }
+
+    /* Just ignore errors for now */
+    self->priv->unsolicited_registration_events_enabled = ctx->enable;
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+ri_system_status_ready (QmiClientDsd *client,
+                        GAsyncResult *res,
+                        GTask        *task)
+{
+    MMBroadbandModemQmi                              *self;
+    UnsolicitedRegistrationEventsContext             *ctx;
+    g_autoptr(QmiMessageDsdSystemStatusChangeOutput)  output = NULL;
+    g_autoptr(GError)                                 error = NULL;
+
+    self = g_task_get_source_object (task);
+    ctx  = g_task_get_task_data     (task);
+
+    output = qmi_client_dsd_system_status_change_finish (client, res, &error);
+    if (!output || !qmi_message_dsd_system_status_change_output_get_result (output, &error)) {
+        /* If this command fails, flag that dsd is not unsupported */
+        self->priv->dsd_supported = FALSE;
+        if (ctx->enable)
+            mm_obj_dbg (self, "couldn't register system status indications: '%s', assuming always enabled", error->message);
+        g_clear_error (&error);
+    }
 
     /* Just ignore errors for now */
     self->priv->unsolicited_registration_events_enabled = ctx->enable;
@@ -4078,6 +4281,40 @@ common_enable_disable_unsolicited_registration_events_serving_system (GTask *tas
         5,
         NULL,
         (GAsyncReadyCallback)ri_serving_system_or_system_info_ready,
+        task);
+}
+
+static void
+common_enable_disable_unsolicited_registration_events_system_status (GTask *task)
+{
+    MMBroadbandModemQmi                             *self;
+    QmiClient                                       *client;
+    UnsolicitedRegistrationEventsContext            *ctx;
+    g_autoptr(QmiMessageDsdSystemStatusChangeInput)  input = NULL;
+    GError                                          *error = NULL;
+
+    self = g_task_get_source_object (task);
+
+    client = mm_shared_qmi_peek_client (MM_SHARED_QMI (self),
+                                        QMI_SERVICE_DSD,
+                                        MM_PORT_QMI_FLAG_DEFAULT,
+                                        &error);
+    if (!client) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    ctx = g_task_get_task_data (task);
+    input = qmi_message_dsd_system_status_change_input_new ();
+    qmi_message_dsd_system_status_change_input_set_register_indication (input, ctx->enable, NULL);
+
+    qmi_client_dsd_system_status_change (
+        QMI_CLIENT_DSD (client),
+        input,
+        5,
+        NULL,
+        (GAsyncReadyCallback)ri_system_status_ready,
         task);
 }
 
@@ -5117,6 +5354,16 @@ system_info_indication_cb (QmiClientNas *client,
 }
 
 static void
+system_status_indication_cb (QmiClientDsd *client,
+                             QmiIndicationDsdSystemStatusOutput *output,
+                             MMBroadbandModemQmi *self)
+{
+    if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (self)))
+        common_process_system_status_3gpp (self, NULL, output);
+}
+
+
+static void
 serving_system_indication_cb (QmiClientNas *client,
                               QmiIndicationNasServingSystemOutput *output,
                               MMBroadbandModemQmi *self)
@@ -5162,12 +5409,18 @@ common_setup_cleanup_unsolicited_registration_events (MMBroadbandModemQmi *self,
                                                       gpointer user_data)
 {
     GTask *task;
-    QmiClient *client = NULL;
+    QmiClient *client_nas = NULL;
+    QmiClient *client_dsd = NULL;
 
     if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
-                                      QMI_SERVICE_NAS, &client,
+                                      QMI_SERVICE_NAS, &client_nas,
                                       callback, user_data))
         return;
+
+    client_dsd = mm_shared_qmi_peek_client (MM_SHARED_QMI (self),
+                                            QMI_SERVICE_DSD,
+                                            MM_PORT_QMI_FLAG_DEFAULT,
+                                            NULL);
 
     task = g_task_new (self, NULL, callback, user_data);
 
@@ -5186,26 +5439,26 @@ common_setup_cleanup_unsolicited_registration_events (MMBroadbandModemQmi *self,
     if (enable) {
         g_assert (self->priv->system_info_indication_id == 0);
         self->priv->system_info_indication_id =
-            g_signal_connect (client,
+            g_signal_connect (client_nas,
                               "system-info",
                               G_CALLBACK (system_info_indication_cb),
                               self);
     } else {
         g_assert (self->priv->system_info_indication_id != 0);
-        g_signal_handler_disconnect (client, self->priv->system_info_indication_id);
+        g_signal_handler_disconnect (client_nas, self->priv->system_info_indication_id);
         self->priv->system_info_indication_id = 0;
     }
     /* Connect/Disconnect "Serving System" indications */
     if (enable) {
         g_assert (self->priv->serving_system_indication_id == 0);
         self->priv->serving_system_indication_id =
-            g_signal_connect (client,
+            g_signal_connect (client_nas,
                               "serving-system",
                               G_CALLBACK (serving_system_indication_cb),
                               self);
     } else {
         g_assert (self->priv->serving_system_indication_id != 0);
-        g_signal_handler_disconnect (client, self->priv->serving_system_indication_id);
+        g_signal_handler_disconnect (client_nas, self->priv->serving_system_indication_id);
         self->priv->serving_system_indication_id = 0;
     }
 
@@ -5213,14 +5466,31 @@ common_setup_cleanup_unsolicited_registration_events (MMBroadbandModemQmi *self,
     if (enable) {
         g_assert (self->priv->network_reject_indication_id == 0);
         self->priv->network_reject_indication_id =
-            g_signal_connect (client,
+            g_signal_connect (client_nas,
                               "network-reject",
                               G_CALLBACK (network_reject_indication_cb),
                               self);
     } else {
         g_assert (self->priv->network_reject_indication_id != 0);
-        g_signal_handler_disconnect (client, self->priv->network_reject_indication_id);
+        g_signal_handler_disconnect (client_nas, self->priv->network_reject_indication_id);
         self->priv->network_reject_indication_id = 0;
+    }
+
+    /* Connect/Disconnect "System Status" indications */
+    if (client_dsd) {
+        self->priv->dsd_supported = TRUE;
+        if (enable) {
+            g_assert (self->priv->system_status_indication_id == 0);
+            self->priv->system_status_indication_id =
+                g_signal_connect (client_dsd,
+                                  "system-status",
+                                  G_CALLBACK (system_status_indication_cb),
+                                  self);
+        } else {
+            g_assert (self->priv->system_status_indication_id != 0);
+            g_signal_handler_disconnect (client_dsd, self->priv->system_status_indication_id);
+            self->priv->system_status_indication_id = 0;
+        }
     }
 
     g_task_return_boolean (task, TRUE);
@@ -12344,6 +12614,7 @@ static const QmiService qmi_services[] = {
     QMI_SERVICE_LOC,
     QMI_SERVICE_PDC,
     QMI_SERVICE_VOICE,
+    QMI_SERVICE_DSD,
 };
 
 typedef struct {
@@ -12679,6 +12950,7 @@ mm_broadband_modem_qmi_init (MMBroadbandModemQmi *self)
     self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self,
                                               MM_TYPE_BROADBAND_MODEM_QMI,
                                               MMBroadbandModemQmiPrivate);
+    self->priv->system_info_ps_registration_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
 }
 
 static void
@@ -12864,6 +13136,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->set_initial_eps_bearer_settings_finish = modem_3gpp_set_initial_eps_bearer_settings_finish;
     iface->disable_facility_lock = modem_3gpp_disable_facility_lock;
     iface->disable_facility_lock_finish = modem_3gpp_disable_facility_lock_finish;
+    iface->set_packet_service_state = mm_shared_qmi_set_packet_service_state;
+    iface->set_packet_service_state_finish = mm_shared_qmi_set_packet_service_state_finish;
 }
 
 static void
