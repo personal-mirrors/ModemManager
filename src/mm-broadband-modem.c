@@ -14,7 +14,7 @@
  * Copyright (C) 2009 - 2012 Red Hat, Inc.
  * Copyright (C) 2015 Marco Bascetta <marco.bascetta@sadel.it>
  * Copyright (C) 2019 Purism SPC
- * Copyright (C) 2011 - 2021 Google, Inc.
+ * Copyright (C) 2011 - 2022 Google, Inc.
  * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
@@ -142,6 +142,17 @@ enum {
 };
 
 static GParamSpec *properties[PROP_LAST];
+
+#if defined WITH_SUSPEND_RESUME
+
+enum {
+    SIGNAL_SYNC_NEEDED,
+    SIGNAL_LAST
+};
+
+static guint signals[SIGNAL_LAST];
+
+#endif
 
 /* When CIND is supported, invalid indicators are marked with this value */
 #define CIND_INDICATOR_INVALID 255
@@ -4176,8 +4187,6 @@ complete_sim_swap_check (GTask       *task,
     const gchar      *cached;
     const gchar      *str;
 
-    g_assert (current);
-
     self = MM_BROADBAND_MODEM (g_task_get_source_object (task));
     ctx = g_task_get_task_data (task);
 
@@ -4194,7 +4203,7 @@ complete_sim_swap_check (GTask       *task,
 
     if (g_strcmp0 (current, cached) != 0) {
         mm_obj_info (self, "SIM %s has changed: %s -> %s",
-                     str, cached ? cached : "<none>", current);
+                     str, cached ? cached : "<none>", current ? current : "<none>");
         mm_iface_modem_process_sim_event (MM_IFACE_MODEM (self));
         ctx->step = SIM_SWAP_CHECK_STEP_LAST;
     } else {
@@ -4252,8 +4261,7 @@ load_sim_step_ready (MMBaseSim    *sim,
         }
 
         mm_obj_warn (self, "could not load SIM %s: %s", str, error->message);
-        ctx->step++;
-        sim_swap_check_step (task);
+        complete_sim_swap_check (task, NULL);
         return;
     }
 
@@ -12177,6 +12185,7 @@ enable (MMBaseModem *self,
 
 typedef enum {
     SYNCING_STEP_FIRST,
+    SYNCING_STEP_NOTIFY,
     SYNCING_STEP_IFACE_MODEM,
     SYNCING_STEP_IFACE_3GPP,
     SYNCING_STEP_IFACE_TIME,
@@ -12279,6 +12288,11 @@ syncing_step (GTask *task)
 
     switch (ctx->step) {
     case SYNCING_STEP_FIRST:
+        ctx->step++;
+        /* fall through */
+
+    case SYNCING_STEP_NOTIFY:
+        g_signal_emit (self, signals[SIGNAL_SYNC_NEEDED], 0);
         ctx->step++;
         /* fall through */
 
@@ -13936,4 +13950,15 @@ mm_broadband_modem_class_init (MMBroadbandModemClass *klass)
                               FALSE,
                               G_PARAM_READWRITE);
     g_object_class_install_property (object_class, PROP_INDICATORS_DISABLED, properties[PROP_INDICATORS_DISABLED]);
+
+#if defined WITH_SUSPEND_RESUME
+    signals[SIGNAL_SYNC_NEEDED] =
+        g_signal_new (MM_BROADBAND_MODEM_SIGNAL_SYNC_NEEDED,
+                      G_OBJECT_CLASS_TYPE (object_class),
+                      G_SIGNAL_RUN_FIRST,
+                      G_STRUCT_OFFSET (MMBroadbandModemClass, sync_needed),
+                      NULL, NULL,
+                      g_cclosure_marshal_generic,
+                      G_TYPE_NONE, 0);
+#endif
 }
