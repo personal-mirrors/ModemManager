@@ -78,14 +78,13 @@ signal_cb (GDBusProxy  *proxy,
            gpointer     data)
 {
     MMSleepMonitor *self = data;
-    gboolean is_about_to_suspend;
 
     if (proxy == self->pd_proxy) {
         if (strcmp (signalname, "SuspendImminent") == 0) {
-            mm_obj_info (self, "system suspend signal from powerd");
+            mm_obj_msg (self, "system suspend signal from powerd");
             g_signal_emit (self, signals[SLEEPING], 0);
         } else if (strcmp (signalname, "SuspendDone") == 0) {
-            mm_obj_info (self, "system resume signal from powerd");
+            mm_obj_msg (self, "system resume signal from powerd");
             g_signal_emit (self, signals[RESUMING], 0);
         }
     }
