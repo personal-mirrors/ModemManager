@@ -125,7 +125,7 @@ build-no-qmi-no-mbim:
     - make check
     - make install
 
-build-qmi-newest-commands:
+build-no-qmi-no-mbim-no-tests:
   stage: build
   extends:
   - .fdo.distribution-image@ubuntu
@@ -136,14 +136,74 @@ build-qmi-newest-commands:
     - tags
     - schedules
   script:
+    - NOCONFIGURE=1 ./autogen.sh
+    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --without-qmi --without-mbim --without-tests
+    - make
+    - make check
+    - make install
+
+build-no-suspend-resume:
+  stage: build
+  extends:
+  - .fdo.distribution-image@ubuntu
+  - .common_variables
+  only:
+    - merge_requests
+    - schedules
+  script:
+    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
+    - pushd libmbim
+    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false
+    - ninja -C build
+    - ninja -C build install
+    - popd
+    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
+    - pushd libqrtr-glib
+    - meson setup build --prefix=/usr -Dgtk_doc=false
+    - ninja -C build
+    - ninja -C build install
+    - popd
     - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
     - pushd libqmi
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false -Dmbim_qmux=false -Dqrtr=false -Dcollection=basic
+    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false -Dcollection=basic
     - ninja -C build
     - ninja -C build install
     - popd
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --without-mbim CFLAGS="-DWITH_NEWEST_QMI_COMMANDS"
+    - ./configure --prefix=/usr --disable-introspection --without-systemd-suspend-resume --without-powerd-suspend-resume
+    - make
+    - make check
+    - make install
+
+build-suspend-resume-powerd:
+  stage: build
+  extends:
+  - .fdo.distribution-image@ubuntu
+  - .common_variables
+  only:
+    - merge_requests
+    - schedules
+  script:
+    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
+    - pushd libmbim
+    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false
+    - ninja -C build
+    - ninja -C build install
+    - popd
+    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
+    - pushd libqrtr-glib
+    - meson setup build --prefix=/usr -Dgtk_doc=false
+    - ninja -C build
+    - ninja -C build install
+    - popd
+    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
+    - pushd libqmi
+    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false -Dcollection=basic
+    - ninja -C build
+    - ninja -C build install
+    - popd
+    - NOCONFIGURE=1 ./autogen.sh
+    - ./configure --prefix=/usr --disable-introspection --without-systemd-suspend-resume --with-powerd-suspend-resume=yes
     - make
     - make check
     - make install
@@ -212,7 +272,7 @@ build-default:
     - ninja -C build install
     - popd
     - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --enable-gtk-doc --enable-introspection --with-polkit=strict --with-suspend-resume=systemd --with-systemdsystemunitdir=/lib/systemd/system
+    - ./configure --prefix=/usr --enable-gtk-doc --enable-introspection --with-polkit=strict --with-systemd-suspend-resume --with-systemdsystemunitdir=/lib/systemd/system
     - make
     - make check
     - make install
@@ -270,20 +330,3 @@ build-meson-release:
     - ninja -C build test
     - ninja -C build install
     - ninja -C build uninstall
-
-build-no-qmi-no-mbim-no-tests:
-  stage: build
-  extends:
-  - .fdo.distribution-image@ubuntu
-  - .common_variables
-  only:
-    - main
-    - merge_requests
-    - tags
-    - schedules
-  script:
-    - NOCONFIGURE=1 ./autogen.sh
-    - ./configure --prefix=/usr --disable-gtk-doc --disable-introspection --without-qmi --without-mbim --without-tests
-    - make
-    - make check
-    - make install
