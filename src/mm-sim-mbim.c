@@ -273,6 +273,7 @@ preload_subscriber_info (MMSimMbim           *self,
     }
     self->priv->preload = TRUE;
 
+
 #if defined WITH_SUSPEND_RESUME
 
     /* If modem reports sync needed, we will reset the preloaded info */
