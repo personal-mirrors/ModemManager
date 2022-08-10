@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) 2011-2018 Aleksander Morgado <aleksander@aleksander.es>
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
 #include "config.h"
@@ -173,6 +174,7 @@ print_sim_info (MMSim *sim)
     mmcli_output_string       (MMC_F_SIM_PROPERTIES_EID,               mm_sim_get_eid (sim));
     mmcli_output_string       (MMC_F_SIM_PROPERTIES_OPERATOR_ID,       mm_sim_get_operator_identifier (sim));
     mmcli_output_string       (MMC_F_SIM_PROPERTIES_OPERATOR_NAME,     mm_sim_get_operator_name (sim));
+    mmcli_output_string       (MMC_F_SIM_PROPERTIES_GID,               mm_sim_get_gid (sim));
     mmcli_output_string_array (MMC_F_SIM_PROPERTIES_EMERGENCY_NUMBERS, (const gchar **) mm_sim_get_emergency_numbers (sim), FALSE);
     preferred_nets_list = mm_sim_get_preferred_networks (sim);
     mmcli_output_preferred_networks (preferred_nets_list);

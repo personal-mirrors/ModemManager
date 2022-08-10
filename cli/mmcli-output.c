@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) 2018 Aleksander Morgado <aleksander@aleksander.es>
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
 #include <stdio.h>
@@ -303,6 +304,7 @@ static FieldInfo field_infos[] = {
     [MMC_F_SIM_PROPERTIES_EID]                       = { "sim.properties.eid",                              "eid",                      MMC_S_SIM_PROPERTIES,             },
     [MMC_F_SIM_PROPERTIES_OPERATOR_ID]               = { "sim.properties.operator-code",                    "operator id",              MMC_S_SIM_PROPERTIES,             },
     [MMC_F_SIM_PROPERTIES_OPERATOR_NAME]             = { "sim.properties.operator-name",                    "operator name",            MMC_S_SIM_PROPERTIES,             },
+    [MMC_F_SIM_PROPERTIES_GID]                       = { "sim.properties.gid",                              "gid",                      MMC_S_SIM_PROPERTIES,             },
     [MMC_F_SIM_PROPERTIES_EMERGENCY_NUMBERS]         = { "sim.properties.emergency-numbers",                "emergency numbers",        MMC_S_SIM_PROPERTIES,             },
     [MMC_F_SIM_PROPERTIES_PREFERRED_NETWORKS]        = { "sim.properties.preferred-networks",               "preferred networks",       MMC_S_SIM_PROPERTIES,             },
     [MMC_F_SIM_PROPERTIES_SIM_TYPE]                  = { "sim.properties.sim-type",                         "type",                     MMC_S_SIM_PROPERTIES,             },

@@ -19,6 +19,7 @@
  *
  * Copyright (C) 2011 - 2012 Aleksander Morgado <aleksander@gnu.org>
  * Copyright (C) 2012 Google, Inc.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
 #ifndef _MM_SIM_H_
@@ -83,6 +84,9 @@ gchar       *mm_sim_dup_operator_identifier (MMSim *self);
 
 const gchar *mm_sim_get_operator_name       (MMSim *self);
 gchar       *mm_sim_dup_operator_name       (MMSim *self);
+
+const gchar *mm_sim_get_gid                 (MMSim *self);
+gchar       *mm_sim_dup_gid                 (MMSim *self);
 
 const gchar * const  *mm_sim_get_emergency_numbers (MMSim *self);
 gchar               **mm_sim_dup_emergency_numbers (MMSim *self);
