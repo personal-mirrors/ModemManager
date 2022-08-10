@@ -13,6 +13,7 @@
  * Copyright (C) 2008 - 2009 Novell, Inc.
  * Copyright (C) 2009 - 2011 Red Hat, Inc.
  * Copyright (C) 2011 Google, Inc.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
 #include <config.h>
@@ -2297,6 +2298,7 @@ mm_base_sim_new_initialized (MMBaseModem *modem,
                              const gchar *eid,
                              const gchar *operator_identifier,
                              const gchar *operator_name,
+                             const gchar *gid,
                              const GStrv  emergency_numbers)
 {
     MMBaseSim *sim;
@@ -2310,6 +2312,7 @@ mm_base_sim_new_initialized (MMBaseModem *modem,
                                      "eid",                   eid,
                                      "operator-identifier",   operator_identifier,
                                      "operator-name",         operator_name,
+                                     "gid",                   gid,
                                      "emergency-numbers",     emergency_numbers,
                                      NULL));
 
@@ -2331,6 +2334,7 @@ typedef enum {
     INITIALIZATION_STEP_IMSI,
     INITIALIZATION_STEP_OPERATOR_ID,
     INITIALIZATION_STEP_OPERATOR_NAME,
+    INITIALIZATION_STEP_GID,
     INITIALIZATION_STEP_EMERGENCY_NUMBERS,
     INITIALIZATION_STEP_PREFERRED_NETWORKS,
     INITIALIZATION_STEP_EID,
@@ -2477,6 +2481,7 @@ init_load_emergency_numbers_ready (MMBaseSim    *self,
 STR_REPLY_READY_FN (operator_name, "operator name")
 STR_REPLY_READY_FN (operator_identifier, "operator identifier")
 STR_REPLY_READY_FN (imsi, "IMSI")
+STR_REPLY_READY_FN (gid, "GID")
 
 static void
 init_load_sim_identifier_ready (MMBaseSim *self,
@@ -2666,6 +2671,24 @@ interface_initialization_step (GTask *task)
         ctx->step++;
         /* Fall through */
 
+    case INITIALIZATION_STEP_GID:
+        /* Don't load SIM GID if the SIM is known to be an eSIM without
+         * profiles; otherwise (if physical SIM, or if eSIM with profile, or if
+         * SIM type unknown) try to load it. */
+        if (IS_ESIM_WITHOUT_PROFILES (self))
+            mm_obj_dbg (self, "not loading GID in eSIM without profiles");
+        else if (mm_gdbus_sim_get_gid (MM_GDBUS_SIM (self)) == NULL &&
+                 MM_BASE_SIM_GET_CLASS (self)->load_gid &&
+                 MM_BASE_SIM_GET_CLASS (self)->load_gid_finish) {
+            MM_BASE_SIM_GET_CLASS (self)->load_gid (
+                self,
+                (GAsyncReadyCallback)init_load_gid_ready,
+                task);
+            return;
+        }
+        ctx->step++;
+        /* Fall through */
+
     case INITIALIZATION_STEP_EMERGENCY_NUMBERS:
         /* Don't load emergency numbers if the SIM is known to be an eSIM without
          * profiles; otherwise (if physical SIM, or if eSIM with profile, or if
@@ -2782,6 +2805,7 @@ initable_init_async (GAsyncInitable *initable,
     mm_gdbus_sim_set_eid (MM_GDBUS_SIM (initable), NULL);
     mm_gdbus_sim_set_operator_identifier (MM_GDBUS_SIM (initable), NULL);
     mm_gdbus_sim_set_operator_name (MM_GDBUS_SIM (initable), NULL);
+    mm_gdbus_sim_set_gid (MM_GDBUS_SIM (initable), NULL);
 
     common_init_async (initable, cancellable, callback, user_data);
 }

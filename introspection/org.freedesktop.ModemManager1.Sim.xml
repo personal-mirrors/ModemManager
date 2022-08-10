@@ -6,6 +6,7 @@
    Copyright (C) 2011-2013 Red Hat, Inc.
    Copyright (C) 2011-2013 Google, Inc.
    Copyright (C) 2011-2013 Lanedo GmbH
+   Copyright (c) 2022 Qualcomm Innovation Center, Inc.
 -->
 
 <node name="/" xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
@@ -156,6 +157,15 @@
         Since: 1.0
     -->
     <property name="OperatorName" type="s" access="read" />
+
+    <!--
+        Gid:
+
+        The GID of the SIM card, if any.
+
+        Since: 1.20
+    -->
+    <property name="Gid" type="s" access="read" />
 
     <!--
         EmergencyNumbers:
