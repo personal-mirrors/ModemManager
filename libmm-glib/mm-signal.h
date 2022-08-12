@@ -83,6 +83,7 @@ gdouble  mm_signal_get_rsrp       (MMSignal *self);
 gdouble  mm_signal_get_snr        (MMSignal *self);
 gdouble  mm_signal_get_error_rate (MMSignal *self);
 
+gchar   *mm_signal_get_string (MMSignal *self);
 /*****************************************************************************/
 /* ModemManager/libmm-glib/mmcli specific methods */
 

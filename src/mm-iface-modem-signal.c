@@ -43,6 +43,8 @@ typedef struct {
     /* threshold-based reporting */
     guint    rssi_threshold;
     gboolean error_rate_threshold;
+
+    GDateTime *last_signal_quality_print;
 } Private;
 
 static void
@@ -50,6 +52,8 @@ private_free (Private *priv)
 {
     if (priv->timeout_source)
         g_source_remove (priv->timeout_source);
+    if (priv->last_signal_quality_print)
+        g_free (priv->last_signal_quality_print);
     g_slice_free (Private, priv);
 }
 
@@ -78,6 +82,20 @@ mm_iface_modem_signal_bind_simple_status (MMIfaceModemSignal *self,
 {
 }
 
+#define SIGNAL_QUALITY_PRINT_RATE_USECS 300000000
+
+/*****************************************************************************/
+
+static void
+log_signal_quality (MMIfaceModemSignal *self,
+                    MMSignal           *mm_signal,
+                    const gchar        *rat)
+{
+    g_autofree gchar *printable;
+    printable = mm_signal_get_string (mm_signal);
+    mm_obj_info (self, "%s: %s", rat, printable);
+};
+
 /*****************************************************************************/
 
 static void
@@ -96,6 +114,20 @@ internal_signal_update (MMIfaceModemSignal *self,
     g_autoptr(GVariant)                   dict_lte = NULL;
     g_autoptr(GVariant)                   dict_nr5g = NULL;
     g_autoptr(MmGdbusModemSignalSkeleton) skeleton = NULL;
+    Private                              *priv = NULL;
+    g_autoptr(GDateTime)                  current_time = NULL;
+    gboolean                              print_signal_quality = FALSE;
+
+    priv = get_private (self);
+    current_time = g_date_time_new_now_local ();
+
+    if (!priv->last_signal_quality_print) {
+        print_signal_quality = TRUE;
+    }
+    if (g_date_time_difference (
+        current_time, priv->last_signal_quality_print) > SIGNAL_QUALITY_PRINT_RATE_USECS) {
+        print_signal_quality = TRUE;
+    }
 
     g_object_get (self,
                   MM_IFACE_MODEM_SIGNAL_DBUS_SKELETON, &skeleton,
@@ -119,6 +151,9 @@ internal_signal_update (MMIfaceModemSignal *self,
 
     if (gsm) {
         mm_obj_dbg (self, "gsm extended signal information updated");
+        if (print_signal_quality) {
+            log_signal_quality (self, gsm, "gsm");
+        }
         dict_gsm = mm_signal_get_dictionary (gsm);
     }
     mm_gdbus_modem_signal_set_gsm (MM_GDBUS_MODEM_SIGNAL (skeleton), dict_gsm);
@@ -126,20 +161,35 @@ internal_signal_update (MMIfaceModemSignal *self,
     if (umts) {
         mm_obj_dbg (self, "umts extended signal information updated");
         dict_umts = mm_signal_get_dictionary (umts);
+        if (print_signal_quality) {
+            log_signal_quality (self, umts, "umts");
+        }
     }
     mm_gdbus_modem_signal_set_umts (MM_GDBUS_MODEM_SIGNAL (skeleton), dict_umts);
 
     if (lte) {
         mm_obj_dbg (self, "lte extended signal information updated");
+        if (print_signal_quality) {
+            log_signal_quality (self, lte, "lte");
+        }
         dict_lte = mm_signal_get_dictionary (lte);
     }
     mm_gdbus_modem_signal_set_lte (MM_GDBUS_MODEM_SIGNAL (skeleton), dict_lte);
 
     if (nr5g) {
         mm_obj_dbg (self, "5gnr extended signal information updated");
+        if (print_signal_quality) {
+            log_signal_quality (self, nr5g, "5gnr");
+        }
         dict_nr5g = mm_signal_get_dictionary (nr5g);
     }
     mm_gdbus_modem_signal_set_nr5g (MM_GDBUS_MODEM_SIGNAL (skeleton), dict_nr5g);
+
+    if (print_signal_quality) {
+        if (priv->last_signal_quality_print)
+            g_free (priv->last_signal_quality_print);
+        priv->last_signal_quality_print = g_date_time_new_now_local ();
+    }
 
     /* Flush right away */
     g_dbus_interface_skeleton_flush (G_DBUS_INTERFACE_SKELETON (skeleton));
@@ -232,7 +282,7 @@ polling_restart (MMIfaceModemSignal *self)
     priv = get_private (self);
     polling_setup = (priv->enabled && priv->rate);
 
-    mm_obj_dbg (self, "%s extended signal information polling: interface %s, rate %u seconds",
+    mm_obj_info (self, "%s extended signal information polling: interface %s, rate %u seconds",
                 polling_setup ? "setting up" : "cleaning up",
                 priv->enabled ? "enabled" : "disabled",
                 priv->rate);
