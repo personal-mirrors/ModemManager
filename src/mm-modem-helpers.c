@@ -1520,6 +1520,28 @@ mm_3gpp_profile_list_free (GList *profile_list)
     g_list_free_full (profile_list, g_object_unref);
 }
 
+void
+print_mm_3gpp_profiles (GList *profiles, GObject *log_object)
+{
+    GList         *profile_iterator = NULL;
+    MM3gppProfile *profile = NULL;
+
+    for (profile_iterator = profiles; profile_iterator;
+         profile_iterator = profile_iterator->next) {
+        g_autofree gchar *apn_type_str = NULL;
+        g_autofree gchar *ip_type_str = NULL;
+
+        apn_type_str = mm_bearer_apn_type_build_string_from_mask (mm_3gpp_profile_get_apn_type (profile));
+        ip_type_str =  mm_bearer_ip_family_build_string_from_mask (mm_3gpp_profile_get_ip_type (profile));
+        profile = profile_iterator->data;
+        mm_obj_info (log_object,
+                     "profile: Apn: %s, ApnType: %s, IpType: %s",
+                     mm_3gpp_profile_get_apn (profile),
+                     apn_type_str,
+                     ip_type_str);
+    }
+}
+
 MM3gppProfile *
 mm_3gpp_profile_list_find_by_profile_id (GList   *profile_list,
                                          gint     profile_id,

@@ -173,9 +173,10 @@ subscriber_ready_status_ready (MbimDevice   *device,
                                GAsyncResult *res,
                                GTask        *task)
 {
-    MMSimMbim              *self;
-    g_autoptr(MbimMessage)  response = NULL;
-    g_autofree gchar       *raw_iccid = NULL;
+    MMSimMbim               *self;
+    g_autoptr(MbimMessage)   response = NULL;
+    g_autofree gchar        *raw_iccid = NULL;
+    MbimSubscriberReadyState ready_state = MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED;
 
     self = g_task_get_source_object (task);
 
@@ -188,7 +189,6 @@ subscriber_ready_status_ready (MbimDevice   *device,
     if (response && mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &self->priv->preload_error)) {
         if (mbim_device_check_ms_mbimex_version (device, 3, 0)) {
             MbimSubscriberReadyStatusFlag flags = MBIM_SUBSCRIBER_READY_STATUS_FLAG_NONE;
-            MbimSubscriberReadyState ready_state = MBIM_SUBSCRIBER_READY_STATE_NOT_INITIALIZED;
 
             if (!mbim_message_ms_basic_connect_v3_subscriber_ready_status_response_parse (
                     response,
@@ -202,8 +202,10 @@ subscriber_ready_status_ready (MbimDevice   *device,
                     &self->priv->preload_error))
                 g_prefix_error (&self->priv->preload_error, "Failed processing MBIMEx v3.0 subscriber ready status response: ");
             else {
-                mm_obj_dbg (self, "processed MBIMEx v3.0 subscriber ready status response");
-
+                mm_obj_info (self,
+                             "processed MBIMEx v3.0 subscriber ready status response: ready_state = %s, flags = %u",
+                             mbim_subscriber_ready_state_get_string (ready_state),
+                             flags);
                 /* SIM type */
                 if (flags & MBIM_SUBSCRIBER_READY_STATUS_FLAG_ESIM) {
                     self->priv->sim_type = MM_SIM_TYPE_ESIM;
@@ -228,7 +230,7 @@ subscriber_ready_status_ready (MbimDevice   *device,
         } else {
             if (!mbim_message_subscriber_ready_status_response_parse (
                     response,
-                    NULL, /* ready_state */
+                    &ready_state, /* ready_state */
                     &self->priv->imsi,
                     &raw_iccid,
                     NULL, /* ready_info */
@@ -236,8 +238,11 @@ subscriber_ready_status_ready (MbimDevice   *device,
                     NULL, /* telephone_numbers */
                     &self->priv->preload_error))
                 g_prefix_error (&self->priv->preload_error, "Failed processing subscriber ready status response: ");
-            else
-                mm_obj_dbg (self, "processed subscriber ready status response");
+            else {
+                mm_obj_info (self,
+                             "processed subscriber ready status response: ready_state = %s",
+                             mbim_subscriber_ready_state_get_string (ready_state));
+            }
         }
 
         if (raw_iccid)
@@ -793,9 +798,12 @@ load_operator_name_ready (MbimDevice *device,
                           GAsyncResult *res,
                           GTask *task)
 {
+    MMSimMbim *self;
     MbimMessage *response;
     GError *error = NULL;
     MbimProvider *provider;
+
+    self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
@@ -804,6 +812,11 @@ load_operator_name_ready (MbimDevice *device,
             response,
             &provider,
             &error)) {
+        mm_obj_info (self,
+                     "operator info loaded: ProviderId = %s, ProviderState = %s, ProviderName = %s",
+                     provider->provider_id,
+                     mbim_provider_state_build_string_from_mask (provider->provider_state),
+                     provider->provider_name);
         g_task_return_pointer (task, g_strdup (provider->provider_name), g_free);
         mbim_provider_free (provider);
     } else

@@ -1297,7 +1297,7 @@ mm_base_bearer_disconnect (MMBaseBearer *self,
         return;
     }
 
-    mm_obj_dbg (self, "disconnecting...");
+    mm_obj_info (self, "disconnecting...");
 
     /* If currently connecting, try to cancel that operation, and wait to get
      * disconnected. */

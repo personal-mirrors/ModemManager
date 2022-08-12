@@ -2390,7 +2390,7 @@ initable_init_finish (GAsyncInitable  *initable,
             mm_obj_warn (self, "couldn't load %s: %s", DISPLAY, error->message); \
             g_error_free (error);                                       \
         }                                                               \
-                                                                        \
+        mm_obj_info (self, "loaded %s", DISPLAY);                       \
         /* Go on to next step */                                        \
         ctx = g_task_get_task_data (task);                              \
         ctx->step++;                                                    \
