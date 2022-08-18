@@ -3396,6 +3396,7 @@ uim_get_slot_status_ready (QmiClientUim *client,
                                           eid,   /* may be NULL, which is fine */
                                           NULL,  /* operator id unknown */
                                           NULL,  /* operator name unknown */
+                                          NULL,  /* gid unknown */
                                           NULL); /* emergency numbers unknown */
         g_ptr_array_add (ctx->sim_slots, sim);
     }
@@ -3717,6 +3718,7 @@ update_sim_from_slot_status (MMSharedQmi               *self,
                                       NULL,  /* eid unknown */
                                       NULL,  /* operator id unknown */
                                       NULL,  /* operator name unknown */
+                                      NULL,  /* gid unknown */
                                       NULL); /* emergency numbers unknown */
 
     mm_iface_modem_modify_sim (MM_IFACE_MODEM (self), slot_index, sim);

@@ -19,6 +19,7 @@
  *
  * Copyright (C) 2011 - 2012 Aleksander Morgado <aleksander@gnu.org>
  * Copyright (C) 2012 Google, Inc.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
 #include "mm-helpers.h"
@@ -337,6 +338,52 @@ mm_sim_dup_operator_name (MMSim *self)
 
     RETURN_NON_EMPTY_STRING (
         mm_gdbus_sim_dup_operator_name (MM_GDBUS_SIM (self)));
+}
+
+/*****************************************************************************/
+
+/**
+ * mm_sim_get_gid:
+ * @self: A #MMSim.
+ *
+ * Gets the Group Identifier (GID) of the #MMSim object.
+ *
+ * <warning>The returned value is only valid until the property changes so it is
+ * only safe to use this function on the thread where @self was constructed. Use
+ * mm_sim_dup_gid() if on another thread.</warning>
+ *
+ * Returns: (transfer none): The GID of the #MMSim object, or %NULL if it
+ * couldn't be retrieved.
+ *
+ * Since: 1.20
+ */
+const gchar *
+mm_sim_get_gid (MMSim *self)
+{
+    g_return_val_if_fail (MM_IS_SIM (self), NULL);
+
+    RETURN_NON_EMPTY_CONSTANT_STRING (
+        mm_gdbus_sim_get_gid (MM_GDBUS_SIM (self)));
+}
+
+/**
+ * mm_sim_dup_gid:
+ * @self: A #MMSim.
+ *
+ * Gets a copy of the Embedded Group Identifier (GID) of the #MMSim object.
+ *
+ * Returns: (transfer full): The GID of the #MMSim object, or %NULL if it
+ * couldn't be retrieved. The returned value should be freed with g_free().
+ *
+ * Since: 1.16
+ */
+gchar *
+mm_sim_dup_gid (MMSim *self)
+{
+    g_return_val_if_fail (MM_IS_SIM (self), NULL);
+
+    RETURN_NON_EMPTY_STRING (
+        mm_gdbus_sim_dup_gid (MM_GDBUS_SIM (self)));
 }
 
 /*****************************************************************************/

@@ -1608,6 +1608,8 @@ mm_sim_get_operator_identifier
 mm_sim_dup_operator_identifier
 mm_sim_get_operator_name
 mm_sim_dup_operator_name
+mm_sim_get_gid
+mm_sim_dup_gid
 mm_sim_get_emergency_numbers
 mm_sim_dup_emergency_numbers
 mm_sim_get_preferred_networks
@@ -3874,6 +3876,8 @@ mm_gdbus_sim_get_operator_identifier
 mm_gdbus_sim_dup_operator_identifier
 mm_gdbus_sim_get_operator_name
 mm_gdbus_sim_dup_operator_name
+mm_gdbus_sim_get_gid
+mm_gdbus_sim_dup_gid
 mm_gdbus_sim_get_emergency_numbers
 mm_gdbus_sim_dup_emergency_numbers
 mm_gdbus_sim_dup_preferred_networks
@@ -3903,6 +3907,7 @@ mm_gdbus_sim_set_imsi
 mm_gdbus_sim_set_eid
 mm_gdbus_sim_set_operator_identifier
 mm_gdbus_sim_set_operator_name
+mm_gdbus_sim_set_gid
 mm_gdbus_sim_set_sim_identifier
 mm_gdbus_sim_set_emergency_numbers
 mm_gdbus_sim_set_preferred_networks

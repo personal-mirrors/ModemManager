@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) 2018 Aleksander Morgado <aleksander@aleksander.es>
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
 #ifndef MMCLI_OUTPUT_H
@@ -321,6 +322,7 @@ typedef enum {
     MMC_F_SIM_PROPERTIES_EID,
     MMC_F_SIM_PROPERTIES_OPERATOR_ID,
     MMC_F_SIM_PROPERTIES_OPERATOR_NAME,
+    MMC_F_SIM_PROPERTIES_GID,
     MMC_F_SIM_PROPERTIES_EMERGENCY_NUMBERS,
     MMC_F_SIM_PROPERTIES_PREFERRED_NETWORKS,
     MMC_F_SIM_PROPERTIES_SIM_TYPE,

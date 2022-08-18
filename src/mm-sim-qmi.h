@@ -11,6 +11,7 @@
  * GNU General Public License for more details:
  *
  * Copyright (C) 2012 Google, Inc.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
 #ifndef MM_SIM_QMI_H
@@ -63,6 +64,7 @@ MMBaseSim *mm_sim_qmi_new_initialized (MMBaseModem *modem,
                                        const gchar *eid,
                                        const gchar *operator_identifier,
                                        const gchar *operator_name,
+                                       const gchar *gid,
                                        const GStrv  emergency_numbers);
 
 #endif /* MM_SIM_QMI_H */

@@ -13,6 +13,7 @@
  * Author: Aleksander Morgado <aleksander@lanedo.com>
  *
  * Copyright (C) 2011 Google, Inc.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc.
  */
 
 #ifndef MM_BASE_SIM_H
@@ -99,6 +100,14 @@ struct _MMBaseSimClass {
     gchar * (* load_operator_name_finish) (MMBaseSim *self,
                                            GAsyncResult *res,
                                            GError **error);
+
+    /* Load GID (async) */
+    void    (* load_gid)        (MMBaseSim *self,
+                                 GAsyncReadyCallback callback,
+                                 gpointer user_data);
+    gchar * (* load_gid_finish) (MMBaseSim *self,
+                                 GAsyncResult *res,
+                                 GError **error);
 
     /* Load emergency numbers (async) */
     void  (* load_emergency_numbers)        (MMBaseSim *self,
@@ -219,6 +228,7 @@ MMBaseSim   *mm_base_sim_new_initialized            (MMBaseModem *modem,
                                                      const gchar *eid,
                                                      const gchar *operator_identifier,
                                                      const gchar *operator_name,
+                                                     const gchar *gid,
                                                      const GStrv  emergency_numbers);
 
 void         mm_base_sim_send_pin                   (MMBaseSim *self,
