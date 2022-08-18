@@ -54,6 +54,8 @@ typedef struct _MMPortQmi MMPortQmi;
 typedef struct _MMPortQmiClass MMPortQmiClass;
 typedef struct _MMPortQmiPrivate MMPortQmiPrivate;
 
+#define MM_PORT_QMI_SIGNAL_ENDPOINT_INITIALIZE  "mm-port-qmi-signal-endpoint-initialize"
+
 struct _MMPortQmi {
     MMPort parent;
     MMPortQmiPrivate *priv;
@@ -93,6 +95,9 @@ void       mm_port_qmi_set_net_driver (MMPortQmi   *self,
 
 void       mm_port_qmi_set_net_sysfs_path (MMPortQmi   *self,
                                            const gchar *net_sysfs_path);
+
+void       mm_port_qmi_endpoint_initialize (MMPortQmi  *self,
+                                            const void *unused);
 
 typedef enum {
     MM_PORT_QMI_FLAG_DEFAULT  = 0,

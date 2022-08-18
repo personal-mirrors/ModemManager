@@ -48,6 +48,13 @@ static GParamSpec *properties[PROP_LAST];
 
 #endif
 
+enum {
+    SIGNAL_ENDPOINT_INITIALIZE,
+    SIGNAL_LAST
+};
+
+static guint signals[SIGNAL_LAST];
+
 typedef struct {
     QmiService  service;
     QmiClient  *client;
@@ -152,7 +159,8 @@ initialize_endpoint_info (MMPortQmi *self)
     if (!kernel_device)
         self->priv->endpoint_type = QMI_DATA_ENDPOINT_TYPE_UNDEFINED;
     else
-        self->priv->endpoint_type = mm_port_subsys_to_qmi_endpoint_type (mm_port_get_subsys (MM_PORT (self)));
+        self->priv->endpoint_type = mm_port_subsys_to_qmi_endpoint_type (mm_port_get_subsys (MM_PORT (self)),
+                                                                         self->priv->net_driver);
 
     switch (self->priv->endpoint_type) {
         case QMI_DATA_ENDPOINT_TYPE_HSUSB:
@@ -163,6 +171,8 @@ initialize_endpoint_info (MMPortQmi *self)
             self->priv->endpoint_interface_number = 1;
             break;
         case QMI_DATA_ENDPOINT_TYPE_PCIE:
+            self->priv->endpoint_interface_number = 4;
+            break;
         case QMI_DATA_ENDPOINT_TYPE_UNDEFINED:
         case QMI_DATA_ENDPOINT_TYPE_HSIC:
         case QMI_DATA_ENDPOINT_TYPE_BAM_DMUX:
@@ -719,6 +729,9 @@ mm_port_qmi_setup_link (MMPortQmi           *self,
          */
         if (self->priv->dap == QMI_WDA_DATA_AGGREGATION_PROTOCOL_QMAPV4)
             flags = (QMI_DEVICE_ADD_LINK_FLAGS_INGRESS_MAP_CKSUMV4 | QMI_DEVICE_ADD_LINK_FLAGS_EGRESS_MAP_CKSUMV4);
+        else if (self->priv->dap == QMI_WDA_DATA_AGGREGATION_PROTOCOL_QMAPV5)
+            flags = (QMI_DEVICE_ADD_LINK_FLAGS_INGRESS_MAP_CKSUMV5 | QMI_DEVICE_ADD_LINK_FLAGS_EGRESS_MAP_CKSUMV5);
+
 
         qmi_device_add_link_with_flags (self->priv->qmi_device,
                                         QMI_DEVICE_MUX_ID_AUTOMATIC,
@@ -1078,8 +1091,9 @@ load_current_kernel_data_modes (MMPortQmi *self,
     if (g_strcmp0 (self->priv->net_driver, "bam-dmux") == 0)
         return MM_PORT_QMI_KERNEL_DATA_MODE_RAW_IP;
 
-    /* For IPA based setups, always rmnet multiplexing */
-    if (g_strcmp0 (self->priv->net_driver, "ipa") == 0)
+    /* For IPA or MHI based setups, always rmnet multiplexing */
+    if (g_strcmp0 (self->priv->net_driver, "ipa") == 0 ||
+        g_strcmp0 (self->priv->net_driver, "mhi_net") == 0)
         return MM_PORT_QMI_KERNEL_DATA_MODE_MUX_RMNET;
 
     /* For USB based setups, query kernel */
@@ -1114,8 +1128,9 @@ load_supported_kernel_data_modes (MMPortQmi *self,
     if (g_strcmp0 (self->priv->net_driver, "bam-dmux") == 0)
         return MM_PORT_QMI_KERNEL_DATA_MODE_RAW_IP;
 
-    /* For IPA based setups, always rmnet multiplexing */
-    if (g_strcmp0 (self->priv->net_driver, "ipa") == 0)
+    /* For IPA or MHI based setups, always rmnet multiplexing */
+    if (g_strcmp0 (self->priv->net_driver, "ipa") == 0 ||
+        g_strcmp0 (self->priv->net_driver, "mhi_net") == 0)
         return MM_PORT_QMI_KERNEL_DATA_MODE_MUX_RMNET;
 
     /* For USB based setups, we may have all supported */
@@ -2593,6 +2608,17 @@ mm_port_qmi_set_net_sysfs_path (MMPortQmi   *self,
 
 /*****************************************************************************/
 
+void
+mm_port_qmi_endpoint_initialize (MMPortQmi  *self,
+                                 const void *unused)
+{
+    g_assert (MM_IS_PORT_QMI (self));
+
+    g_signal_emit (self, signals[SIGNAL_ENDPOINT_INITIALIZE], 0);
+}
+
+/*****************************************************************************/
+
 typedef struct {
     QmiDevice *qmi_device;
 } PortQmiCloseContext;
@@ -2730,9 +2756,9 @@ mm_port_qmi_init (MMPortQmi *self)
 {
     self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self, MM_TYPE_PORT_QMI, MMPortQmiPrivate);
 
-    /* load endpoint info as soon as kernel device is set */
+    /* load endpoint info as soon as modem has determined all port information */
     self->priv->endpoint_info_signal_id = g_signal_connect (self,
-                                                            "notify::" MM_PORT_KERNEL_DEVICE,
+                                                            MM_PORT_QMI_SIGNAL_ENDPOINT_INITIALIZE,
                                                             G_CALLBACK (initialize_endpoint_info),
                                                             NULL);
 }
@@ -2842,4 +2868,12 @@ mm_port_qmi_class_init (MMPortQmiClass *klass)
 
     g_object_class_install_properties (object_class, PROP_LAST, properties);
 #endif
+
+    signals[SIGNAL_ENDPOINT_INITIALIZE] =
+        g_signal_new (MM_PORT_QMI_SIGNAL_ENDPOINT_INITIALIZE,
+                      G_OBJECT_CLASS_TYPE (object_class),
+                      G_SIGNAL_RUN_FIRST,
+                      0, NULL, NULL,
+                      g_cclosure_marshal_generic,
+                      G_TYPE_NONE, 0, NULL);
 }

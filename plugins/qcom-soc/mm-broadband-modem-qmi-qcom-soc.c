@@ -129,7 +129,8 @@ peek_port_qmi_for_data (MMBroadbandModemQmi  *self,
     net_port = mm_port_peek_kernel_device (data);
     net_port_driver = mm_kernel_device_get_driver (net_port);
 
-    if (g_strcmp0 (net_port_driver, "ipa") == 0)
+    if (g_strcmp0 (net_port_driver, "ipa") == 0 ||
+        g_strcmp0 (net_port_driver, "mhi_net") == 0)
         return peek_port_qmi_for_data_ipa (self, data, out_sio_port, error);
 
     if (g_strcmp0 (net_port_driver, "bam-dmux") == 0)
