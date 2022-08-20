@@ -62,6 +62,8 @@ typedef enum {
 } FeatureSupport;
 
 struct _MMBroadbandModemSimtechPrivate {
+    FeatureSupport  lpwa_support;
+    FeatureSupport  cnaop_support;
     FeatureSupport  cnsmod_support;
     FeatureSupport  autocsq_support;
     GRegex         *cnsmod_regex;
@@ -72,7 +74,7 @@ struct _MMBroadbandModemSimtechPrivate {
 /* Setup/Cleanup unsolicited events (3GPP interface) */
 
 static MMModemAccessTechnology
-simtech_act_to_mm_act (guint nsmod)
+simtech_act_to_mm_act (MMBroadbandModemSimtech *self, guint nsmod)
 {
     static const MMModemAccessTechnology simtech_act_to_mm_act_map[] = {
         [0] = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN,
@@ -85,8 +87,22 @@ simtech_act_to_mm_act (guint nsmod)
         [7] = MM_MODEM_ACCESS_TECHNOLOGY_HSPA,
         [8] = MM_MODEM_ACCESS_TECHNOLOGY_LTE,
     };
+    static const MMModemAccessTechnology simtech_lpwa_act_to_mm_act_map[] = {
+        [0] = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN,
+        [1] = MM_MODEM_ACCESS_TECHNOLOGY_GSM,
+        [2] = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN,
+        [3] = MM_MODEM_ACCESS_TECHNOLOGY_EDGE,
+        [4] = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN,
+        [5] = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN,
+        [6] = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN,
+        [7] = MM_MODEM_ACCESS_TECHNOLOGY_LTE_CAT_M,
+        [8] = MM_MODEM_ACCESS_TECHNOLOGY_LTE_NB_IOT,
+    };
 
-    return (nsmod < G_N_ELEMENTS (simtech_act_to_mm_act_map) ? simtech_act_to_mm_act_map[nsmod] : MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
+    if (self->priv->lpwa_support == FEATURE_SUPPORTED)
+        return (nsmod < G_N_ELEMENTS (simtech_lpwa_act_to_mm_act_map) ? simtech_lpwa_act_to_mm_act_map[nsmod] : MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
+    else
+        return (nsmod < G_N_ELEMENTS (simtech_act_to_mm_act_map) ? simtech_act_to_mm_act_map[nsmod] : MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
 }
 
 static void
@@ -101,7 +117,7 @@ simtech_tech_changed (MMPortSerialAt *port,
 
     mm_iface_modem_update_access_technologies (
         MM_IFACE_MODEM (self),
-        simtech_act_to_mm_act (simtech_act),
+        simtech_act_to_mm_act (self, simtech_act),
         MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK);
 }
 
@@ -613,8 +629,8 @@ disable_unsolicited_events_context_step (GTask *task)
 
 static void
 modem_3gpp_disable_unsolicited_events (MMIfaceModem3gpp    *self,
-                                      GAsyncReadyCallback  callback,
-                                      gpointer             user_data)
+                                       GAsyncReadyCallback  callback,
+                                       gpointer             user_data)
 {
     DisableUnsolicitedEventsContext *ctx;
     GTask                          *task;
@@ -679,7 +695,7 @@ cnsmod_query_ready (MMBaseModem  *self,
             "Failed to parse the +CNSMOD response: '%s'",
             response);
     else
-        g_task_return_int (task, simtech_act_to_mm_act (atoi (p + 1)));
+        g_task_return_int (task, simtech_act_to_mm_act (MM_BROADBAND_MODEM_SIMTECH (self), atoi (p + 1)));
     g_object_unref (task);
 }
 
@@ -827,13 +843,17 @@ parent_load_supported_modes_ready (MMIfaceModem *self,
     }
 
     /* Build list of combinations */
-    combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 5);
+    combinations = g_array_sized_new (FALSE, FALSE, sizeof (MMModemModeCombination), 7);
     /* 2G only */
     mode.allowed = MM_MODEM_MODE_2G;
     mode.preferred = MM_MODEM_MODE_NONE;
     g_array_append_val (combinations, mode);
     /* 3G only */
     mode.allowed = MM_MODEM_MODE_3G;
+    mode.preferred = MM_MODEM_MODE_NONE;
+    g_array_append_val (combinations, mode);
+    /* 4G only */
+    mode.allowed = MM_MODEM_MODE_4G;
     mode.preferred = MM_MODEM_MODE_NONE;
     g_array_append_val (combinations, mode);
     /* 2G and 3G */
@@ -848,7 +868,10 @@ parent_load_supported_modes_ready (MMIfaceModem *self,
     mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
     mode.preferred = MM_MODEM_MODE_3G;
     g_array_append_val (combinations, mode);
-
+    /* 2G and 4G, 4G preferred */
+    mode.allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_4G);
+    mode.preferred = MM_MODEM_MODE_4G;
+    g_array_append_val (combinations, mode);
     /* Filter out those unsupported modes */
     filtered = mm_filter_supported_modes (all, combinations, self);
     g_array_unref (all);
@@ -940,6 +963,10 @@ cnmp_query_ready (MMBroadbandModemSimtech *self,
     switch (ctx->modepref) {
     case 2:
         /* Automatic */
+        if (self->priv->cnaop_support != FEATURE_SUPPORTED) {
+            result->allowed = MM_MODEM_MODE_ANY;
+            break;
+        }
         switch (ctx->acqord) {
         case 0:
             result->allowed = MM_MODEM_MODE_ANY;
@@ -978,6 +1005,18 @@ cnmp_query_ready (MMBroadbandModemSimtech *self,
         result->preferred = MM_MODEM_MODE_NONE;
         break;
 
+    case 38:
+        /* LTE only */
+        result->allowed = MM_MODEM_MODE_4G;
+        result->preferred = MM_MODEM_MODE_NONE;
+        break;
+
+    case 51:
+        /* GSM and LTE */
+        result->allowed = (MM_MODEM_MODE_2G | MM_MODEM_MODE_4G);
+        result->preferred = MM_MODEM_MODE_4G;
+        break;
+
     default:
         g_task_return_new_error (
             task,
@@ -995,40 +1034,42 @@ cnmp_query_ready (MMBroadbandModemSimtech *self,
 }
 
 static void
-cnaop_query_ready (MMBaseModem  *self,
+cnaop_query_ready (MMBaseModem  *_self,
                    GAsyncResult *res,
                    GTask        *task)
 {
     LoadCurrentModesContext *ctx;
     const gchar             *response, *p;
     GError                  *error = NULL;
+    MMBroadbandModemSimtech *self;
 
-    response = mm_base_modem_at_command_finish (self, res, &error);
-    if (!response) {
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
-    }
+    self = MM_BROADBAND_MODEM_SIMTECH (_self);
 
-    ctx = g_task_get_task_data (task);
+    response = mm_base_modem_at_command_finish (_self, res, &error);
+    if (response) {
+        self->priv->cnaop_support = FEATURE_SUPPORTED;
 
-    p = mm_strip_tag (response, "+CNAOP:");
-    if (p)
-        ctx->acqord = atoi (p);
+        ctx = g_task_get_task_data (task);
 
-    if (ctx->acqord < 0 || ctx->acqord > 2) {
-        g_task_return_new_error (
-            task,
-            MM_CORE_ERROR,
-            MM_CORE_ERROR_FAILED,
-            "Failed to parse the acquisition order response: '%s'",
-            response);
-        g_object_unref (task);
-        return;
-    }
+        p = mm_strip_tag (response, "+CNAOP:");
+        if (p)
+            ctx->acqord = atoi (p);
+
+        if (ctx->acqord < 0 || ctx->acqord > 2) {
+            g_task_return_new_error (
+                task,
+                MM_CORE_ERROR,
+                MM_CORE_ERROR_FAILED,
+                "Failed to parse the acquisition order response: '%s'",
+                response);
+            g_object_unref (task);
+            return;
+        }
+    } else
+        self->priv->cnaop_support = FEATURE_NOT_SUPPORTED;
 
     mm_base_modem_at_command (
-        MM_BASE_MODEM (self),
+        MM_BASE_MODEM (_self),
         "+CNMP?",
         3,
         FALSE,
@@ -1037,22 +1078,40 @@ cnaop_query_ready (MMBaseModem  *self,
 }
 
 static void
-load_current_modes (MMIfaceModem        *self,
+load_current_modes (MMIfaceModem        *_self,
                     GAsyncReadyCallback  callback,
                     gpointer             user_data)
 {
     GTask                   *task;
     LoadCurrentModesContext *ctx;
+    MMBroadbandModemSimtech *self;
+    guint vid;
+    guint pid;
+
+    self = MM_BROADBAND_MODEM_SIMTECH (_self);
+    vid = mm_base_modem_get_vendor_id (MM_BASE_MODEM (_self));
+    pid = mm_base_modem_get_product_id (MM_BASE_MODEM (_self));
+
+    self->priv->lpwa_support = FEATURE_NOT_SUPPORTED;
+    if (vid == 0x1e0e) {
+        if (pid == 0x9205) {
+            mm_obj_dbg (self, "LPWA modem found");
+            self->priv->lpwa_support = FEATURE_SUPPORTED;
+        } else if (pid == 0x9206) {
+            mm_obj_dbg (self, "LPWA modem found");
+            self->priv->lpwa_support = FEATURE_SUPPORTED;
+        }
+    }
 
     ctx = g_new (LoadCurrentModesContext, 1);
     ctx->acqord   = -1;
     ctx->modepref = -1;
 
-    task = g_task_new (self, NULL, callback, user_data);
+    task = g_task_new (_self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, g_free);
 
     mm_base_modem_at_command (
-        MM_BASE_MODEM (self),
+        MM_BASE_MODEM (_self),
         "+CNAOP?",
         3,
         FALSE,
@@ -1099,6 +1158,9 @@ cnmp_set_ready (MMBaseModem  *self,
     SetCurrentModesContext *ctx;
     GError                 *error = NULL;
     gchar                  *command;
+    MMBroadbandModemSimtech *_self;
+
+    _self = MM_BROADBAND_MODEM_SIMTECH (self);
 
     ctx = g_task_get_task_data (task);
 
@@ -1110,15 +1172,21 @@ cnmp_set_ready (MMBaseModem  *self,
         return;
     }
 
-    command = g_strdup_printf ("+CNAOP=%u", ctx->naop);
-    mm_base_modem_at_command (
-        MM_BASE_MODEM (self),
-        command,
-        3,
-        FALSE,
-        (GAsyncReadyCallback)cnaop_set_ready,
-        task);
-    g_free (command);
+    if (_self->priv->cnaop_support == FEATURE_SUPPORTED) {
+        command = g_strdup_printf ("+CNAOP=%u", ctx->naop);
+        mm_base_modem_at_command (
+            MM_BASE_MODEM (self),
+            command,
+            3,
+            FALSE,
+            (GAsyncReadyCallback)cnaop_set_ready,
+            task);
+        g_free (command);
+    } else {
+        /* If +CNAOP is not supported, we conclude it here */
+        g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
+    }
 }
 
 static void
@@ -1142,12 +1210,16 @@ set_current_modes (MMIfaceModem        *self,
 
     if (allowed == MM_MODEM_MODE_ANY && preferred == MM_MODEM_MODE_NONE) {
         /* defaults nmp and naop */
+        mm_obj_dbg (self, "Setting default CNMP and CNAOP values");
+
     } else if (allowed == MM_MODEM_MODE_2G) {
         ctx->nmp = 13;
         ctx->naop = 0;
     } else if (allowed == MM_MODEM_MODE_3G) {
         ctx->nmp = 14;
         ctx->naop = 0;
+    } else if (allowed == MM_MODEM_MODE_4G) {
+        ctx->nmp = 38;
     } else if (allowed == (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G)) {
         /* default nmp */
         if (preferred == MM_MODEM_MODE_2G)
@@ -1157,6 +1229,8 @@ set_current_modes (MMIfaceModem        *self,
         else
             /* default naop */
             ctx->naop = 0;
+    } else if (allowed == (MM_MODEM_MODE_2G | MM_MODEM_MODE_4G)) {
+        ctx->nmp = 51;
     } else {
         gchar *allowed_str;
         gchar *preferred_str;
@@ -1185,6 +1259,31 @@ set_current_modes (MMIfaceModem        *self,
         (GAsyncReadyCallback)cnmp_set_ready,
         task);
     g_free (command);
+}
+
+/*****************************************************************************/
+/* Reset (Modem interface) */
+
+static gboolean
+modem_reset_finish (MMIfaceModem *self,
+                    GAsyncResult *res,
+                    GError **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_reset (MMIfaceModem *self,
+             GAsyncReadyCallback callback,
+             gpointer user_data)
+{
+    mm_base_modem_at_command (
+        MM_BASE_MODEM (self),
+        "+CREBOOT",
+        3,
+        FALSE,
+        callback,
+        user_data);
 }
 
 /*****************************************************************************/
@@ -1230,6 +1329,8 @@ mm_broadband_modem_simtech_init (MMBroadbandModemSimtech *self)
                                               MM_TYPE_BROADBAND_MODEM_SIMTECH,
                                               MMBroadbandModemSimtechPrivate);
 
+    self->priv->lpwa_support = FEATURE_SUPPORT_UNKNOWN;
+    self->priv->cnaop_support = FEATURE_SUPPORT_UNKNOWN;
     self->priv->cnsmod_support = FEATURE_SUPPORT_UNKNOWN;
     self->priv->autocsq_support = FEATURE_SUPPORT_UNKNOWN;
 
@@ -1254,7 +1355,8 @@ static void
 iface_modem_init (MMIfaceModem *iface)
 {
     iface_modem_parent = g_type_interface_peek_parent (iface);
-
+    iface->reset = modem_reset;
+    iface->reset_finish = modem_reset_finish;
     iface->load_signal_quality = load_signal_quality;
     iface->load_signal_quality_finish = load_signal_quality_finish;
     iface->load_access_technologies = load_access_technologies;
@@ -1321,7 +1423,6 @@ iface_modem_voice_init (MMIfaceModemVoice *iface)
     iface->setup_in_call_audio_channel_finish   = mm_shared_simtech_voice_setup_in_call_audio_channel_finish;
     iface->cleanup_in_call_audio_channel        = mm_shared_simtech_voice_cleanup_in_call_audio_channel;
     iface->cleanup_in_call_audio_channel_finish = mm_shared_simtech_voice_cleanup_in_call_audio_channel_finish;
-
 }
 
 static MMIfaceModemVoice *
