@@ -1450,6 +1450,8 @@ if ENABLE_PLUGIN_SIMTECH
 
 noinst_LTLIBRARIES += libhelpers-simtech.la
 libhelpers_simtech_la_SOURCES = \
+	simtech/mm-broadband-bearer-simtech-ecm.c \
+	simtech/mm-broadband-bearer-simtech-ecm.h \
 	simtech/mm-modem-helpers-simtech.c \
 	simtech/mm-modem-helpers-simtech.h \
 	$(NULL)

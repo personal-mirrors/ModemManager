@@ -36,6 +36,7 @@
 #include "mm-iface-modem-voice.h"
 #include "mm-shared-simtech.h"
 #include "mm-broadband-modem-simtech.h"
+#include "mm-broadband-bearer-simtech-ecm.h"
 
 static void iface_modem_init          (MMIfaceModem         *iface);
 static void iface_modem_3gpp_init     (MMIfaceModem3gpp     *iface);
@@ -62,6 +63,7 @@ typedef enum {
 } FeatureSupport;
 
 struct _MMBroadbandModemSimtechPrivate {
+    FeatureSupport  ecm_support;
     FeatureSupport  lpwa_support;
     FeatureSupport  cnaop_support;
     FeatureSupport  cnsmod_support;
@@ -71,6 +73,189 @@ struct _MMBroadbandModemSimtechPrivate {
 };
 
 /*****************************************************************************/
+/* Create Bearer (Modem interface) */
+
+static MMBaseBearer *
+modem_create_bearer_finish (MMIfaceModem *self,
+                            GAsyncResult *res,
+                            GError      **error)
+{
+    return g_task_propagate_pointer (G_TASK (res), error);
+}
+
+static void
+broadband_bearer_simtech_ecm_new_ready (GObject      *source,
+                                        GAsyncResult *res,
+                                        GTask        *task)
+{
+    MMBaseBearer *bearer = NULL;
+    GError       *error = NULL;
+
+    bearer = mm_broadband_bearer_simtech_ecm_new_finish (res, &error);
+    if (!bearer)
+        g_task_return_error (task, error);
+    else
+        g_task_return_pointer (task, bearer, g_object_unref);
+    g_object_unref (task);
+}
+
+static void
+broadband_bearer_new_ready (GObject      *source,
+                            GAsyncResult *res,
+                            GTask        *task)
+{
+    MMBaseBearer *bearer = NULL;
+    GError       *error = NULL;
+
+    bearer = mm_broadband_bearer_new_finish (res, &error);
+    if (!bearer)
+        g_task_return_error (task, error);
+    else
+        g_task_return_pointer (task, bearer, g_object_unref);
+    g_object_unref (task);
+}
+
+static void
+ecm_activate_ready (MMBaseModem  *_self,
+                    GAsyncResult *res,
+                    GTask        *task)
+{
+    GError *error = NULL;
+    MMBroadbandModemSimtech *self = MM_BROADBAND_MODEM_SIMTECH (_self);
+
+    if (!mm_base_modem_at_command_finish (_self, res, &error)) {
+        mm_obj_dbg (self, "Failed to set ECM Auto Connecting, using generic PPP bearer");
+        self->priv->ecm_support = FEATURE_NOT_SUPPORTED;
+        mm_broadband_bearer_new (MM_BROADBAND_MODEM (self),
+                                 g_task_get_task_data (task),
+                                 NULL, /* cancellable */
+                                 (GAsyncReadyCallback) broadband_bearer_new_ready,
+                                 task);
+        return;
+    }
+
+    mm_obj_dbg (self, "ECM Auto Connecting is On, using ECM Bearer");
+    mm_broadband_bearer_simtech_ecm_new (self,
+                                         g_task_get_task_data (task),
+                                         NULL, /* cancellable */
+                                         (GAsyncReadyCallback) broadband_bearer_simtech_ecm_new_ready,
+                                         task);
+    return;
+}
+
+static void
+ecm_query_ready (MMBaseModem  *_self,
+                 GAsyncResult *res,
+                 GTask        *task)
+{
+    MMBroadbandModemSimtech *self = MM_BROADBAND_MODEM_SIMTECH (_self);
+    const gchar            *response = NULL;
+    GError                 *error = NULL;
+    g_autoptr(GRegex)       r = NULL;
+    g_autoptr(GMatchInfo)   match_info = NULL;
+    guint                   state = 0;
+
+    response = mm_base_modem_at_command_finish (_self, res, &error);
+    if (!response) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    r = g_regex_new ("\\+SECMEN:\\s*(\\d+)(?:,(\\d+))?",
+                     G_REGEX_DOLLAR_ENDONLY | G_REGEX_RAW,
+                     0,
+                     NULL);
+    g_assert (r != NULL);
+
+    if (!g_regex_match (r, response, 0, &match_info)) {
+        g_set_error (&error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Invalid +SECMEN response: <%s>", response);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (!mm_get_uint_from_match_info (match_info, 1, &state)) {
+        g_set_error (&error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Failed to match state in +SECMEN response: <%s>", response);
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    if (state == 0) {
+        mm_obj_dbg (self, "ECM Auto Connecting is OFF, setting it ON");
+        /* Autostored in NVM */
+        mm_base_modem_at_command (
+            MM_BASE_MODEM (self),
+            "+SECMEN=1,1",
+            3,
+            FALSE,
+            (GAsyncReadyCallback)ecm_activate_ready,
+            task);
+        return;
+    }
+
+    /* ECM session is already active */
+    mm_obj_dbg (self, "ECM Auto Connecting was already enabled, using ECM Bearer");
+    mm_broadband_bearer_simtech_ecm_new (self,
+                                         g_task_get_task_data (task),
+                                         NULL, /* cancellable */
+                                         (GAsyncReadyCallback) broadband_bearer_simtech_ecm_new_ready,
+                                         task);
+        return;
+}
+
+static void
+modem_create_bearer (MMIfaceModem       *_self,
+                     MMBearerProperties *properties,
+                     GAsyncReadyCallback callback,
+                     gpointer            user_data)
+{
+    MMBroadbandModemSimtech *self = MM_BROADBAND_MODEM_SIMTECH (_self);
+    GTask                   *task;
+    guint vid;
+    guint pid;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    g_task_set_task_data (task, g_object_ref (properties), g_object_unref);
+
+    vid = mm_base_modem_get_vendor_id (MM_BASE_MODEM (self));
+    pid = mm_base_modem_get_product_id (MM_BASE_MODEM (self));
+
+    self->priv->ecm_support = FEATURE_NOT_SUPPORTED;
+    self->priv->lpwa_support = FEATURE_NOT_SUPPORTED;
+
+    if (vid == 0x1e0e && pid == 0x9205) {
+        self->priv->lpwa_support = FEATURE_SUPPORTED;
+        if (mm_base_modem_peek_best_data_port (MM_BASE_MODEM (self), MM_PORT_TYPE_NET)) {
+            mm_obj_dbg (self, "LPWA modem with ECM support found");
+            self->priv->ecm_support = FEATURE_SUPPORTED;
+            mm_base_modem_at_command (MM_BASE_MODEM (self),
+                                      "+SECMEN?",
+                                      3,
+                                      FALSE,
+                                      (GAsyncReadyCallback)ecm_query_ready,
+                                      task);
+            return;
+        } else {
+            mm_obj_dbg (self, "ECM is not supported due to lack of NW interface");
+        }
+    } else if (vid == 0x1e0e && pid == 0x9206) {
+        self->priv->lpwa_support = FEATURE_SUPPORTED;
+        mm_obj_dbg (self, "LPWA modem found");
+    }
+
+    mm_obj_dbg (self, "Using generic PPP bearer");
+    mm_broadband_bearer_new (MM_BROADBAND_MODEM (self),
+                                g_task_get_task_data (task),
+                                NULL, /* cancellable */
+                                (GAsyncReadyCallback) broadband_bearer_new_ready,
+                                task);
+    return;
+}
+
 /* Setup/Cleanup unsolicited events (3GPP interface) */
 
 static MMModemAccessTechnology
@@ -803,7 +988,6 @@ load_signal_quality (MMIfaceModem        *self,
     GTask *task;
 
     task = g_task_new (self, NULL, callback, user_data);
-
     mm_base_modem_at_command (
         MM_BASE_MODEM (self),
         "+CSQ",
@@ -1069,7 +1253,7 @@ cnaop_query_ready (MMBaseModem  *_self,
         self->priv->cnaop_support = FEATURE_NOT_SUPPORTED;
 
     mm_base_modem_at_command (
-        MM_BASE_MODEM (_self),
+        MM_BASE_MODEM (self),
         "+CNMP?",
         3,
         FALSE,
@@ -1085,33 +1269,18 @@ load_current_modes (MMIfaceModem        *_self,
     GTask                   *task;
     LoadCurrentModesContext *ctx;
     MMBroadbandModemSimtech *self;
-    guint vid;
-    guint pid;
 
     self = MM_BROADBAND_MODEM_SIMTECH (_self);
-    vid = mm_base_modem_get_vendor_id (MM_BASE_MODEM (_self));
-    pid = mm_base_modem_get_product_id (MM_BASE_MODEM (_self));
-
-    self->priv->lpwa_support = FEATURE_NOT_SUPPORTED;
-    if (vid == 0x1e0e) {
-        if (pid == 0x9205) {
-            mm_obj_dbg (self, "LPWA modem found");
-            self->priv->lpwa_support = FEATURE_SUPPORTED;
-        } else if (pid == 0x9206) {
-            mm_obj_dbg (self, "LPWA modem found");
-            self->priv->lpwa_support = FEATURE_SUPPORTED;
-        }
-    }
 
     ctx = g_new (LoadCurrentModesContext, 1);
     ctx->acqord   = -1;
     ctx->modepref = -1;
 
-    task = g_task_new (_self, NULL, callback, user_data);
+    task = g_task_new (self, NULL, callback, user_data);
     g_task_set_task_data (task, ctx, g_free);
 
     mm_base_modem_at_command (
-        MM_BASE_MODEM (_self),
+        MM_BASE_MODEM (self),
         "+CNAOP?",
         3,
         FALSE,
@@ -1151,17 +1320,15 @@ cnaop_set_ready (MMBaseModem  *self,
 }
 
 static void
-cnmp_set_ready (MMBaseModem  *self,
+cnmp_set_ready (MMBaseModem  *_self,
                 GAsyncResult *res,
                 GTask        *task)
 {
     SetCurrentModesContext *ctx;
     GError                 *error = NULL;
-    gchar                  *command;
-    MMBroadbandModemSimtech *_self;
+    MMBroadbandModemSimtech *self;
 
-    _self = MM_BROADBAND_MODEM_SIMTECH (self);
-
+    self = MM_BROADBAND_MODEM_SIMTECH (_self);
     ctx = g_task_get_task_data (task);
 
     mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
@@ -1172,7 +1339,9 @@ cnmp_set_ready (MMBaseModem  *self,
         return;
     }
 
-    if (_self->priv->cnaop_support == FEATURE_SUPPORTED) {
+    if (self->priv->cnaop_support == FEATURE_SUPPORTED) {
+        gchar *command;
+
         command = g_strdup_printf ("+CNAOP=%u", ctx->naop);
         mm_base_modem_at_command (
             MM_BASE_MODEM (self),
@@ -1314,8 +1483,7 @@ mm_broadband_modem_simtech_new (const gchar *device,
                          MM_BASE_MODEM_PLUGIN, plugin,
                          MM_BASE_MODEM_VENDOR_ID, vendor_id,
                          MM_BASE_MODEM_PRODUCT_ID, product_id,
-                         /* Generic bearer supports TTY only */
-                         MM_BASE_MODEM_DATA_NET_SUPPORTED, FALSE,
+                         MM_BASE_MODEM_DATA_NET_SUPPORTED, TRUE,
                          MM_BASE_MODEM_DATA_TTY_SUPPORTED, TRUE,
                          MM_BROADBAND_MODEM_INDICATORS_DISABLED, TRUE,
                          NULL);
@@ -1329,6 +1497,7 @@ mm_broadband_modem_simtech_init (MMBroadbandModemSimtech *self)
                                               MM_TYPE_BROADBAND_MODEM_SIMTECH,
                                               MMBroadbandModemSimtechPrivate);
 
+    self->priv->ecm_support = FEATURE_SUPPORT_UNKNOWN;
     self->priv->lpwa_support = FEATURE_SUPPORT_UNKNOWN;
     self->priv->cnaop_support = FEATURE_SUPPORT_UNKNOWN;
     self->priv->cnsmod_support = FEATURE_SUPPORT_UNKNOWN;
@@ -1357,6 +1526,8 @@ iface_modem_init (MMIfaceModem *iface)
     iface_modem_parent = g_type_interface_peek_parent (iface);
     iface->reset = modem_reset;
     iface->reset_finish = modem_reset_finish;
+    iface->create_bearer = modem_create_bearer;
+    iface->create_bearer_finish = modem_create_bearer_finish;
     iface->load_signal_quality = load_signal_quality;
     iface->load_signal_quality_finish = load_signal_quality_finish;
     iface->load_access_technologies = load_access_technologies;

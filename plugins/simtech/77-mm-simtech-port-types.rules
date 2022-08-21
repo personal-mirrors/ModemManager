@@ -37,11 +37,11 @@ ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9001", ENV{.MM_USBIFNUM}=="02", SUBS
 ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9001", ENV{.MM_USBIFNUM}=="03", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1"
 ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9001", ENV{.MM_USBIFNUM}=="04", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AUDIO}="1"
 
-# SIM7070, SIM7080, SIM7090 (default layout)...
+# SIM7070, SIM7080, SIM7090 (ECM layout)...
 ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9205", ENV{.MM_USBIFNUM}=="00", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_QCDM}="1"
 ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9205", ENV{.MM_USBIFNUM}=="01", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_GPS}="1"
 ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9205", ENV{.MM_USBIFNUM}=="02", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1"
-ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9205", ENV{.MM_USBIFNUM}=="03", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_PPP}="1"
+ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9205", ENV{.MM_USBIFNUM}=="03", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1"
 # Disable CPOL based features
 ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9205", ENV{ID_MM_PREFERRED_NETWORKS_CPOL_DISABLED}="1"
 
