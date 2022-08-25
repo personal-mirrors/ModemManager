@@ -164,7 +164,37 @@ log_backend_syslog (const char *loc,
                     const char *message,
                     size_t      length)
 {
-    syslog (syslog_level, "%s", message);
+    gsize total_printed = 0;
+    guint print_size;
+
+#define MAX_SYSLOG_MSG_LENGTH 512
+    if (length <= MAX_SYSLOG_MSG_LENGTH) {
+        syslog (syslog_level, "%s", message);
+        return;
+    }
+
+    /* print first part with 3 dots at the end */
+    print_size = MAX_SYSLOG_MSG_LENGTH - 3;
+    syslog (syslog_level, "%.*s...", print_size, message);
+    total_printed += print_size;
+
+    while (total_printed < length) {
+        gsize    left;
+        gboolean last;
+
+        left = length - total_printed;
+
+        if (left <= (MAX_SYSLOG_MSG_LENGTH - 3)) {
+            last = TRUE;
+            print_size = (guint) left;
+        } else {
+            last = FALSE;
+            print_size = MAX_SYSLOG_MSG_LENGTH - 6;
+        }
+        syslog (syslog_level, "...%.*s%s", print_size, &message[total_printed], last ? "" : "...");
+        total_printed += print_size;
+    }
+#undef MAX_SYSLOG_MSG_LENGTH
 }
 
 #if defined WITH_SYSTEMD_JOURNAL
