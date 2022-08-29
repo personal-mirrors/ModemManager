@@ -2099,7 +2099,7 @@ signal_state_query_ready (MbimDevice   *device,
                 &error))
             g_prefix_error (&error, "Failed processing MBIMEx v2.0 signal state response: ");
         else
-            mm_obj_dbg (self, "proccessed MBIMEx v2.0 signal state response");
+            mm_obj_dbg (self, "processed MBIMEx v2.0 signal state response");
     } else {
         if (!mbim_message_signal_state_response_parse (
                 response,
@@ -2111,7 +2111,7 @@ signal_state_query_ready (MbimDevice   *device,
                 &error))
             g_prefix_error (&error, "Failed processing signal state response: ");
         else
-            mm_obj_dbg (self, "proccessed signal state response");
+            mm_obj_dbg (self, "processed signal state response");
     }
 
     if (error)
@@ -4287,7 +4287,7 @@ basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
             mm_obj_warn (self, "failed processing MBIMEx v2.0 signal state indication: %s", error->message);
             return;
         }
-        mm_obj_dbg (self, "proccessed MBIMEx v2.0 signal state indication");
+        mm_obj_dbg (self, "processed MBIMEx v2.0 signal state indication");
     } else {
         if (!mbim_message_signal_state_notification_parse (
                 notification,
@@ -4300,7 +4300,7 @@ basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
             mm_obj_warn (self, "failed processing signal state indication: %s", error->message);
             return;
         }
-        mm_obj_dbg (self, "proccessed signal state indication");
+        mm_obj_dbg (self, "processed signal state indication");
     }
 
     quality = mm_signal_quality_from_mbim_signal_state (coded_rssi, rsrp_snr, rsrp_snr_count, self);
@@ -4561,7 +4561,7 @@ basic_connect_notification_register_state (MMBroadbandModemMbim *self,
             mm_obj_warn (self, "failed processing MBIMEx v2.0 register state indication: %s", error->message);
             return;
         }
-        mm_obj_dbg (self, "proccessed MBIMEx v2.0 register state indication");
+        mm_obj_dbg (self, "processed MBIMEx v2.0 register state indication");
     } else {
         if (!mbim_message_register_state_notification_parse (
                 notification,
@@ -4574,11 +4574,11 @@ basic_connect_notification_register_state (MMBroadbandModemMbim *self,
                 &provider_name,
                 NULL, /* roaming_text */
                 NULL, /* registration_flag */
-                NULL)) {
+                &error)) {
             mm_obj_warn (self, "failed processing register state indication: %s", error->message);
             return;
         }
-        mm_obj_dbg (self, "proccessed register state indication");
+        mm_obj_dbg (self, "processed register state indication");
     }
 
     update_registration_info (self,
@@ -5980,7 +5980,7 @@ register_state_query_ready (MbimDevice   *device,
                 &error))
             g_prefix_error (&error, "Failed processing MBIMEx v2.0 register state response: ");
         else
-            mm_obj_dbg (self, "proccessed MBIMEx v2.0 register state response");
+            mm_obj_dbg (self, "processed MBIMEx v2.0 register state response");
     } else {
         if (!mbim_message_register_state_response_parse (
                 response,
@@ -5996,7 +5996,7 @@ register_state_query_ready (MbimDevice   *device,
                 &error))
             g_prefix_error (&error, "Failed processing register state response: ");
         else
-            mm_obj_dbg (self, "proccessed register state response");
+            mm_obj_dbg (self, "processed register state response");
     }
 
     if (error) {
@@ -8528,7 +8528,6 @@ query_device_slot_mappings_ready (MbimDevice   *device,
     MMBroadbandModemMbim    *self;
     g_autoptr(MbimMessage)   response = NULL;
     GError                  *error = NULL;
-    g_autoptr(MbimMessage)   message = NULL;
     guint32                  map_count = 0;
     g_autoptr(MbimSlotArray) slot_mappings = NULL;
     LoadSimSlotsContext     *ctx;
@@ -8585,7 +8584,6 @@ query_device_caps_ready (MbimDevice   *device,
     MMBroadbandModemMbim   *self;
     g_autoptr(MbimMessage)  response = NULL;
     GError                 *error = NULL;
-    g_autoptr(MbimMessage)  message = NULL;
     guint32                 executor_index;
 
     self = g_task_get_source_object (task);
