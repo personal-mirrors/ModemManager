@@ -372,8 +372,7 @@ parent_set_initial_eps_bearer_settings (GTask *task)
     mm_obj_info (self, "operator_identifier: '%s' apn='%s'", operator_identifier, apn);
     if (mm_base_modem_get_vendor_id (MM_BASE_MODEM (self)) == 0x2cb7 &&
         mm_base_modem_get_product_id (MM_BASE_MODEM (self)) == 0x0007 &&
-        operator_identifier && g_strcmp0(operator_identifier, "310280") == 0 &&
-        apn && g_strcasecmp(apn, "broadband") == 0) {
+        operator_identifier && g_strcmp0(operator_identifier, "310280") == 0) {
         mm_obj_info (self, "executing custom attach logic for AT&T 310280");
         parent_att_hack_set_initial_eps_bearer_settings (MM_IFACE_MODEM_3GPP (self),
                                                          ctx->config,
