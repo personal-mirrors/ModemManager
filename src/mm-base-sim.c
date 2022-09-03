@@ -2330,6 +2330,7 @@ typedef enum {
     INITIALIZATION_STEP_SIM_IDENTIFIER,
     INITIALIZATION_STEP_IMSI,
     INITIALIZATION_STEP_OPERATOR_ID,
+    INITIALIZATION_STEP_OPERATOR_ID_RETRY,
     INITIALIZATION_STEP_OPERATOR_NAME,
     INITIALIZATION_STEP_EMERGENCY_NUMBERS,
     INITIALIZATION_STEP_PREFERRED_NETWORKS,
@@ -2663,6 +2664,26 @@ interface_initialization_step (GTask *task)
         /* Fall through */
 
     case INITIALIZATION_STEP_OPERATOR_ID:
+        /* Don't load operator ID if the SIM is known to be an eSIM without
+         * profiles; otherwise (if physical SIM, or if eSIM with profile, or if
+         * SIM type unknown) try to load it. */
+        if (IS_ESIM_WITHOUT_PROFILES (self))
+            mm_obj_dbg (self, "not loading operator ID in eSIM without profiles");
+        else if (mm_gdbus_sim_get_operator_identifier (MM_GDBUS_SIM (self)) == NULL &&
+                 MM_BASE_SIM_GET_CLASS (self)->load_operator_identifier &&
+                 MM_BASE_SIM_GET_CLASS (self)->load_operator_identifier_finish) {
+            MM_BASE_SIM_GET_CLASS (self)->load_operator_identifier (
+                self,
+                (GAsyncReadyCallback)init_load_operator_identifier_ready,
+                task);
+            return;
+        }
+        ctx->step++;
+        /* Fall through */
+
+    case INITIALIZATION_STEP_OPERATOR_ID_RETRY:
+        /* This is a retry of the previous step. The query only happens if the
+         *  operator_identifier is still null. */
         /* Don't load operator ID if the SIM is known to be an eSIM without
          * profiles; otherwise (if physical SIM, or if eSIM with profile, or if
          * SIM type unknown) try to load it. */
