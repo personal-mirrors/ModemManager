@@ -222,7 +222,7 @@ handle_set_power_level_auth_ready (MMBaseModem                *self,
         return;
     }
 
-    mm_obj_dbg (self, "Set SAR power level to: '%d'", ctx->power_level);
+    mm_obj_info (self, "Set SAR power level to: '%d'", ctx->power_level);
     MM_IFACE_MODEM_SAR_GET_INTERFACE (ctx->self)->set_power_level (
         ctx->self,
         ctx->power_level,

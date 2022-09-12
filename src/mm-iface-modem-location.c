@@ -348,7 +348,8 @@ notify_3gpp_location_update (MMIfaceModemLocation *self,
     const gchar *operator_code;
 
     operator_code = mm_location_3gpp_get_operator_code (location_3gpp);
-    mm_obj_dbg (self, "3GPP location updated "
+    mm_obj_info (self, "3GPP location updated");
+    mm_obj_dbg (self,
                 "(MCCMNC: '%s', location area code: '%04lX', tracking area code: '%06lX', cell ID: '%08lX')",
                 operator_code ? operator_code : "<none>",
                 mm_location_3gpp_get_location_area_code (location_3gpp),

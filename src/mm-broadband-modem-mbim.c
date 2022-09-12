@@ -461,7 +461,7 @@ complete_current_capabilities (GTask *task)
          * capability and mode related operations are going to be done via QMI as well, so that we
          * don't mix both logics */
         if (self->priv->qmi_capability_and_mode_switching)
-            mm_obj_info (self, "QMI-based capability and mode switching support enabled");
+            mm_obj_dbg (self, "QMI-based capability and mode switching support enabled");
     }
 #else
     result = ctx->current_mbim;
@@ -480,6 +480,8 @@ device_caps_query_ready (MbimDevice *device,
     MbimMessage                    *response;
     GError                         *error = NULL;
     LoadCurrentCapabilitiesContext *ctx;
+    g_autofree gchar               *caps_data_class_str = NULL;
+    g_autofree gchar               *caps_sms_str = NULL;
 
     self = g_task_get_source_object (task);
     ctx  = g_task_get_task_data (task);
@@ -506,7 +508,9 @@ device_caps_query_ready (MbimDevice *device,
         g_object_unref (task);
         goto out;
     }
-
+    caps_data_class_str = mbim_data_class_build_string_from_mask (self->priv->caps_data_class);
+    caps_sms_str = mbim_sms_caps_build_string_from_mask (self->priv->caps_sms);
+    mm_obj_info (self, "DataClass = %s, SmsCaps = %s, CustomDataClass = %s, FirmwareInfo = %s", caps_data_class_str, caps_sms_str, self->priv->caps_custom_data_class, self->priv->caps_firmware_info);
     ctx->current_mbim = mm_modem_capability_from_mbim_device_caps (self->priv->caps_cellular_class,
                                                                    self->priv->caps_data_class,
                                                                    self->priv->caps_custom_data_class);
@@ -1441,10 +1445,13 @@ pin_query_ready (MbimDevice *device,
                  GAsyncResult *res,
                  GTask *task)
 {
+    MMBroadbandModemMbim *self;
     MbimMessage *response;
     GError *error = NULL;
     MbimPinType pin_type;
     MbimPinState pin_state;
+
+    self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
@@ -1457,6 +1464,7 @@ pin_query_ready (MbimDevice *device,
             &error)) {
         MMModemLock unlock_required;
 
+        mm_obj_info (self, "Pin Query: pin_type = %s pin_state = %s", mbim_pin_type_get_string (pin_type), mbim_pin_state_get_string (pin_state));
         if (pin_state == MBIM_PIN_STATE_UNLOCKED)
             unlock_required = MM_MODEM_LOCK_NONE;
         else
@@ -1534,6 +1542,8 @@ unlock_required_subscriber_ready_state_ready (MbimDevice   *device,
     }
 
     if (!error) {
+        mm_obj_info (self, "Subscriber Ready Status: ready_state = %s", mbim_subscriber_ready_state_get_string (ready_state));
+
         /* Store last valid status loaded */
         self->priv->last_ready_state = ready_state;
 
@@ -1758,6 +1768,7 @@ own_numbers_subscriber_ready_state_ready (MbimDevice   *device,
     g_autoptr(MbimMessage)   response = NULL;
     GError                  *error = NULL;
     gchar                  **telephone_numbers;
+    guint                    telephone_numbers_count;
 
     self = g_task_get_source_object (task);
 
@@ -1776,7 +1787,7 @@ own_numbers_subscriber_ready_state_ready (MbimDevice   *device,
                 NULL, /* subscriber id */
                 NULL, /* sim_iccid */
                 NULL, /* ready_info */
-                NULL, /* telephone_numbers_count */
+                &telephone_numbers_count, /* telephone_numbers_count */
                 &telephone_numbers,
                 &error))
             g_prefix_error (&error, "Failed processing MBIMEx v3.0 subscriber ready status response: ");
@@ -1789,14 +1800,14 @@ own_numbers_subscriber_ready_state_ready (MbimDevice   *device,
                 NULL, /* subscriber id */
                 NULL, /* sim_iccid */
                 NULL, /* ready_info */
-                NULL, /* telephone_numbers_count */
+                &telephone_numbers_count, /* telephone_numbers_count */
                 &telephone_numbers,
                 &error))
             g_prefix_error (&error, "Failed processing subscriber ready status response: ");
         else
             mm_obj_dbg (self, "processed subscriber ready status response");
     }
-
+    mm_obj_info (self, "telephone numbers count = %d", telephone_numbers_count);
     if (error)
         g_task_return_error (task, error);
     else
@@ -1851,10 +1862,13 @@ radio_state_query_ready (MbimDevice *device,
                          GAsyncResult *res,
                          GTask *task)
 {
+    MMBroadbandModemMbim *self;
     MbimMessage *response;
     GError *error = NULL;
     MbimRadioSwitchState hardware_radio_state;
     MbimRadioSwitchState software_radio_state;
+
+    self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
     if (response &&
@@ -1866,6 +1880,7 @@ radio_state_query_ready (MbimDevice *device,
             &error)) {
         MMModemPowerState state;
 
+        mm_obj_info (self, "HW radio state = %s, SW radio state =%s", mbim_radio_switch_state_get_string (hardware_radio_state), mbim_radio_switch_state_get_string (software_radio_state));
         if (hardware_radio_state == MBIM_RADIO_SWITCH_STATE_OFF ||
             software_radio_state == MBIM_RADIO_SWITCH_STATE_OFF)
             state = MM_MODEM_POWER_STATE_LOW;
@@ -1936,6 +1951,7 @@ radio_state_set_up_ready (MbimDevice   *device,
             &hardware_radio_state,
             &software_radio_state,
             &error)) {
+        mm_obj_info (self, "HW radio state = %s, SW radio state =%s", mbim_radio_switch_state_get_string (hardware_radio_state), mbim_radio_switch_state_get_string (software_radio_state));
         if (hardware_radio_state == MBIM_RADIO_SWITCH_STATE_OFF)
             error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                                  "Cannot power-up: hardware radio switch is OFF");
@@ -2994,7 +3010,7 @@ query_device_services_ready (MbimDevice   *device,
     GError *error = NULL;
     MbimDeviceServiceElement **device_services;
     guint32 device_services_count;
-
+    GString *supported_services;
     self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
@@ -3008,6 +3024,7 @@ query_device_services_ready (MbimDevice   *device,
             &error)) {
         guint32 i;
 
+        supported_services = g_string_new ("");
         for (i = 0; i < device_services_count; i++) {
             MbimService service;
             guint32     j;
@@ -3017,7 +3034,9 @@ query_device_services_ready (MbimDevice   *device,
             if (service == MBIM_SERVICE_BASIC_CONNECT) {
                 for (j = 0; j < device_services[i]->cids_count; j++) {
                     if (device_services[i]->cids[j] == MBIM_CID_BASIC_CONNECT_PROVISIONED_CONTEXTS) {
-                        mm_obj_dbg (self, "Profile management is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "Profile management, ");
                         self->priv->is_profile_management_supported = TRUE;
                     }
                 }
@@ -3027,26 +3046,38 @@ query_device_services_ready (MbimDevice   *device,
             if (service == MBIM_SERVICE_MS_BASIC_CONNECT_EXTENSIONS) {
                 for (j = 0; j < device_services[i]->cids_count; j++) {
                     if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_PCO) {
-                        mm_obj_dbg (self, "PCO is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "PCO, ");
                         self->priv->is_pco_supported = TRUE;
                     } else if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_LTE_ATTACH_INFO) {
-                        mm_obj_dbg (self, "LTE attach info is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "LTE Attach Info, ");
                         self->priv->is_lte_attach_info_supported = TRUE;
                     } else if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_SLOT_INFO_STATUS) {
-                        mm_obj_dbg (self, "Slot info status is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "Slot info status, ");
                         self->priv->is_slot_info_status_supported = TRUE;
                     } else if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_REGISTRATION_PARAMETERS) {
-                        mm_obj_dbg (self, "5GNR registration settings are supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "5GNR registration settings, ");
                         self->priv->is_nr5g_registration_settings_supported = TRUE;
                     } else if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_BASE_STATIONS_INFO) {
-                        mm_obj_dbg (self, "Base stations info is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "Base stations info, ");
                         self->priv->is_base_stations_info_supported = TRUE;
                     } else if (device_services[i]->cids[j] == MBIM_CID_MS_BASIC_CONNECT_EXTENSIONS_PROVISIONED_CONTEXTS) {
                         if (mm_context_get_test_mbimex_profile_management ()) {
-                            mm_obj_dbg (self, "Profile management extension is supported");
+                            g_string_append_printf (supported_services,
+                                                    "%s",
+                                                    "Profile management extension, ");
                             self->priv->is_profile_management_ext_supported = TRUE;
                         } else
-                            mm_obj_dbg (self, "Profile management extension is supported but not allowed");
+                            mm_obj_info (self, "Profile management extension is supported but not allowed");
                     }
                 }
                 continue;
@@ -3055,7 +3086,9 @@ query_device_services_ready (MbimDevice   *device,
             if (service == MBIM_SERVICE_USSD) {
                 for (j = 0; j < device_services[i]->cids_count; j++) {
                     if (device_services[i]->cids[j] == MBIM_CID_USSD) {
-                        mm_obj_dbg (self, "USSD is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "USSD, ");
                         self->priv->is_ussd_supported = TRUE;
                         break;
                     }
@@ -3066,10 +3099,14 @@ query_device_services_ready (MbimDevice   *device,
             if (service == MBIM_SERVICE_ATDS) {
                 for (j = 0; j < device_services[i]->cids_count; j++) {
                     if (device_services[i]->cids[j] == MBIM_CID_ATDS_LOCATION) {
-                        mm_obj_dbg (self, "ATDS location is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "ATDS location, ");
                         self->priv->is_atds_location_supported = TRUE;
                     } else if (device_services[i]->cids[j] == MBIM_CID_ATDS_SIGNAL) {
-                        mm_obj_dbg (self, "ATDS signal is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "ATDS signal, ");
                         self->priv->is_atds_signal_supported = TRUE;
                     }
                 }
@@ -3078,12 +3115,14 @@ query_device_services_ready (MbimDevice   *device,
 
             if (service == MBIM_SERVICE_INTEL_FIRMWARE_UPDATE) {
                 if (self->priv->intel_firmware_update_unsupported) {
-                    mm_obj_dbg (self, "Intel firmware update service is explicitly ignored");
+                    mm_obj_info (self, "Intel firmware update service is explicitly ignored");
                     continue;
                 }
                 for (j = 0; j < device_services[i]->cids_count; j++) {
                     if (device_services[i]->cids[j] == MBIM_CID_INTEL_FIRMWARE_UPDATE_MODEM_REBOOT) {
-                        mm_obj_dbg (self, "Intel reset is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "Intel reset, ");
                         self->priv->is_intel_reset_supported = TRUE;
                     }
                 }
@@ -3093,15 +3132,18 @@ query_device_services_ready (MbimDevice   *device,
             if (service == MBIM_SERVICE_MS_SAR) {
                 for (j = 0; j < device_services[i]->cids_count; j++) {
                     if (device_services[i]->cids[j] == MBIM_CID_MS_SAR_CONFIG) {
-                        mm_obj_dbg (self, "SAR is supported");
+                        g_string_append_printf (supported_services,
+                                                "%s",
+                                                "SAR, ");
                         self->priv->is_ms_sar_supported = TRUE;
                     }
                 }
                 continue;
             }
-
             /* no optional features to check in remaining services */
         }
+        mm_obj_info (self, "%s are supported", supported_services->str);
+        g_string_free (supported_services, TRUE);
         mbim_device_service_element_array_free (device_services);
     } else {
         /* Ignore error */
@@ -3151,8 +3193,8 @@ mbim_device_removed_cb (MbimDevice           *device,
 {
     /* We have to do a full re-probe here because simply reopening the device
      * and restarting mbim-proxy will leave us without MBIM notifications. */
-    mm_obj_info (self, "connection to mbim-proxy for %s lost, reprobing",
-                 mbim_device_get_path_display (device));
+    mm_obj_msg (self, "connection to mbim-proxy for %s lost, reprobing",
+                mbim_device_get_path_display (device));
 
     g_signal_handler_disconnect (device,
                                  self->priv->mbim_device_removed_id);
@@ -3726,7 +3768,7 @@ lte_attach_info_query_ready (MbimDevice   *device,
         else
             mm_obj_dbg (self, "processed LTE attach info response");
     }
-
+    mm_obj_info (self, "lte-attach-info: LteAttachState = %s, IpType = %s, Compression = %s, AuthProtocol = %s", mbim_lte_attach_state_get_string (lte_attach_state), mbim_context_ip_type_get_string (ip_type), mbim_compression_get_string (compression), mbim_auth_protocol_get_string (auth_protocol));
     properties = common_process_lte_attach_info (self,
                                                  lte_attach_state,
                                                  ip_type,
@@ -3745,9 +3787,9 @@ lte_attach_info_query_ready (MbimDevice   *device,
 
             nw_error_str = mbim_nw_error_get_string (nw_error);
             if (nw_error_str)
-                mm_obj_dbg (self, "LTE attach info network error reported: %s", nw_error_str);
+                mm_obj_info (self, "LTE attach info network error reported: %s", nw_error_str);
             else
-                mm_obj_dbg (self, "LTE attach info network error reported: 0x%x", nw_error);
+                mm_obj_info (self, "LTE attach info network error reported: 0x%x", nw_error);
         }
         g_task_return_pointer (task, properties, g_object_unref);
     } else {
@@ -3855,6 +3897,18 @@ lte_attach_configuration_query_ready (MbimDevice   *device,
         g_task_return_error (task, error);
         g_object_unref (task);
         goto out;
+    }
+
+    for (i = 0; i < n_configurations; i++) {
+        mm_obj_info (self,
+                     "lte-attach-configuration response %d: Apn = %s, IpType = %s, Roaming = %s, AuthProtocol = %s, Source = %s",
+                     i,
+                     configurations[i]->access_string,
+                     mbim_context_ip_type_get_string (configurations[i]->ip_type),
+                     mbim_lte_attach_context_roaming_control_get_string (
+                         configurations[i]->roaming),
+                     mbim_auth_protocol_get_string (configurations[i]->auth_protocol),
+                     mbim_context_source_get_string (configurations[i]->source));
     }
 
     /* We should always receive 3 configurations but the MBIM API doesn't force
@@ -4526,6 +4580,7 @@ basic_connect_notification_register_state (MMBroadbandModemMbim *self,
                                            MbimMessage          *notification)
 {
     g_autoptr(GError)  error = NULL;
+    MbimNwError        nw_error;
     MbimRegisterState  register_state;
     MbimDataClass      available_data_classes;
     gchar             *provider_id;
@@ -4535,7 +4590,7 @@ basic_connect_notification_register_state (MMBroadbandModemMbim *self,
     if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
         if (!mbim_message_ms_basic_connect_v2_register_state_notification_parse (
                 notification,
-                NULL, /* nw_error */
+                &nw_error, /* nw_error */
                 &register_state,
                 NULL, /* register_mode */
                 &available_data_classes,
@@ -4553,7 +4608,7 @@ basic_connect_notification_register_state (MMBroadbandModemMbim *self,
     } else {
         if (!mbim_message_register_state_notification_parse (
                 notification,
-                NULL, /* nw_error */
+                &nw_error, /* nw_error */
                 &register_state,
                 NULL, /* register_mode */
                 &available_data_classes,
@@ -4569,6 +4624,13 @@ basic_connect_notification_register_state (MMBroadbandModemMbim *self,
         mm_obj_dbg (self, "processed register state indication");
     }
 
+    mm_obj_info (self,
+                 "Register State : register_state = %s, available_data_classes = %s, provider_id = %s, provider_name = %s, nw_error = %s",
+                 mbim_register_state_get_string (register_state),
+                 mbim_data_class_build_string_from_mask (available_data_classes),
+                 provider_id,
+                 provider_name,
+                 mbim_nw_error_get_string (nw_error));
     update_registration_info (self,
                               FALSE,
                               register_state,
@@ -5938,6 +6000,7 @@ register_state_query_ready (MbimDevice   *device,
     g_autoptr(MbimMessage)  response = NULL;
     MMBroadbandModemMbim   *self;
     GError                 *error = NULL;
+    MbimNwError             nw_error;
     MbimRegisterState       register_state;
     MbimDataClass           available_data_classes;
     gchar                  *provider_id;
@@ -5955,7 +6018,7 @@ register_state_query_ready (MbimDevice   *device,
     if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
         if (!mbim_message_ms_basic_connect_v2_register_state_response_parse (
                 response,
-                NULL, /* nw_error */
+                &nw_error,
                 &register_state,
                 NULL, /* register_mode */
                 &available_data_classes,
@@ -5972,7 +6035,7 @@ register_state_query_ready (MbimDevice   *device,
     } else {
         if (!mbim_message_register_state_response_parse (
                 response,
-                NULL, /* nw_error */
+                &nw_error,
                 &register_state,
                 NULL, /* register_mode */
                 &available_data_classes,
@@ -5992,6 +6055,12 @@ register_state_query_ready (MbimDevice   *device,
         g_object_unref (task);
         return;
     }
+    mm_obj_info (self, "Register State : register_state = %s, available_data_classes = %s, provider_id = %s, provider_name = %s, nw_error = %s",
+                 mbim_register_state_get_string (register_state),
+                 mbim_data_class_build_string_from_mask (available_data_classes),
+                 provider_id,
+                 provider_name,
+                 mbim_nw_error_get_string (nw_error));
 
     update_registration_info (self,
                               FALSE,
@@ -7901,7 +7970,7 @@ sms_read_query_ready (MbimDevice *device,
             NULL, /* cdma_messages */
             &error)) {
         guint i;
-
+        mm_obj_info (self, "sms-read: MessagesCount = %d", messages_count);
         for (i = 0; i < messages_count; i++)
             add_sms_part (self, pdu_messages[i]);
         mbim_sms_pdu_read_record_array_free (pdu_messages);
@@ -8471,6 +8540,7 @@ query_slot_information_status_ready (MbimDevice   *device,
     if ((slot_index + 1) == ctx->active_slot_index)
         sim_active = TRUE;
 
+    mm_obj_info (self, "Slot %d is in state = %s", slot_index, mbim_uicc_slot_state_get_string (slot_state));
     sim = create_sim_from_slot_state (self, sim_active, slot_index, slot_state);
     g_ptr_array_add (ctx->sim_slots, sim);
 
@@ -8537,6 +8607,7 @@ query_device_slot_mappings_ready (MbimDevice   *device,
     /* the slot index in MM starts at 1 */
     ctx->active_slot_index = slot_mappings[self->priv->executor_index]->slot + 1;
     self->priv->active_slot_index = ctx->active_slot_index;
+    mm_obj_info (self, "Slot %d is active (slot index starts at 1)", ctx->active_slot_index);
 
     query_slot_information_status (device, ctx->query_slot_index, task);
 }
@@ -8628,7 +8699,7 @@ query_sys_caps_ready (MbimDevice   *device,
         g_object_unref (task);
         return;
     }
-
+    mm_obj_info (self, "Number of Executors: %d, Number of Slots: %d, Concurrency: %d", number_executors, number_slots, concurrency);
     if (number_slots == 1) {
         g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
                                  "Only one SIM slot is supported");

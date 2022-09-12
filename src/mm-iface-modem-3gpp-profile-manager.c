@@ -759,7 +759,7 @@ get_profile_list_ready (MMIfaceModem3gppProfileManager *self,
         g_object_unref (task);
         return;
     }
-
+    print_mm_3gpp_profiles (profiles, (GObject *) self);
     profile = mm_3gpp_profile_list_find_by_profile_id (profiles, profile_id, &error);
     mm_3gpp_profile_list_free (profiles);
 
@@ -861,6 +861,8 @@ internal_list_profiles_ready (MMIfaceModem3gppProfileManager *self,
         g_task_return_error (task, error);
     else
         g_task_return_boolean (task, TRUE);
+
+    print_mm_3gpp_profiles (ctx->profiles, (GObject *) self);
     g_object_unref (task);
 }
 

@@ -959,7 +959,7 @@ handle_send_puk_ready (MMBaseSim *self,
         mm_gdbus_sim_complete_send_puk (MM_GDBUS_SIM (self), ctx->invocation);
 
     if (sim_error) {
-        mm_obj_info (self, "Received critical sim error. SIM might be permanently blocked. Reprobing...");
+        mm_obj_msg (self, "received critical sim error: SIM might be permanently blocked, reprobing...");
         mm_iface_modem_process_sim_event (MM_IFACE_MODEM (self->priv->modem));
     }
 
@@ -2392,7 +2392,7 @@ initable_init_finish (GAsyncInitable  *initable,
             mm_obj_warn (self, "couldn't load %s: %s", DISPLAY, error->message); \
             g_error_free (error);                                       \
         }                                                               \
-                                                                        \
+        mm_obj_info (self, "loaded %s", DISPLAY);                       \
         /* Go on to next step */                                        \
         ctx = g_task_get_task_data (task);                              \
         ctx->step++;                                                    \

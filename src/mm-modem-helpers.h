@@ -461,6 +461,8 @@ MM3gppProfile *mm_3gpp_profile_new_from_pdp_context (MM3gppPdpContext *pdp_conte
 /* Profile list operations */
 GList *mm_3gpp_profile_list_new_from_pdp_context_list (GList *pdp_context_list);
 void   mm_3gpp_profile_list_free                      (GList *profile_list);
+void   print_mm_3gpp_profiles (GList   *profiles,
+                               GObject *log_object);
 
 gint   mm_3gpp_profile_list_find_empty (GList                  *profile_list,
                                         gint                    min_profile_id,

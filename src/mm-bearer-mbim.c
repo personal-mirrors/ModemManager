@@ -366,8 +366,8 @@ ip_configuration_query_ready (MbimDevice   *device,
         /* IPv4 info */
 
         ipv4configurationavailable_str = mbim_ip_configuration_available_flag_build_string_from_mask (ipv4configurationavailable);
-        mm_obj_dbg (self, "IPv4 configuration available: '%s'", ipv4configurationavailable_str);
-
+        mm_obj_info (self, "IPv4 configuration available: '%s'", ipv4configurationavailable_str);
+        mm_obj_info (self, "IPv4AddressCount: %d, IPv4Gateway: %s, IPv4DnsServerCount: %d, IPv4Mtu: %d ", ipv4addresscount, ipv4gateway ? "available" : "unavailable", ipv4dnsservercount, ipv4mtu);
         if ((ipv4configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_ADDRESS) && ipv4addresscount) {
             guint i;
 
@@ -414,7 +414,8 @@ ip_configuration_query_ready (MbimDevice   *device,
         /* IPv6 info */
 
         ipv6configurationavailable_str = mbim_ip_configuration_available_flag_build_string_from_mask (ipv6configurationavailable);
-        mm_obj_dbg (self, "IPv6 configuration available: '%s'", ipv6configurationavailable_str);
+        mm_obj_info (self, "IPv6 configuration available: '%s'", ipv6configurationavailable_str);
+        mm_obj_info (self, "IPv6AddressCount: %d, IPv6Gateway: %s, IPv6DnsServerCount: %d, IPv6Mtu: %d ", ipv6addresscount, ipv6gateway ? "available" : "unavailable", ipv6dnsservercount, ipv6mtu);
 
         if ((ipv6configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_ADDRESS) && ipv6addresscount) {
             guint i;
@@ -705,7 +706,7 @@ connect_set_ready (MbimDevice   *device,
             error = g_steal_pointer (&inner_error);
     } else {
         /* Report the IP type we asked for and the one returned by the modem */
-        mm_obj_dbg (self, "session ID '%u': %s (requested IP type: %s, activated IP type: %s, nw error: %s)",
+        mm_obj_info (self, "session ID '%u': %s (requested IP type: %s, activated IP type: %s, nw error: %s)",
                     session_id,
                     mbim_activation_state_get_string (activation_state),
                     mbim_context_ip_type_get_string (ctx->requested_ip_type),
@@ -798,7 +799,7 @@ check_disconnected_ready (MbimDevice   *device,
     }
 
     if (activation_state != MBIM_ACTIVATION_STATE_UNKNOWN)
-        mm_obj_dbg (self, "session ID '%u': %s", session_id, mbim_activation_state_get_string (activation_state));
+        mm_obj_info (self, "session ID '%u': %s", session_id, mbim_activation_state_get_string (activation_state));
 
     /* Some modem (e.g. Huawei ME936) reports MBIM_ACTIVATION_STATE_UNKNOWN
      * when being queried for the activation state before an IP session has
@@ -882,7 +883,7 @@ setup_link_ready (MMPortMbim    *mbim,
 
     /* From now on link_name will be set, and we'll use that to know
      * whether we should cleanup the link upon a connection failure */
-    mm_obj_info (self, "net link %s created (session id %u)", ctx->link_name, ctx->session_id);
+    mm_obj_msg (self, "net link %s created (session id %u)", ctx->link_name, ctx->session_id);
 
     /* Wait for the data port with the given interface name, which will be
      * added asynchronously */
@@ -975,13 +976,13 @@ packet_service_set_ready (MbimDevice *device,
                     data_class_str = mbim_data_class_build_string_from_mask (data_class);
 
                 frequency_range_str = mbim_frequency_range_build_string_from_mask (frequency_range);
-                mm_obj_dbg (self, "packet service update:");
-                mm_obj_dbg (self, "           state: '%s'", mbim_packet_service_state_get_string (packet_service_state));
-                mm_obj_dbg (self, "      data class: '%s'", data_class_str);
+                mm_obj_info (self, "packet service update:");
+                mm_obj_info (self, "           state: '%s'", mbim_packet_service_state_get_string (packet_service_state));
+                mm_obj_info (self, "      data class: '%s'", data_class_str);
                 if (data_subclass_str)
-                    mm_obj_dbg (self, "   data subclass: '%s'", data_subclass_str);
-                mm_obj_dbg (self, "          uplink: '%" G_GUINT64_FORMAT "' bps", uplink_speed);
-                mm_obj_dbg (self, "        downlink: '%" G_GUINT64_FORMAT "' bps", downlink_speed);
+                    mm_obj_info (self, "   data subclass: '%s'", data_subclass_str);
+                mm_obj_info (self, "          uplink: '%" G_GUINT64_FORMAT "' bps", uplink_speed);
+                mm_obj_info (self, "        downlink: '%" G_GUINT64_FORMAT "' bps", downlink_speed);
                 mm_obj_dbg (self, " frequency range: '%s'", frequency_range_str);
             }
         } else {
@@ -1223,8 +1224,8 @@ connect_context_step (GTask *task)
     case CONNECT_STEP_CONNECT: {
         MbimDevice *device;
 
-        mm_obj_dbg (self, "launching %s connection in session %u...",
-                    mbim_context_ip_type_get_string (ctx->requested_ip_type), ctx->session_id);
+        mm_obj_info (self, "launching %s connection in session %u with apn %s...",
+                    mbim_context_ip_type_get_string (ctx->requested_ip_type), ctx->session_id, ctx->apn ? ctx->apn : "NULL");
 
         device = mm_port_mbim_peek_device (ctx->mbim);
         if (mbim_device_check_ms_mbimex_version (device, 3, 0))
@@ -1442,7 +1443,7 @@ _connect (MMBaseBearer        *self,
         return;
     }
 
-    mm_obj_dbg (self, "launching %sconnection with data port (%s/%s)",
+    mm_obj_info (self, "launching %s connection with data port (%s/%s)",
                 ctx->link_prefix_hint ? "multiplexed " : "",
                 mm_port_subsys_get_string (mm_port_get_subsys (data)),
                 mm_port_get_device (data));
@@ -1672,7 +1673,7 @@ disconnect (MMBaseBearer        *_self,
         return;
     }
 
-    mm_obj_dbg (self, "launching disconnection on data port (%s/%s)",
+    mm_obj_info (self, "launching disconnection on data port (%s/%s)",
                 mm_port_subsys_get_string (mm_port_get_subsys (self->priv->data)),
                 mm_port_get_device (self->priv->data));
 
