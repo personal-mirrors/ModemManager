@@ -32,6 +32,8 @@
 #include "mm-modem-helpers-mbim.h"
 #include "mm-sim-mbim.h"
 
+#define MS_UICC_LOW_LEVEL_SUPPORTED_VERSION 0x01
+
 G_DEFINE_TYPE (MMSimMbim, mm_sim_mbim, MM_TYPE_BASE_SIM)
 
 struct _MMSimMbimPrivate {
@@ -43,6 +45,8 @@ struct _MMSimMbimPrivate {
     MMSimType          sim_type;
     MMSimEsimStatus    esim_status;
     MMSimRemovability  removability;
+    GByteArray        *application_id;
+    GError            *application_id_error;
 
     /* need to get notified when a full sync of the info
      * is needed, so that we clear the preloaded data. */
@@ -158,6 +162,8 @@ reset_subscriber_info (MMSimMbim *self)
     self->priv->sim_type = MM_SIM_TYPE_UNKNOWN;
     self->priv->esim_status = MM_SIM_ESIM_STATUS_UNKNOWN;
     self->priv->removability = MM_SIM_REMOVABILITY_UNKNOWN;
+    g_clear_pointer (&self->priv->application_id, g_byte_array_unref);
+    g_clear_error (&self->priv->application_id_error);
 }
 
 static gboolean
@@ -166,6 +172,70 @@ preload_subscriber_info_finish (MMSimMbim     *self,
                                 GError       **error)
 {
     return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+application_list_query_ready (MbimDevice   *device,
+                              GAsyncResult *res,
+                              GTask        *task)
+{
+    MMSimMbim                          *self;
+    g_autoptr(MbimMessage)              response = NULL;
+    guint32                             version;
+    guint32                             application_count;
+    guint32                             active_application_index;
+    g_autoptr(MbimUiccApplicationArray) applications = NULL;
+
+    self = g_task_get_source_object (task);
+
+    g_assert (!self->priv->application_id);
+    g_assert (!self->priv->application_id_error);
+
+    response = mbim_device_command_finish (device, res, &self->priv->application_id_error);
+    if (response &&
+        mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &self->priv->application_id_error) &&
+        mbim_message_ms_uicc_low_level_access_application_list_response_parse (
+            response,
+            &version,
+            &application_count,
+            &active_application_index,
+            NULL, /* application_list_size_bytes */
+            &applications,
+            &self->priv->application_id_error)) {
+        mm_obj_dbg (self, "processed MS UICC low level access application list response");
+        if (version != MS_UICC_LOW_LEVEL_SUPPORTED_VERSION)
+            self->priv->application_id_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+                                                            "Application list version %u is not supported",
+                                                            version);
+        else if (active_application_index >= application_count)
+            self->priv->application_id_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                                                            "Invalid active application index: %u >= %u",
+                                                            active_application_index, application_count);
+        else
+            self->priv->application_id = g_byte_array_append (g_byte_array_sized_new (applications[active_application_index]->application_id_size),
+                                                              applications[active_application_index]->application_id,
+                                                              applications[active_application_index]->application_id_size);
+    }
+
+    /* At this point we just complete, as all the info and errors have already
+     * been stored */
+    g_task_return_boolean (task, TRUE);
+    g_object_unref (task);
+}
+
+static void
+uicc_application_list (GTask      *task,
+                       MbimDevice *device)
+{
+    g_autoptr(MbimMessage) message = NULL;
+
+    message = mbim_message_ms_uicc_low_level_access_application_list_query_new (NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)application_list_query_ready,
+                         task);
 }
 
 static void
@@ -244,10 +314,23 @@ subscriber_ready_status_ready (MbimDevice   *device,
             self->priv->iccid = mm_3gpp_parse_iccid (raw_iccid, &self->priv->iccid_error);
     }
 
-    /* At this point we just complete, as all the info and errors have already
-     * been stored */
-    g_task_return_boolean (task, TRUE);
-    g_object_unref (task);
+    /* Go on to preload next contents */
+    uicc_application_list (task, device);
+}
+
+static void
+subscriber_ready_status (GTask      *task,
+                         MbimDevice *device)
+{
+    g_autoptr(MbimMessage) message = NULL;
+
+    message = mbim_message_subscriber_ready_status_query_new (NULL);
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)subscriber_ready_status_ready,
+                         task);
 }
 
 static void
@@ -255,9 +338,8 @@ preload_subscriber_info (MMSimMbim           *self,
                          GAsyncReadyCallback  callback,
                          gpointer             user_data)
 {
-    GTask                  *task;
-    MbimDevice             *device;
-    g_autoptr(MbimMessage)  message = NULL;
+    GTask      *task;
+    MbimDevice *device;
 
     if (!peek_device (self, &device, callback, user_data))
         return;
@@ -281,13 +363,7 @@ preload_subscriber_info (MMSimMbim           *self,
 
 #endif
 
-    message = mbim_message_subscriber_ready_status_query_new (NULL);
-    mbim_device_command (device,
-                         message,
-                         10,
-                         NULL,
-                         (GAsyncReadyCallback)subscriber_ready_status_ready,
-                         task);
+    subscriber_ready_status (task, device);
 }
 
 /*****************************************************************************/
@@ -584,7 +660,7 @@ check_uicc_open_channel_ready (MbimDevice   *device,
         ctx->step = ESIM_CHECK_STEP_LAST;
     } else if (status != UICC_STATUS_OK) {
         ctx->saved_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
-                                        "UICC open channel failed");;
+                                        "UICC open channel failed");
         ctx->step = ESIM_CHECK_STEP_LAST;
     } else {
         /* channel is open, from now on we'll need to always explicitly close,
@@ -836,6 +912,178 @@ load_operator_name (MMBaseSim *self,
                          (GAsyncReadyCallback)load_operator_name_ready,
                          task);
     mbim_message_unref (message);
+}
+
+/*****************************************************************************/
+/* Common method to read transparent files */
+
+typedef struct {
+    MbimDevice *device;
+    GByteArray *file_path;
+} CommonReadBinaryContext;
+
+static void
+common_read_binary_context_free (CommonReadBinaryContext *ctx)
+{
+    g_byte_array_unref (ctx->file_path);
+    g_object_unref (ctx->device);
+    g_slice_free (CommonReadBinaryContext, ctx);
+}
+
+static GByteArray *
+common_read_binary_finish (MMBaseSim     *self,
+                           GAsyncResult  *res,
+                           GError       **error)
+{
+    return g_task_propagate_pointer (G_TASK (res), error);
+}
+
+static void
+read_binary_query_ready (MbimDevice   *device,
+                         GAsyncResult *res,
+                         GTask        *task)
+{
+    g_autoptr(MbimMessage)  response = NULL;
+    GError                 *error = NULL;
+    const guint8           *data;
+    guint32                 data_size;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response ||
+        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
+        !mbim_message_ms_uicc_low_level_access_read_binary_response_parse (
+            response,
+            NULL, /* version */
+            NULL, /* status_word_1 */
+            NULL, /* status_word_2 */
+            &data_size,
+            &data,
+            &error))
+        g_task_return_error (task, error);
+    else if (!data_size || !data)
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "data not available");
+    else
+        g_task_return_pointer (task,
+                               g_byte_array_append (g_byte_array_sized_new (data_size), data, data_size),
+                               (GDestroyNotify)g_byte_array_unref);
+    g_object_unref (task);
+}
+
+static void
+read_binary_subscriber_info_ready (MMSimMbim    *self,
+                                   GAsyncResult *res,
+                                   GTask        *task)
+{
+    g_autoptr(MbimMessage)  request = NULL;
+    CommonReadBinaryContext *ctx;
+    GError                  *error = NULL;
+
+    ctx = (CommonReadBinaryContext *) g_task_get_task_data (task);
+
+    if (!preload_subscriber_info_finish (self, res, &error)) {
+        g_task_return_error (task, error);
+        g_object_unref (task);
+        return;
+    }
+
+    g_assert (self->priv->preload);
+
+    if (self->priv->application_id_error) {
+        g_task_return_error (task, g_error_copy (self->priv->application_id_error));
+        g_object_unref (task);
+        return;
+    }
+
+    if (!self->priv->application_id) {
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "UICC application id not available");
+        g_object_unref (task);
+        return;
+    }
+
+    request = mbim_message_ms_uicc_low_level_access_read_binary_query_new (MS_UICC_LOW_LEVEL_SUPPORTED_VERSION,
+                                                                           self->priv->application_id->len,
+                                                                           self->priv->application_id->data,
+                                                                           ctx->file_path->len,
+                                                                           ctx->file_path->data,
+                                                                           0,    /* read_offset */
+                                                                           0,    /* read_size */
+                                                                           NULL, /* local_pin */
+                                                                           0,    /* data_size */
+                                                                           NULL, /* data */
+                                                                           NULL);
+    mbim_device_command (ctx->device,
+                         request,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)read_binary_query_ready,
+                         task);
+}
+
+static void
+common_read_binary (MMSimMbim           *self,
+                    const guint8        *file_path,
+                    gsize                file_path_size,
+                    GAsyncReadyCallback  callback,
+                    gpointer             user_data)
+{
+    g_autoptr(MbimMessage)   request = NULL;
+    GTask                   *task;
+    MbimDevice              *device;
+    CommonReadBinaryContext *ctx;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+    ctx = g_slice_new0 (CommonReadBinaryContext);
+    ctx->device = g_object_ref (device);
+    ctx->file_path = g_byte_array_append (g_byte_array_sized_new (file_path_size), file_path, file_path_size);
+    g_task_set_task_data (task, ctx, (GDestroyNotify) common_read_binary_context_free);
+
+    preload_subscriber_info (self,
+                             (GAsyncReadyCallback) read_binary_subscriber_info_ready,
+                             task);
+}
+
+/*****************************************************************************/
+/* Read GID1 and GID2 */
+
+static GByteArray *
+load_gid1_finish (MMBaseSim     *self,
+                  GAsyncResult  *res,
+                  GError       **error)
+{
+    return common_read_binary_finish (self, res, error);
+}
+
+static void
+load_gid1 (MMBaseSim           *self,
+           GAsyncReadyCallback  callback,
+           gpointer             user_data)
+{
+    const guint8 file_path[] = { 0x7F, 0xFF, 0x6F, 0x3E };
+
+    common_read_binary (MM_SIM_MBIM (self), file_path, G_N_ELEMENTS (file_path), callback, user_data);
+}
+
+static GByteArray *
+load_gid2_finish (MMBaseSim     *self,
+                  GAsyncResult  *res,
+                  GError       **error)
+{
+    return common_read_binary_finish (self, res, error);
+}
+
+static void
+load_gid2 (MMBaseSim           *self,
+           GAsyncReadyCallback  callback,
+           gpointer             user_data)
+{
+    const guint8 file_path[] = { 0x7F, 0xFF, 0x6F, 0x3F };
+
+    common_read_binary (MM_SIM_MBIM (self), file_path, G_N_ELEMENTS (file_path), callback, user_data);
 }
 
 /*****************************************************************************/
@@ -1342,6 +1590,10 @@ mm_sim_mbim_class_init (MMSimMbimClass *klass)
     base_sim_class->load_esim_status_finish = load_esim_status_finish;
     base_sim_class->load_removability = load_removability;
     base_sim_class->load_removability_finish = load_removability_finish;
+    base_sim_class->load_gid1 = load_gid1;
+    base_sim_class->load_gid1_finish = load_gid1_finish;
+    base_sim_class->load_gid2 = load_gid2;
+    base_sim_class->load_gid2_finish = load_gid2_finish;
     base_sim_class->send_pin = send_pin;
     base_sim_class->send_pin_finish = send_pin_finish;
     base_sim_class->send_puk = send_puk;

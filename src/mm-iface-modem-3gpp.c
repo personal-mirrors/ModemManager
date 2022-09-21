@@ -107,6 +107,25 @@ get_private (MMIfaceModem3gpp *self)
 }
 
 /*****************************************************************************/
+
+#define GET_NETWORK_SUPPORTED(domain,DOMAIN)                                         \
+    static gboolean                                                                  \
+    get_##domain##_network_supported (MMIfaceModem3gpp *self)                        \
+    {                                                                                \
+        gboolean supported = FALSE;                                                  \
+                                                                                     \
+        g_object_get (self,                                                          \
+                      MM_IFACE_MODEM_3GPP_##DOMAIN##_NETWORK_SUPPORTED, &supported,  \
+                      NULL);                                                         \
+        return supported;                                                            \
+    }
+
+GET_NETWORK_SUPPORTED (cs,  CS)
+GET_NETWORK_SUPPORTED (ps,  PS)
+GET_NETWORK_SUPPORTED (eps, EPS)
+GET_NETWORK_SUPPORTED (5gs, 5GS)
+
+/*****************************************************************************/
 /* Helper method to wait for a final packet service state */
 
 typedef struct {
@@ -424,11 +443,14 @@ register_in_network_context_complete_failed (GTask  *task,
 
     ctx = g_task_get_task_data (task);
 
-    mm_iface_modem_3gpp_update_cs_registration_state (ctx->self, MM_MODEM_3GPP_REGISTRATION_STATE_IDLE);
-    mm_iface_modem_3gpp_update_ps_registration_state (ctx->self, MM_MODEM_3GPP_REGISTRATION_STATE_IDLE);
-    mm_iface_modem_3gpp_update_eps_registration_state (ctx->self, MM_MODEM_3GPP_REGISTRATION_STATE_IDLE);
+    mm_iface_modem_3gpp_update_cs_registration_state      (ctx->self, MM_MODEM_3GPP_REGISTRATION_STATE_IDLE, TRUE);
+    mm_iface_modem_3gpp_update_ps_registration_state      (ctx->self, MM_MODEM_3GPP_REGISTRATION_STATE_IDLE, TRUE);
+    mm_iface_modem_3gpp_update_eps_registration_state     (ctx->self, MM_MODEM_3GPP_REGISTRATION_STATE_IDLE, TRUE);
+    mm_iface_modem_3gpp_update_5gs_registration_state     (ctx->self, MM_MODEM_3GPP_REGISTRATION_STATE_IDLE, TRUE);
+    mm_iface_modem_3gpp_apply_deferred_registration_state (ctx->self);
+
     mm_iface_modem_3gpp_update_access_technologies (ctx->self, MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
-    mm_iface_modem_3gpp_update_location (ctx->self, 0, 0, 0);
+    mm_iface_modem_3gpp_update_location            (ctx->self, 0, 0, 0);
 
     g_task_return_error (task, error);
     g_object_unref (task);
@@ -1735,32 +1757,30 @@ handle_set_nr5g_registration_settings (MmGdbusModem3gpp      *skeleton,
 /*****************************************************************************/
 
 gboolean
-mm_iface_modem_3gpp_run_registration_checks_finish (MMIfaceModem3gpp *self,
-                                                    GAsyncResult *res,
-                                                    GError **error)
+mm_iface_modem_3gpp_run_registration_checks_finish (MMIfaceModem3gpp  *self,
+                                                    GAsyncResult      *res,
+                                                    GError           **error)
 {
     g_assert (MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->run_registration_checks_finish != NULL);
     return MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->run_registration_checks_finish (self, res, error);
 }
 
 void
-mm_iface_modem_3gpp_run_registration_checks (MMIfaceModem3gpp *self,
-                                             GAsyncReadyCallback callback,
-                                             gpointer user_data)
+mm_iface_modem_3gpp_run_registration_checks (MMIfaceModem3gpp    *self,
+                                             GAsyncReadyCallback  callback,
+                                             gpointer             user_data)
 {
-    gboolean is_cs_supported = FALSE;
-    gboolean is_ps_supported = FALSE;
-    gboolean is_eps_supported = FALSE;
-    gboolean is_5gs_supported = FALSE;
+    gboolean is_cs_supported;
+    gboolean is_ps_supported;
+    gboolean is_eps_supported;
+    gboolean is_5gs_supported;
 
     g_assert (MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->run_registration_checks != NULL);
 
-    g_object_get (self,
-                  MM_IFACE_MODEM_3GPP_CS_NETWORK_SUPPORTED,  &is_cs_supported,
-                  MM_IFACE_MODEM_3GPP_PS_NETWORK_SUPPORTED,  &is_ps_supported,
-                  MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED, &is_eps_supported,
-                  MM_IFACE_MODEM_3GPP_5GS_NETWORK_SUPPORTED, &is_5gs_supported,
-                  NULL);
+    is_cs_supported  = get_cs_network_supported  (self);
+    is_ps_supported  = get_ps_network_supported  (self);
+    is_eps_supported = get_eps_network_supported (self);
+    is_5gs_supported = get_5gs_network_supported (self);
 
     mm_obj_dbg (self, "running registration checks (CS: '%s', PS: '%s', EPS: '%s', 5GS: '%s')",
                 is_cs_supported ? "yes" : "no",
@@ -2075,8 +2095,7 @@ update_non_registered_state (MMIfaceModem3gpp             *self,
 
 static void
 update_registration_state (MMIfaceModem3gpp             *self,
-                           MMModem3gppRegistrationState  new_state,
-                           gboolean                      deferrable)
+                           MMModem3gppRegistrationState  new_state)
 {
     Private                       *priv;
     MMModem3gppRegistrationState   old_state = MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN;
@@ -2141,80 +2160,33 @@ update_registration_state (MMIfaceModem3gpp             *self,
     update_non_registered_state (self, old_state, new_state);
 }
 
-void
-mm_iface_modem_3gpp_update_cs_registration_state (MMIfaceModem3gpp             *self,
-                                                  MMModem3gppRegistrationState  state)
-{
-    Private  *priv;
-    gboolean  supported = FALSE;
+#define UPDATE_REGISTRATION_STATE(domain)                                                             \
+    void                                                                                              \
+    mm_iface_modem_3gpp_update_##domain##_registration_state (MMIfaceModem3gpp             *self,     \
+                                                              MMModem3gppRegistrationState  state,    \
+                                                              gboolean                      deferred) \
+    {                                                                                                 \
+        Private  *priv;                                                                               \
+                                                                                                      \
+        if (!get_##domain##_network_supported (self))                                                 \
+            return;                                                                                   \
+                                                                                                      \
+        priv = get_private (self);                                                                    \
+        priv->state_##domain = state;                                                                 \
+                                                                                                      \
+        if (!deferred)                                                                                \
+            mm_iface_modem_3gpp_apply_deferred_registration_state (self);                             \
+    }
 
-    g_object_get (self,
-                  MM_IFACE_MODEM_3GPP_CS_NETWORK_SUPPORTED, &supported,
-                  NULL);
-
-    if (!supported)
-        return;
-
-    priv = get_private (self);
-    priv->state_cs = state;
-    update_registration_state (self, get_consolidated_reg_state (self), TRUE);
-}
-
-void
-mm_iface_modem_3gpp_update_ps_registration_state (MMIfaceModem3gpp             *self,
-                                                  MMModem3gppRegistrationState  state)
-{
-    Private  *priv;
-    gboolean  supported = FALSE;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_3GPP_PS_NETWORK_SUPPORTED, &supported,
-                  NULL);
-
-    if (!supported)
-        return;
-
-    priv = get_private (self);
-    priv->state_ps = state;
-    update_registration_state (self, get_consolidated_reg_state (self), TRUE);
-}
+UPDATE_REGISTRATION_STATE (cs)
+UPDATE_REGISTRATION_STATE (ps)
+UPDATE_REGISTRATION_STATE (eps)
+UPDATE_REGISTRATION_STATE (5gs)
 
 void
-mm_iface_modem_3gpp_update_eps_registration_state (MMIfaceModem3gpp             *self,
-                                                   MMModem3gppRegistrationState  state)
+mm_iface_modem_3gpp_apply_deferred_registration_state (MMIfaceModem3gpp *self)
 {
-    Private  *priv;
-    gboolean supported = FALSE;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED, &supported,
-                  NULL);
-
-    if (!supported)
-        return;
-
-    priv = get_private (self);
-    priv->state_eps = state;
-    update_registration_state (self, get_consolidated_reg_state (self), TRUE);
-}
-
-void
-mm_iface_modem_3gpp_update_5gs_registration_state (MMIfaceModem3gpp             *self,
-                                                   MMModem3gppRegistrationState  state)
-{
-    Private  *priv;
-    gboolean supported = FALSE;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_3GPP_5GS_NETWORK_SUPPORTED, &supported,
-                  NULL);
-
-    if (!supported)
-        return;
-
-    priv = get_private (self);
-    priv->state_5gs = state;
-    update_registration_state (self, get_consolidated_reg_state (self), TRUE);
+    update_registration_state (self, get_consolidated_reg_state (self));
 }
 
 /*****************************************************************************/
@@ -2387,13 +2359,7 @@ reload_initial_eps_bearer_ready (MMIfaceModem3gpp *self,
 void
 mm_iface_modem_3gpp_reload_initial_eps_bearer (MMIfaceModem3gpp *self)
 {
-    gboolean eps_supported = FALSE;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED, &eps_supported,
-                  NULL);
-
-    if (eps_supported &&
+    if (get_eps_network_supported (self) &&
         MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_initial_eps_bearer &&
         MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_initial_eps_bearer_finish) {
         MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_initial_eps_bearer (
@@ -2497,30 +2463,20 @@ interface_disabling_step (GTask *task)
         ctx->step++;
         /* fall through */
 
-    case DISABLING_STEP_DISABLE_UNSOLICITED_REGISTRATION_EVENTS: {
-        gboolean cs_supported = FALSE;
-        gboolean ps_supported = FALSE;
-        gboolean eps_supported = FALSE;
-
-        g_object_get (self,
-                      MM_IFACE_MODEM_3GPP_CS_NETWORK_SUPPORTED, &cs_supported,
-                      MM_IFACE_MODEM_3GPP_PS_NETWORK_SUPPORTED, &ps_supported,
-                      MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED, &eps_supported,
-                      NULL);
-
+    case DISABLING_STEP_DISABLE_UNSOLICITED_REGISTRATION_EVENTS:
         if (MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->disable_unsolicited_registration_events &&
             MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->disable_unsolicited_registration_events_finish) {
             MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->disable_unsolicited_registration_events (
                 self,
-                cs_supported,
-                ps_supported,
-                eps_supported,
+                get_cs_network_supported (self),
+                get_ps_network_supported (self),
+                get_eps_network_supported (self),
                 (GAsyncReadyCallback)disable_unsolicited_registration_events_ready,
                 task);
             return;
         }
         ctx->step++;
-    } /* fall through */
+        /* fall through */
 
     case DISABLING_STEP_CLEANUP_UNSOLICITED_REGISTRATION_EVENTS:
         if (MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->cleanup_unsolicited_registration_events &&
@@ -2559,7 +2515,7 @@ interface_disabling_step (GTask *task)
         /* fall through */
 
     case DISABLING_STEP_REGISTRATION_STATE:
-        update_registration_state (self, MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN, FALSE);
+        update_registration_state (self, MM_MODEM_3GPP_REGISTRATION_STATE_UNKNOWN);
         mm_iface_modem_3gpp_update_access_technologies (self, MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
         mm_iface_modem_3gpp_update_location (self, 0, 0, 0);
         ctx->step++;
@@ -2828,39 +2784,23 @@ interface_enabling_step (GTask *task)
         ctx->step++;
         /* fall through */
 
-    case ENABLING_STEP_ENABLE_UNSOLICITED_REGISTRATION_EVENTS: {
-        gboolean cs_supported = FALSE;
-        gboolean ps_supported = FALSE;
-        gboolean eps_supported = FALSE;
-
-        g_object_get (self,
-                      MM_IFACE_MODEM_3GPP_CS_NETWORK_SUPPORTED, &cs_supported,
-                      MM_IFACE_MODEM_3GPP_PS_NETWORK_SUPPORTED, &ps_supported,
-                      MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED, &eps_supported,
-                      NULL);
-
+    case ENABLING_STEP_ENABLE_UNSOLICITED_REGISTRATION_EVENTS:
         if (MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->enable_unsolicited_registration_events &&
             MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->enable_unsolicited_registration_events_finish) {
             MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->enable_unsolicited_registration_events (
                 self,
-                cs_supported,
-                ps_supported,
-                eps_supported,
+                get_cs_network_supported (self),
+                get_ps_network_supported (self),
+                get_eps_network_supported (self),
                 (GAsyncReadyCallback)enable_unsolicited_registration_events_ready,
                 task);
             return;
         }
         ctx->step++;
-    } /* fall through */
+        /* fall through */
 
-    case ENABLING_STEP_INITIAL_EPS_BEARER: {
-        gboolean eps_supported = FALSE;
-
-        g_object_get (self,
-                      MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED, &eps_supported,
-                      NULL);
-
-        if (eps_supported &&
+    case ENABLING_STEP_INITIAL_EPS_BEARER:
+        if (get_eps_network_supported (self) &&
             MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_initial_eps_bearer &&
             MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_initial_eps_bearer_finish) {
             MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_initial_eps_bearer (
@@ -2870,7 +2810,7 @@ interface_enabling_step (GTask *task)
             return;
         }
         ctx->step++;
-    } /* fall through */
+        /* fall through */
 
     case ENABLING_STEP_LAST:
         /* We are done without errors! */
@@ -2969,14 +2909,9 @@ sync_eps_bearer (MMIfaceModem3gpp    *self,
                  GTask               *task)
 {
     SyncingContext *ctx;
-    gboolean        eps_supported = FALSE;
-
-    g_object_get (self,
-                  MM_IFACE_MODEM_3GPP_EPS_NETWORK_SUPPORTED, &eps_supported,
-                  NULL);
 
     /* Refresh EPS bearer if supported */
-    if (eps_supported &&
+    if (get_eps_network_supported (self) &&
         MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_initial_eps_bearer &&
         MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_initial_eps_bearer_finish) {
         MM_IFACE_MODEM_3GPP_GET_INTERFACE (self)->load_initial_eps_bearer (

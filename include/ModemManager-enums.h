@@ -217,6 +217,8 @@ typedef enum { /*< underscore_name=mm_modem_state_change_reason >*/
  * @MM_MODEM_ACCESS_TECHNOLOGY_EVDOB: CDMA2000 EVDO revision B.
  * @MM_MODEM_ACCESS_TECHNOLOGY_LTE: LTE (ETSI 27.007: "E-UTRAN")
  * @MM_MODEM_ACCESS_TECHNOLOGY_5GNR: 5GNR (ETSI 27.007: "NG-RAN"). Since 1.14.
+ * @MM_MODEM_ACCESS_TECHNOLOGY_LTE_CAT_M: Cat-M (ETSI 23.401: LTE Category M1/M2). Since 1.20.
+ * @MM_MODEM_ACCESS_TECHNOLOGY_LTE_NB_IOT: NB IoT (ETSI 23.401: LTE Category NB1/NB2). Since 1.20.
  * @MM_MODEM_ACCESS_TECHNOLOGY_ANY: Mask specifying all access technologies.
  *
  * Describes various access technologies that a device uses when registered with
@@ -242,6 +244,8 @@ typedef enum { /*< underscore_name=mm_modem_access_technology >*/
     MM_MODEM_ACCESS_TECHNOLOGY_EVDOB       = 1 << 13,
     MM_MODEM_ACCESS_TECHNOLOGY_LTE         = 1 << 14,
     MM_MODEM_ACCESS_TECHNOLOGY_5GNR        = 1 << 15,
+    MM_MODEM_ACCESS_TECHNOLOGY_LTE_CAT_M   = 1 << 16,
+    MM_MODEM_ACCESS_TECHNOLOGY_LTE_NB_IOT  = 1 << 17,
     MM_MODEM_ACCESS_TECHNOLOGY_ANY         = 0xFFFFFFFF,
 } MMModemAccessTechnology;
 
@@ -420,6 +424,7 @@ typedef enum { /*< underscore_name=mm_modem_mode >*/
  * @MM_MODEM_BAND_NGRAN_48: NGRAN band 48. Since 1.20.
  * @MM_MODEM_BAND_NGRAN_50: NGRAN band 50. Since 1.20.
  * @MM_MODEM_BAND_NGRAN_51: NGRAN band 51. Since 1.20.
+ * @MM_MODEM_BAND_NGRAN_53: NGRAN band 53. Since 1.20.
  * @MM_MODEM_BAND_NGRAN_65: NGRAN band 65. Since 1.20.
  * @MM_MODEM_BAND_NGRAN_66: NGRAN band 66. Since 1.20.
  * @MM_MODEM_BAND_NGRAN_70: NGRAN band 70. Since 1.20.
@@ -611,6 +616,7 @@ typedef enum { /*< underscore_name=mm_modem_band >*/
     MM_MODEM_BAND_NGRAN_48 = 348,
     MM_MODEM_BAND_NGRAN_50 = 350,
     MM_MODEM_BAND_NGRAN_51 = 351,
+    MM_MODEM_BAND_NGRAN_53 = 353,
     MM_MODEM_BAND_NGRAN_65 = 365,
     MM_MODEM_BAND_NGRAN_66 = 366,
     MM_MODEM_BAND_NGRAN_70 = 370,
@@ -1219,7 +1225,8 @@ typedef enum { /*< underscore_name=mm_bearer_ip_method >*/
  * @MM_BEARER_IP_FAMILY_IPV4: IPv4.
  * @MM_BEARER_IP_FAMILY_IPV6: IPv6.
  * @MM_BEARER_IP_FAMILY_IPV4V6: IPv4 and IPv6.
- * @MM_BEARER_IP_FAMILY_ANY: Mask specifying all IP families.
+ * @MM_BEARER_IP_FAMILY_NON_IP: Non-IP Bearer. Since 1.20.
+ * @MM_BEARER_IP_FAMILY_ANY: Mask specifying all IP based families.
  *
  * Type of IP family to be used in a given Bearer.
  *
@@ -1230,7 +1237,8 @@ typedef enum { /*< underscore_name=mm_bearer_ip_family >*/
     MM_BEARER_IP_FAMILY_IPV4    = 1 << 0,
     MM_BEARER_IP_FAMILY_IPV6    = 1 << 1,
     MM_BEARER_IP_FAMILY_IPV4V6  = 1 << 2,
-    MM_BEARER_IP_FAMILY_ANY     = 0xFFFFFFFF
+    MM_BEARER_IP_FAMILY_NON_IP  = 1 << 3,
+    MM_BEARER_IP_FAMILY_ANY     = 0xFFFFFFF7
 } MMBearerIpFamily;
 
 /**
