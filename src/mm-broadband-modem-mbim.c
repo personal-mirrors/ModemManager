@@ -8205,9 +8205,18 @@ sar_load_power_level (MMIfaceModemSar    *_self,
 static gboolean
 sar_enable_finish (MMIfaceModemSar *self,
                    GAsyncResult    *res,
+                   guint           *out_sar_power_level,
                    GError         **error)
 {
-     return g_task_propagate_boolean (G_TASK (res), error);
+    guint level;
+
+    if (!g_task_propagate_boolean (G_TASK (res), error))
+        return FALSE;
+
+    level = GPOINTER_TO_UINT (g_task_get_task_data (G_TASK (res)));
+    if (out_sar_power_level)
+        *out_sar_power_level = level;
+    return TRUE;
 }
 
 static void
@@ -8252,6 +8261,8 @@ sar_enable (MMIfaceModemSar    *_self,
     config_state = g_new (MbimSarConfigState, 1);
     config_state->antenna_index = 0xFFFFFFFF;
     config_state->backoff_index = mm_iface_modem_sar_get_power_level (_self);
+
+    g_task_set_task_data (task, GUINT_TO_POINTER (config_state->backoff_index), NULL);
 
     message = mbim_message_ms_sar_config_set_new (MBIM_SAR_CONTROL_MODE_OS,
                                                   enable ? MBIM_SAR_BACKOFF_STATE_ENABLED : MBIM_SAR_BACKOFF_STATE_DISABLED,
@@ -8307,17 +8318,6 @@ sar_set_power_level (MMIfaceModemSar    *_self,
 
     if (!peek_device (self, &device, callback, user_data))
         return;
-
-    if (!mm_iface_modem_get_sar_state (_self)) {
-        g_task_report_new_error (self,
-                                 callback,
-                                 user_data,
-                                 sar_set_power_level,
-                                 MM_CORE_ERROR,
-                                 MM_CORE_ERROR_WRONG_STATE,
-                                 "Couldn't set power level of SAR, because the SAR is disabled");
-        return;
-    }
 
     /*
      * the value 0xFFFFFFFF means all antennas
