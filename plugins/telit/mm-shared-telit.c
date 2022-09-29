@@ -134,6 +134,15 @@ mm_shared_telit_store_revision (MMSharedTelit *self,
     priv->software_package_version = g_strdup (revision);
 }
 
+gchar *
+mm_shared_telit_get_stored_revision (MMSharedTelit *self)
+{
+    Private *priv;
+
+    priv = get_private (MM_SHARED_TELIT (self));
+    return g_strdup (priv->software_package_version);
+}
+
 /*****************************************************************************/
 /* Load current mode (Modem interface) */
 
