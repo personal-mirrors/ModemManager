@@ -7,7 +7,7 @@ GOTO="mm_fibocom_port_types_end"
 
 LABEL="mm_fibocom_pci_port_types"
 # ChromeOS specific configuration
-ACTION=="add|change|move", SUBSYSTEMS=="wwan", ATTR{type}=="AT", ENV{ID_MM_PORT_IGNORE}="1"
+SUBSYSTEM=="wwan", ATTR{type}=="AT", ENV{ID_MM_PORT_IGNORE}="1"
 GOTO="mm_fibocom_port_types_end"
 
 LABEL="mm_fibocom_port_types"
@@ -113,6 +113,6 @@ ATTRS{idVendor}=="1782", ATTRS{idProduct}=="4d11", ENV{.MM_USBIFNUM}=="08", SUBS
 # The MBIM port alone is sufficient for 3GPP related functionalities.
 # The AT channels are used by modemfwd for firmware update related managed,
 # mark them as ignored by ModemManager to avoid perturbations.
-ACTION=="add|change|move", SUBSYSTEMS=="tty", ENV{ID_VENDOR_ID}=="2cb7", ENV{ID_MM_PORT_IGNORE}="1"
+ATTRS{idVendor}=="2cb7", SUBSYSTEM=="tty", ENV{ID_MM_PORT_IGNORE}="1"
 
 LABEL="mm_fibocom_port_types_end"
