@@ -23,6 +23,11 @@ ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="0007", ENV{ID_MM_FIBOCOM_INITIAL_EPS
 #  ttyACM2 (if #6): AT port
 ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="0007", ENV{.MM_USBIFNUM}=="04", ENV{ID_MM_PORT_IGNORE}="1"
 
+# Fibocom L850-GL: ChromeOS specific configuration
+#  ttyACM0 (if #2): managed by modemfwd (ignored in MM)
+#  ttyACM2 (if #6): managed by ModemManager
+ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="0007", ENV{.MM_USBIFNUM}=="02", ENV{ID_MM_PORT_IGNORE}="1"
+
 # Fibocom NL668-AM
 #  ttyACM0 (if #2): AT port
 #  ttyACM1 (if #3): AT port
@@ -30,6 +35,10 @@ ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="0007", ENV{.MM_USBIFNUM}=="04", ENV{
 ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a0", ENV{.MM_USBIFNUM}=="02", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1"
 ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a0", ENV{.MM_USBIFNUM}=="03", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1"
 ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a0", ENV{.MM_USBIFNUM}=="04", ENV{ID_MM_PORT_IGNORE}="1"
+
+# Fibocom NL668-AM: ChromeOS specific configuration
+#  ttyACM0 (if #2): managed by modemfwd (ignored in MM)
+ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a0", ENV{.MM_USBIFNUM}=="02", SUBSYSTEM=="tty", ENV{ID_MM_PORT_IGNORE}="1"
 
 # Fibocom FM150
 #  ttyUSB0 (if #0): QCDM port
@@ -50,6 +59,11 @@ ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a2", ENV{.MM_USBIFNUM}=="02", SUBS
 ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a2", ENV{.MM_USBIFNUM}=="03", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1"
 ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a2", ENV{.MM_USBIFNUM}=="04", ENV{ID_MM_PORT_IGNORE}="1"
 ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a2", ENV{.MM_USBIFNUM}=="05", ENV{ID_MM_PORT_IGNORE}="1"
+
+# Fibocom FM101-GL (MBIM): ChromeOS specific configuration
+#  ttyUSB0 (if #2): ignored in MM
+#  ttyUSB1 (if #3): ignored in MM
+ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="01a2", ENV{.MM_USBIFNUM}=="02", SUBSYSTEM=="tty", ENV{ID_MM_PORT_IGNORE}="1"
 
 # Fibocom FM101-GL (ADB)
 #  ttyUSB0 (if #2): debug port (ignore)
@@ -111,11 +125,5 @@ ATTRS{idVendor}=="1782", ATTRS{idProduct}=="4d11", ENV{.MM_USBIFNUM}=="05", ENV{
 ATTRS{idVendor}=="1782", ATTRS{idProduct}=="4d11", ENV{.MM_USBIFNUM}=="06", ENV{ID_MM_PORT_IGNORE}="1"
 ATTRS{idVendor}=="1782", ATTRS{idProduct}=="4d11", ENV{.MM_USBIFNUM}=="07", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1"
 ATTRS{idVendor}=="1782", ATTRS{idProduct}=="4d11", ENV{.MM_USBIFNUM}=="08", SUBSYSTEM=="tty", ENV{ID_MM_PORT_TYPE_AT_SECONDARY}="1"
-
-# ChromeOS specific configuration
-# The MBIM port alone is sufficient for 3GPP related functionalities.
-# The AT channels are used by modemfwd for firmware update related managed,
-# mark them as ignored by ModemManager to avoid perturbations.
-ATTRS{idVendor}=="2cb7", SUBSYSTEM=="tty", ENV{ID_MM_PORT_IGNORE}="1"
 
 LABEL="mm_fibocom_port_types_end"
