@@ -62,8 +62,8 @@ static void iface_modem_messaging_init (MMIfaceModemMessaging *iface);
 static void iface_modem_location_init (MMIfaceModemLocation *iface);
 static void iface_modem_oma_init (MMIfaceModemOma *iface);
 static void iface_modem_firmware_init (MMIfaceModemFirmware *iface);
-static void iface_modem_signal_init (MMIfaceModemSignal *iface);
 static void iface_modem_sar_init (MMIfaceModemSar *iface);
+static void iface_modem_signal_init (MMIfaceModemSignal *iface);
 static void shared_qmi_init (MMSharedQmi *iface);
 
 static MMIfaceModemLocation  *iface_modem_location_parent;
@@ -79,8 +79,8 @@ G_DEFINE_TYPE_EXTENDED (MMBroadbandModemQmi, mm_broadband_modem_qmi, MM_TYPE_BRO
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_CDMA, iface_modem_cdma_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_MESSAGING, iface_modem_messaging_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_LOCATION, iface_modem_location_init)
-                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SAR, iface_modem_sar_init)
+                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_SIGNAL, iface_modem_signal_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_OMA, iface_modem_oma_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_FIRMWARE, iface_modem_firmware_init)
                         G_IMPLEMENT_INTERFACE (MM_TYPE_SHARED_QMI, shared_qmi_init))
@@ -182,9 +182,6 @@ struct _MMBroadbandModemQmiPrivate {
     gboolean profile_manager_unsolicited_events_enabled;
     gboolean profile_manager_unsolicited_events_setup;
     guint refresh_indication_id;
-
-    /* SAR Operation */
-    gboolean is_sar_supported;
 
     /* PS registration helpers when using NAS System Info and DSD
      * (not applicable when using NAS Serving System) */
@@ -8302,24 +8299,26 @@ messaging_create_sms (MMIfaceModemMessaging *_self)
 
 
 /*****************************************************************************/
-
 /* Check support (SAR interface) */
 
+/* SAR level 0 is assumed DISABLED, and any other level is assumed ENABLED */
+#define QMI_SAR_ENABLE_POWER_INDEX   QMI_SAR_RF_STATE_1
+#define QMI_SAR_DISABLED_POWER_INDEX QMI_SAR_RF_STATE_0
+
 static gboolean
-sar_check_support_finish (MMIfaceModemSar *self,
-                          GAsyncResult    *res,
-                          GError         **error)
+sar_check_support_finish (MMIfaceModemSar  *self,
+                          GAsyncResult     *res,
+                          GError          **error)
 {
     return g_task_propagate_boolean (G_TASK (res), error);
 }
 
 static void
-sar_check_support (MMIfaceModemSar    *_self,
-                   GAsyncReadyCallback callback,
-                   gpointer            user_data)
+sar_check_support (MMIfaceModemSar     *self,
+                   GAsyncReadyCallback  callback,
+                   gpointer             user_data)
 {
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-    GTask               *task;
+    GTask *task;
 
     task = g_task_new (self, NULL, callback, user_data);
 
@@ -8328,14 +8327,18 @@ sar_check_support (MMIfaceModemSar    *_self,
                                     QMI_SERVICE_SAR,
                                     MM_PORT_QMI_FLAG_DEFAULT,
                                     NULL)) {
-        self->priv->is_sar_supported = FALSE;
-    } else
-        self->priv->is_sar_supported = TRUE;
+        mm_obj_dbg (self, "SAR capabilities not supported");
+        g_task_return_boolean (task, FALSE);
+    } else {
+        mm_obj_dbg (self, "SAR capabilities supported");
+        g_task_return_boolean (task, TRUE);
+    }
 
-    mm_obj_dbg (self, "SAR capabilities %s", self->priv->is_sar_supported ? "supported" : "not supported");
-    g_task_return_boolean (task, self->priv->is_sar_supported);
     g_object_unref (task);
 }
+
+/*****************************************************************************/
+/* Load SAR state (SAR interface) */
 
 static gboolean
 sar_load_state_finish (MMIfaceModemSar *self,
@@ -8358,33 +8361,69 @@ sar_load_state_finish (MMIfaceModemSar *self,
 }
 
 static void
-sar_load_state (MMIfaceModemSar *_self,
-                GAsyncReadyCallback callback,
-                gpointer user_data)
+sar_load_state_ready (QmiClientSar *client,
+                      GAsyncResult *res,
+                      GTask        *task)
 {
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-    GTask               *task;
+    g_autoptr(QmiMessageSarRfGetStateOutput)  output = NULL;
+    GError                                   *error = NULL;
+    QmiSarRfState                             rf_state;
 
-    task = g_task_new (self, NULL, callback, user_data);
+    output = qmi_client_sar_rf_get_state_finish (client, res, &error);
+    if (output &&
+        qmi_message_sar_rf_get_state_output_get_result (output, &error) &&
+        qmi_message_sar_rf_get_state_output_get_state (output, &rf_state, &error)) {
+        if (rf_state == QMI_SAR_DISABLED_POWER_INDEX)
+            g_task_return_boolean (task, FALSE);
+        else
+            g_task_return_boolean (task, TRUE);
+    } else
+        g_task_return_error (task, error);
 
-    mm_obj_dbg (self, "SAR enabled %s", self->priv->is_sar_supported ? "yes" : "no");
-    g_task_return_boolean (task, self->priv->is_sar_supported);
     g_object_unref (task);
 }
 
+static void
+sar_load_state (MMIfaceModemSar     *self,
+                GAsyncReadyCallback  callback,
+                gpointer             user_data)
+{
+    GTask     *task;
+    QmiClient *client = NULL;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_SAR, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    qmi_client_sar_rf_get_state (
+        QMI_CLIENT_SAR (client),
+        NULL,
+        5,
+        NULL,
+        (GAsyncReadyCallback)sar_load_state_ready,
+        task);
+}
+
+/*****************************************************************************/
+/* Load SAR power level (SAR interface) */
+
 static gboolean
-sar_load_power_level_finish (MMIfaceModemSar *self,
-                             GAsyncResult    *res,
-                             guint           *out_power_level,
+sar_load_power_level_finish (MMIfaceModemSar  *self,
+                             GAsyncResult     *res,
+                             guint            *out_power_level,
                              GError          **error)
 {
     gssize result;
 
-    result = g_task_propagate_int(G_TASK (res), error);
+    result = g_task_propagate_int (G_TASK (res), error);
     if (result < 0)
         return FALSE;
 
-    *out_power_level = (guint) result;
+    if (out_power_level)
+        *out_power_level = (guint) result;
     return TRUE;
 }
 
@@ -8393,29 +8432,28 @@ sar_load_power_level_ready (QmiClientSar *client,
                             GAsyncResult *res,
                             GTask        *task)
 {
-    g_autoptr(QmiMessageSarRfGetStateOutput) output = NULL;
-    GError                                  *error = NULL;
-    QmiSarRfState                            rf_state;
+    g_autoptr(QmiMessageSarRfGetStateOutput)  output = NULL;
+    GError                                   *error = NULL;
+    QmiSarRfState                             rf_state;
 
     output = qmi_client_sar_rf_get_state_finish (client, res, &error);
     if (output &&
         qmi_message_sar_rf_get_state_output_get_result (output, &error) &&
-        qmi_message_sar_rf_get_state_output_get_state (output, &rf_state, &error)) {
-            g_task_return_int (task, rf_state);
-    } else
+        qmi_message_sar_rf_get_state_output_get_state (output, &rf_state, &error))
+        g_task_return_int (task, rf_state);
+    else
         g_task_return_error (task, error);
 
     g_object_unref (task);
 }
 
 static void
-sar_load_power_level (MMIfaceModemSar    *_self,
-                      GAsyncReadyCallback callback,
-                      gpointer            user_data)
+sar_load_power_level (MMIfaceModemSar     *self,
+                      GAsyncReadyCallback  callback,
+                      gpointer             user_data)
 {
-    MMBroadbandModemQmi *self = MM_BROADBAND_MODEM_QMI (_self);
-    GTask               *task;
-    QmiClient           *client = NULL;
+    GTask     *task;
+    QmiClient *client = NULL;
 
     if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
                                       QMI_SERVICE_SAR, &client,
@@ -8433,12 +8471,24 @@ sar_load_power_level (MMIfaceModemSar    *_self,
         task);
 }
 
+/*****************************************************************************/
+/* Enable/Disable SAR (SAR interface) */
+
 static gboolean
 sar_enable_finish (MMIfaceModemSar *self,
                    GAsyncResult    *res,
+                   guint           *out_sar_power_level,
                    GError         **error)
 {
-     return g_task_propagate_boolean (G_TASK (res), error);
+    QmiSarRfState level;
+
+    if (!g_task_propagate_boolean (G_TASK (res), error))
+        return FALSE;
+
+    level = GPOINTER_TO_UINT (g_task_get_task_data (G_TASK (res)));
+    if (out_sar_power_level)
+        *out_sar_power_level = level;
+    return TRUE;
 }
 
 static void
@@ -8446,31 +8496,28 @@ sar_enable_ready (QmiClientSar *client,
                   GAsyncResult *res,
                   GTask        *task)
 {
-    g_autoptr(QmiMessageSarRfSetStateOutput) output = NULL;
-    GError                                  *error = NULL;
+    g_autoptr(QmiMessageSarRfSetStateOutput)  output = NULL;
+    GError                                   *error = NULL;
 
     output = qmi_client_sar_rf_set_state_finish (client, res, &error);
-    if (output &&
-        qmi_message_sar_rf_set_state_output_get_result (output, &error)) {
-            g_task_return_boolean (task, TRUE);
-    } else
+    if (output && qmi_message_sar_rf_set_state_output_get_result (output, &error))
+        g_task_return_boolean (task, TRUE);
+    else
         g_task_return_error (task, error);
 
     g_object_unref (task);
 }
 
-
 static void
-sar_enable (MMIfaceModemSar    *_self,
-            gboolean            enable,
-            GAsyncReadyCallback callback,
-            gpointer            user_data)
+sar_enable (MMIfaceModemSar     *self,
+            gboolean             enable,
+            GAsyncReadyCallback  callback,
+            gpointer             user_data)
 {
-    MMBroadbandModemQmi                    *self = MM_BROADBAND_MODEM_QMI (_self);
-    g_autoptr(QmiMessageSarRfSetStateInput) input = NULL;
-    GTask                                  *task;
-    QmiClient                              *client = NULL;
-    GError                                 *error = NULL;
+    g_autoptr(QmiMessageSarRfSetStateInput)  input = NULL;
+    GTask                                   *task;
+    QmiClient                               *client = NULL;
+    QmiSarRfState                            level;
 
     if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
                                       QMI_SERVICE_SAR, &client,
@@ -8479,10 +8526,18 @@ sar_enable (MMIfaceModemSar    *_self,
 
     task = g_task_new (self, NULL, callback, user_data);
     input = qmi_message_sar_rf_set_state_input_new ();
-    qmi_message_sar_rf_set_state_input_set_state (
-                input,
-                0,
-                &error);
+
+    /* When enabling, try to set the last valid known power level used, instead
+     * of defaulting to level 1 */
+    if (enable) {
+        level = mm_iface_modem_sar_get_power_level (self);
+        if (level == QMI_SAR_DISABLED_POWER_INDEX)
+            level = QMI_SAR_ENABLE_POWER_INDEX;
+    } else
+        level = QMI_SAR_DISABLED_POWER_INDEX;
+
+    qmi_message_sar_rf_set_state_input_set_state (input, level, NULL);
+    g_task_set_task_data (task, GUINT_TO_POINTER (level), NULL);
 
     qmi_client_sar_rf_set_state (
         QMI_CLIENT_SAR (client),
@@ -8493,6 +8548,8 @@ sar_enable (MMIfaceModemSar    *_self,
         task);
 }
 
+/*****************************************************************************/
+/* Set SAR power level (SAR interface) */
 
 static gboolean
 sar_set_power_level_finish (MMIfaceModemSar *self,
@@ -8511,27 +8568,23 @@ sar_set_power_level_ready (QmiClientSar *client,
     GError                                  *error = NULL;
 
     output = qmi_client_sar_rf_set_state_finish (client, res, &error);
-    if (output &&
-        qmi_message_sar_rf_set_state_output_get_result (output, &error)) {
-            g_task_return_boolean (task, TRUE);
-    } else
+    if (output && qmi_message_sar_rf_set_state_output_get_result (output, &error))
+        g_task_return_boolean (task, TRUE);
+    else
         g_task_return_error (task, error);
 
     g_object_unref (task);
 }
 
-
 static void
-sar_set_power_level (MMIfaceModemSar    *_self,
+sar_set_power_level (MMIfaceModemSar    *self,
                      guint               power_level,
                      GAsyncReadyCallback callback,
                      gpointer            user_data)
 {
-    MMBroadbandModemQmi                    *self = MM_BROADBAND_MODEM_QMI (_self);
-    g_autoptr(QmiMessageSarRfSetStateInput) input = NULL;
-    GTask                                  *task;
-    QmiClient                              *client = NULL;
-    GError                                 *error = NULL;
+    g_autoptr(QmiMessageSarRfSetStateInput)  input = NULL;
+    GTask                                   *task;
+    QmiClient                               *client = NULL;
 
     if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
                                       QMI_SERVICE_SAR, &client,
@@ -8539,11 +8592,17 @@ sar_set_power_level (MMIfaceModemSar    *_self,
         return;
 
     task = g_task_new (self, NULL, callback, user_data);
+
+    if (power_level == QMI_SAR_DISABLED_POWER_INDEX) {
+        g_task_return_new_error (task,
+                                 MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
+                                 "Unsupported power level");
+        g_object_unref (task);
+        return;
+    }
+
     input = qmi_message_sar_rf_set_state_input_new ();
-    qmi_message_sar_rf_set_state_input_set_state (
-                input,
-                power_level,
-                &error);
+    qmi_message_sar_rf_set_state_input_set_state (input, power_level, NULL);
     qmi_client_sar_rf_set_state (
         QMI_CLIENT_SAR (client),
         input,
@@ -13109,8 +13168,8 @@ static const QmiService qmi_services[] = {
     QMI_SERVICE_LOC,
     QMI_SERVICE_PDC,
     QMI_SERVICE_VOICE,
-    QMI_SERVICE_SAR,
     QMI_SERVICE_DSD,
+    QMI_SERVICE_SAR,
 };
 
 typedef struct {
@@ -13825,15 +13884,6 @@ iface_modem_location_init (MMIfaceModemLocation *iface)
 }
 
 static void
-iface_modem_signal_init (MMIfaceModemSignal *iface)
-{
-    iface->check_support = signal_check_support;
-    iface->check_support_finish = signal_check_support_finish;
-    iface->load_values = signal_load_values;
-    iface->load_values_finish = signal_load_values_finish;
-}
-
-static void
 iface_modem_sar_init (MMIfaceModemSar *iface)
 {
     iface->check_support = sar_check_support;
@@ -13846,6 +13896,15 @@ iface_modem_sar_init (MMIfaceModemSar *iface)
     iface->enable_finish = sar_enable_finish;
     iface->set_power_level = sar_set_power_level;
     iface->set_power_level_finish = sar_set_power_level_finish;
+}
+
+static void
+iface_modem_signal_init (MMIfaceModemSignal *iface)
+{
+    iface->check_support = signal_check_support;
+    iface->check_support_finish = signal_check_support_finish;
+    iface->load_values = signal_load_values;
+    iface->load_values_finish = signal_load_values_finish;
 }
 
 static void

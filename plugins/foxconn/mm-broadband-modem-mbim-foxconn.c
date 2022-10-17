@@ -36,6 +36,7 @@
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
 # include "mm-iface-modem-firmware.h"
 # include "mm-shared-qmi.h"
+# include "mm-log.h"
 #endif
 
 static void iface_modem_location_init (MMIfaceModemLocation *iface);
@@ -94,6 +95,31 @@ needs_qdu_and_mcfg_apps_version (MMIfaceModemFirmware *self)
     vendor_id = mm_base_modem_get_vendor_id (MM_BASE_MODEM (self));
     product_id = mm_base_modem_get_product_id (MM_BASE_MODEM (self));
     return (vendor_id == 0x105b || (vendor_id == 0x0489 && (product_id  == 0xe0da || product_id == 0xe0db)));
+}
+
+/*****************************************************************************/
+/* Need APPS version for the development of different functions when T77W968 support FASTBOOT and QMI PDC.
+ * Such as: T77W968.F1.0.0.5.2.GC.013.037 and T77W968.F1.0.0.5.2.GC.013.049, the MCFG version(T77W968.F1.0.0.5.2.GC.013) is same,
+ * but the APPS version(037 and 049) is different.
+ *
+ * For T77W968.F1.0.0.5.2.GC.013.049, before the change, "fwupdmgr get-devices" can obtain Current version is T77W968.F1.0.0.5.2.GC.013,
+ * it only include the MCFG version.
+ * After add need APPS version, it shows Current version is T77W968.F1.0.0.5.2.GC.013.049, including the MCFG+APPS version.
+ */
+
+static gboolean
+needs_fastboot_and_qmi_pdc_mcfg_apps_version (MMIfaceModemFirmware *self)
+{
+    guint vendor_id;
+    guint product_id;
+
+    /* T77W968(0x413c:0x81d7 ; 0x413c:0x81e0 ; 0x413c:0x81e4 ; 0x413c:0x81e6): supports FASTBOOT and QMI PDC,
+     * and requires MCFG+APPS version.
+     * else support FASTBOOT and QMI PDC, and require only MCFG version.
+     */
+    vendor_id = mm_base_modem_get_vendor_id (MM_BASE_MODEM (self));
+    product_id = mm_base_modem_get_product_id (MM_BASE_MODEM (self));
+    return (vendor_id == 0x413c && (product_id == 0x81d7 || product_id == 0x81e0 || product_id == 0x81e4 || product_id == 0x81e6));
 }
 
 static MMFirmwareUpdateSettings *
@@ -164,15 +190,19 @@ fox_get_firmware_version_ready (QmiClientFox *client,
 }
 
 static void
-firmware_load_update_settings (MMIfaceModemFirmware *self,
-                               GAsyncReadyCallback   callback,
-                               gpointer              user_data)
+mbim_port_allocate_qmi_client_ready (MMPortMbim     *mbim,
+                                     GAsyncResult   *res,
+                                     GTask          *task)
 {
-    GTask     *task;
-    QmiClient *fox_client = NULL;
-    QmiClient *dms_client = NULL;
+    MMIfaceModemFirmware *self;
+    QmiClient            *fox_client = NULL;
+    QmiClient            *dms_client = NULL;
+    g_autoptr(GError)     error = NULL;
 
-    task = g_task_new (self, NULL, callback, user_data);
+    self = g_task_get_source_object (task);
+
+    if (!mm_port_mbim_allocate_qmi_client_finish (mbim, res, &error))
+        mm_obj_dbg (self, "Allocate FOX client failed: %s", error->message);
 
     /* Try to get firmware version over fox service, if it failed to peek client, try dms service. */
     fox_client = mm_shared_qmi_peek_client (MM_SHARED_QMI (self), QMI_SERVICE_FOX, MM_PORT_QMI_FLAG_DEFAULT, NULL);
@@ -209,7 +239,7 @@ firmware_load_update_settings (MMIfaceModemFirmware *self,
 
         input = qmi_message_dms_foxconn_get_firmware_version_input_new ();
         qmi_message_dms_foxconn_get_firmware_version_input_set_version_type (input,
-                                                                             (needs_qdu_and_mcfg_apps_version (self) ?
+                                                                             ((needs_qdu_and_mcfg_apps_version (self) || needs_fastboot_and_qmi_pdc_mcfg_apps_version (self)) ?
                                                                               QMI_DMS_FOXCONN_FIRMWARE_VERSION_TYPE_FIRMWARE_MCFG_APPS:
                                                                               QMI_DMS_FOXCONN_FIRMWARE_VERSION_TYPE_FIRMWARE_MCFG),
                                                                              NULL);
@@ -223,6 +253,24 @@ firmware_load_update_settings (MMIfaceModemFirmware *self,
     }
 
     g_assert_not_reached ();
+}
+
+static void
+firmware_load_update_settings (MMIfaceModemFirmware *self,
+                               GAsyncReadyCallback   callback,
+                               gpointer              user_data)
+{
+    GTask      *task;
+    MMPortMbim *mbim;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    mbim = mm_broadband_modem_mbim_peek_port_mbim (MM_BROADBAND_MODEM_MBIM (self));
+    mm_port_mbim_allocate_qmi_client (mbim,
+                                      QMI_SERVICE_FOX,
+                                      NULL,
+                                      (GAsyncReadyCallback)mbim_port_allocate_qmi_client_ready,
+                                      task);
 }
 
 #endif

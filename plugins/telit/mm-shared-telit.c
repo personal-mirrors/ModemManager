@@ -34,6 +34,8 @@
 /*****************************************************************************/
 /* Private data context */
 
+#define TELIT_LM940_EXT_LTE_BND_SW_REVISION "24.01.516"
+
 #define PRIVATE_TAG "shared-telit-private-tag"
 static GQuark private_quark;
 
@@ -58,10 +60,22 @@ private_free (Private *priv)
 }
 
 static gboolean
-is_bnd_4g_format_hex (MMBaseModem *self,
-                      const gchar *revision)
+has_alternate_3g_bands (const gchar *revision)
 {
-    MMTelitModel model;    
+    MMTelitModel model;
+
+    model = mm_telit_model_from_revision (revision);
+    return (model == MM_TELIT_MODEL_FN980 ||
+            model == MM_TELIT_MODEL_FN990 ||
+            model == MM_TELIT_MODEL_LM940 ||
+            model == MM_TELIT_MODEL_LM960 ||
+            model == MM_TELIT_MODEL_LN920);
+}
+
+static gboolean
+is_bnd_4g_format_hex (const gchar *revision)
+{
+    MMTelitModel model;
 
     model = mm_telit_model_from_revision (revision);
 
@@ -72,22 +86,19 @@ is_bnd_4g_format_hex (MMBaseModem *self,
             model == MM_TELIT_MODEL_LN920);
 }
 
-static void
-initialize_alternate_3g_band (MMSharedTelit *self,
-                              Private       *priv)
+static gboolean
+has_extended_4g_bands (const gchar *revision)
 {
-    MMPort         *primary;
-    MMKernelDevice *port;
+    MMTelitModel model;
 
-    primary = MM_PORT (mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)));
-    if (primary) {
-        port = mm_port_peek_kernel_device (primary);
+    model = mm_telit_model_from_revision (revision);
+    if (model == MM_TELIT_MODEL_LM940)
+        return mm_telit_software_revision_cmp (revision, TELIT_LM940_EXT_LTE_BND_SW_REVISION) >= MM_TELIT_SW_REV_CMP_EQUAL;
 
-        /* Lookup for the tag specifying that we're using the alternate 3G band mapping */
-        priv->alternate_3g_bands = mm_kernel_device_get_global_property_as_boolean (port, "ID_MM_TELIT_BND_ALTERNATE");
-        if (priv->alternate_3g_bands)
-            mm_obj_dbg (self, "telit modem using alternate 3G band mask setup");
-    }
+    return (model == MM_TELIT_MODEL_FN980 ||
+            model == MM_TELIT_MODEL_FN990 ||
+            model == MM_TELIT_MODEL_LM960 ||
+            model == MM_TELIT_MODEL_LN920);
 }
 
 static Private *
@@ -101,8 +112,6 @@ get_private (MMSharedTelit *self)
     priv = g_object_get_qdata (G_OBJECT (self), private_quark);
     if (!priv) {
         priv = g_slice_new0 (Private);
-        initialize_alternate_3g_band (self, priv);
-        /* ext_4g_bands field is initialized inside #BND=? response handler */
 
         if (MM_SHARED_TELIT_GET_INTERFACE (self)->peek_parent_modem_interface)
             priv->iface_modem_parent = MM_SHARED_TELIT_GET_INTERFACE (self)->peek_parent_modem_interface (self);
@@ -132,6 +141,23 @@ mm_shared_telit_store_revision (MMSharedTelit *self,
     priv = get_private (MM_SHARED_TELIT (self));
     g_clear_pointer (&priv->software_package_version, g_free);
     priv->software_package_version = g_strdup (revision);
+    priv->alternate_3g_bands = has_alternate_3g_bands (revision);
+    priv->ext_4g_bands = has_extended_4g_bands (revision);
+}
+
+void
+mm_shared_telit_get_bnd_parse_config (MMIfaceModem *self, MMTelitBNDParseConfig *config)
+{
+    Private *priv;
+
+    priv = get_private (MM_SHARED_TELIT (self));
+
+    config->modem_is_2g = mm_iface_modem_is_2g (self);
+    config->modem_is_3g = mm_iface_modem_is_3g (self);
+    config->modem_is_4g = mm_iface_modem_is_4g (self);
+    config->modem_alternate_3g_bands = priv->alternate_3g_bands;
+    config->modem_has_hex_format_4g_bands = is_bnd_4g_format_hex (priv->software_package_version);
+    config->modem_ext_4g_bands = priv->ext_4g_bands;
 }
 
 /*****************************************************************************/
@@ -241,16 +267,11 @@ load_supported_bands_ready (MMBaseModem  *self,
         g_task_return_error (task, error);
     else {
         GArray *bands;
+        MMTelitBNDParseConfig config;
 
-        bands = mm_telit_parse_bnd_test_response (response,
-                                                  mm_iface_modem_is_2g (MM_IFACE_MODEM (self)),
-                                                  mm_iface_modem_is_3g (MM_IFACE_MODEM (self)),
-                                                  mm_iface_modem_is_4g (MM_IFACE_MODEM (self)),
-                                                  priv->alternate_3g_bands,
-                                                  is_bnd_4g_format_hex (self, priv->software_package_version),
-                                                  &priv->ext_4g_bands,
-                                                  self,
-                                                  &error);
+        mm_shared_telit_get_bnd_parse_config (MM_IFACE_MODEM (self), &config);
+
+        bands = mm_telit_parse_bnd_test_response (response, &config, self, &error);
         if (!bands)
             g_task_return_error (task, error);
         else {
@@ -338,25 +359,17 @@ load_current_bands_ready (MMBaseModem  *self,
 {
     const gchar *response;
     GError      *error = NULL;
-    Private     *priv;
-
-    priv = get_private (MM_SHARED_TELIT (self));
 
     response = mm_base_modem_at_command_finish (self, res, &error);
     if (!response)
         g_task_return_error (task, error);
     else {
         GArray *bands;
+        MMTelitBNDParseConfig config;
 
-        bands = mm_telit_parse_bnd_query_response (response,
-                                                   mm_iface_modem_is_2g (MM_IFACE_MODEM (self)),
-                                                   mm_iface_modem_is_3g (MM_IFACE_MODEM (self)),
-                                                   mm_iface_modem_is_4g (MM_IFACE_MODEM (self)),
-                                                   priv->alternate_3g_bands,
-                                                   is_bnd_4g_format_hex (self, priv->software_package_version),
-                                                   priv->ext_4g_bands,
-                                                   self,
-                                                   &error);
+        mm_shared_telit_get_bnd_parse_config (MM_IFACE_MODEM (self), &config);
+
+        bands = mm_telit_parse_bnd_query_response (response, &config, self, &error);
         if (!bands)
             g_task_return_error (task, error);
         else
@@ -454,15 +467,16 @@ set_current_bands_at (MMIfaceModem *self,
 {
     GError  *error = NULL;
     gchar   *cmd;
-    Private *priv;
     GArray  *bands_array;
-
-    priv = get_private (MM_SHARED_TELIT (self));
+    MMTelitBNDParseConfig config;
 
     bands_array = g_task_get_task_data (task);
     g_assert (bands_array);
 
     if (bands_array->len == 1 && g_array_index (bands_array, MMModemBand, 0) == MM_MODEM_BAND_ANY) {
+        Private *priv;
+
+        priv = get_private (MM_SHARED_TELIT (self));
         if (!priv->supported_bands) {
             g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
                                      "Couldn't build ANY band settings: unknown supported bands");
@@ -472,13 +486,8 @@ set_current_bands_at (MMIfaceModem *self,
         bands_array = priv->supported_bands;
     }
 
-    cmd = mm_telit_build_bnd_request (bands_array,
-                                      mm_iface_modem_is_2g (self),
-                                      mm_iface_modem_is_3g (self),
-                                      mm_iface_modem_is_4g (self),
-                                      priv->alternate_3g_bands,
-                                      priv->ext_4g_bands,
-                                      &error);
+    mm_shared_telit_get_bnd_parse_config (self, &config);
+    cmd = mm_telit_build_bnd_request (bands_array, &config, &error);
     if (!cmd) {
         g_task_return_error (task, error);
         g_object_unref (task);
@@ -783,3 +792,4 @@ mm_shared_telit_get_type (void)
 
     return shared_telit_type;
 }
+
