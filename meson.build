@@ -354,7 +354,7 @@ foreach plugin_name, plugin_reqs: plugins_options_reqs
   plugin_enabled = not plugin_opt.disabled() and plugin_reqs['available']
   if plugin_enabled
     foreach plugin_req: plugin_reqs['shared']
-      if plugins_shared_reqs[plugin_req]
+      if plugin_req in plugins_shared_reqs and plugins_shared_reqs[plugin_req]
         plugins_shared += {plugin_req: true}
       else
         assert(plugin_opt.enabled(), '@0@ required @1@ but is not available'.format(plugin_name, plugin_req))
