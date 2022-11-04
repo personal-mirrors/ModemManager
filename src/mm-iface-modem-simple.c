@@ -28,6 +28,7 @@
 #include "mm-iface-modem-cdma.h"
 #include "mm-iface-modem-simple.h"
 #include "mm-log-object.h"
+#include "mm-log-helpers.h"
 
 /*****************************************************************************/
 /* Private data context */
@@ -225,14 +226,14 @@ typedef enum {
 } ConnectionStep;
 
 typedef struct {
-    MmGdbusModemSimple *skeleton;
+    MmGdbusModemSimple    *skeleton;
     GDBusMethodInvocation *invocation;
-    MMIfaceModemSimple *self;
-    ConnectionStep step;
-    MMBearerList *bearer_list;
+    MMIfaceModemSimple    *self;
+    ConnectionStep         step;
+    MMBearerList          *bearer_list;
 
     /* Expected input properties */
-    GVariant *dictionary;
+    GVariant                  *dictionary;
     MMSimpleConnectProperties *properties;
 
     /* Results to set */
@@ -272,33 +273,32 @@ connection_context_free (ConnectionContext *ctx)
     g_object_unref (ctx->skeleton);
     g_object_unref (ctx->invocation);
     g_object_unref (ctx->self);
-    g_free (ctx);
+    g_slice_free (ConnectionContext, ctx);
 }
 
 static void connection_step (ConnectionContext *ctx);
 
 static void
-connect_bearer_ready (MMBaseBearer *bearer,
-                      GAsyncResult *res,
+connect_bearer_ready (MMBaseBearer      *bearer,
+                      GAsyncResult      *res,
                       ConnectionContext *ctx)
 {
     GError *error = NULL;
 
     if (!mm_base_bearer_connect_finish (bearer, res, &error)) {
-        mm_obj_dbg (ctx->self, "couldn't connect bearer: %s", error->message);
+        mm_obj_warn (ctx->self, "couldn't connect bearer: %s", error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
         return;
     }
 
-    /* Bearer connected.... all done!!!!! */
     ctx->step++;
     connection_step (ctx);
 }
 
 static void
-create_bearer_ready (MMIfaceModem *self,
-                     GAsyncResult *res,
+create_bearer_ready (MMIfaceModem      *self,
+                     GAsyncResult      *res,
                      ConnectionContext *ctx)
 {
     GError *error = NULL;
@@ -306,12 +306,12 @@ create_bearer_ready (MMIfaceModem *self,
     /* ownership for the caller */
     ctx->bearer = mm_iface_modem_create_bearer_finish (self, res, &error);
     if (!ctx->bearer) {
+        mm_obj_warn (ctx->self, "couldn't create bearer: %s", error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
         return;
     }
 
-    /* Bearer available! */
     ctx->step++;
     connection_step (ctx);
 }
@@ -324,30 +324,30 @@ wait_for_packet_service_state_ready (MMIfaceModem3gpp  *self,
     GError *error = NULL;
 
     if (!mm_iface_modem_3gpp_wait_for_packet_service_state_finish (self, res, &error)) {
+        mm_obj_warn (ctx->self, "couldn't attach packet service: %s", error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
         return;
     }
 
-    /* Packet service attached now! */
     ctx->step++;
     connection_step (ctx);
 }
 
 static void
 register_in_3gpp_or_cdma_network_ready (MMIfaceModemSimple *self,
-                                        GAsyncResult *res,
-                                        ConnectionContext *ctx)
+                                        GAsyncResult       *res,
+                                        ConnectionContext  *ctx)
 {
     GError *error = NULL;
 
     if (!register_in_3gpp_or_cdma_network_finish (self, res, &error)) {
+        mm_obj_warn (ctx->self, "registration in network failed: %s", error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
         return;
     }
 
-    /* Registered now! */
     ctx->step++;
     connection_step (ctx);
 }
@@ -362,21 +362,23 @@ wait_after_enabled_ready (ConnectionContext *ctx)
 }
 
 static void
-wait_for_enabled_ready (MMIfaceModem *self,
-                        GAsyncResult *res,
+wait_for_enabled_ready (MMIfaceModem      *self,
+                        GAsyncResult      *res,
                         ConnectionContext *ctx)
 {
-    GError *error = NULL;
-    MMModemState state;
+    GError       *error = NULL;
+    MMModemState  state;
 
     state = mm_iface_modem_wait_for_final_state_finish (self, res, &error);
     if (error) {
+        mm_obj_warn (ctx->self, "failed waiting for final state: %s", error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
         return;
     }
 
     if (state < MM_MODEM_STATE_ENABLED) {
+        mm_obj_warn (ctx->self, "failed waiting for enabled state: %s", mm_modem_state_get_string (state));
         g_dbus_method_invocation_return_error (
             ctx->invocation,
             MM_CORE_ERROR,
@@ -387,25 +389,24 @@ wait_for_enabled_ready (MMIfaceModem *self,
         return;
     }
 
-    /* Enabled now, cool. */
     ctx->step++;
     connection_step (ctx);
 }
 
 static void
-enable_ready (MMBaseModem *self,
-              GAsyncResult *res,
+enable_ready (MMBaseModem       *self,
+              GAsyncResult      *res,
               ConnectionContext *ctx)
 {
     GError *error = NULL;
 
     if (!mm_base_modem_enable_finish (MM_BASE_MODEM (self), res, &error)) {
+        mm_obj_warn (ctx->self, "failed enabling modem: %s", error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
         return;
     }
 
-    /* Enabling done!, keep on!!! */
     ctx->step++;
     connection_step (ctx);
 }
@@ -419,45 +420,46 @@ wait_for_initialized_ready (MMIfaceModem *self,
 
     mm_iface_modem_wait_for_final_state_finish (self, res, &error);
     if (error) {
+        mm_obj_warn (ctx->self, "failed waiting for final state: %s", error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
         return;
     }
 
-    /* Initialized now, cool. */
     ctx->step++;
     connection_step (ctx);
 }
 
 static void
-send_pin_ready (MMBaseSim *sim,
-                GAsyncResult *res,
+send_pin_ready (MMBaseSim         *sim,
+                GAsyncResult      *res,
                 ConnectionContext *ctx)
 {
     GError *error = NULL;
 
     if (!mm_base_sim_send_pin_finish (sim, res, &error)) {
+        mm_obj_warn (ctx->self, "failed sending SIM PIN: %s", error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
         return;
     }
 
-    /* Sent pin, cool. */
     ctx->step++;
     connection_step (ctx);
 }
 
 static void
-update_lock_info_ready (MMIfaceModem *self,
-                        GAsyncResult *res,
+update_lock_info_ready (MMIfaceModem      *self,
+                        GAsyncResult      *res,
                         ConnectionContext *ctx)
 {
-    GError *error = NULL;
-    MMModemLock lock;
-    MMBaseSim *sim;
+    GError               *error = NULL;
+    MMModemLock           lock;
+    g_autoptr(MMBaseSim)  sim = NULL;
 
     lock = mm_iface_modem_update_lock_info_finish (self, res, &error);
     if (error) {
+        mm_obj_warn (ctx->self, "failed updating lock info: %s", error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
         return;
@@ -477,6 +479,8 @@ update_lock_info_ready (MMIfaceModem *self,
     /* During simple connect we are only allowed to use SIM PIN */
     if (lock != MM_MODEM_LOCK_SIM_PIN ||
         !mm_simple_connect_properties_get_pin (ctx->properties)) {
+        mm_obj_warn (ctx->self, "modem is locked with '%s'",
+                     mm_modem_lock_get_string (lock));
         g_dbus_method_invocation_return_error (
             ctx->invocation,
             MM_CORE_ERROR,
@@ -488,11 +492,11 @@ update_lock_info_ready (MMIfaceModem *self,
     }
 
     /* Try to unlock the modem providing the PIN */
-    sim = NULL;
     g_object_get (ctx->self,
                   MM_IFACE_MODEM_SIM, &sim,
                   NULL);
     if (!sim) {
+        mm_obj_warn (ctx->self, "SIM is not accessible");
         g_dbus_method_invocation_return_error (
             ctx->invocation,
             MM_CORE_ERROR,
@@ -506,7 +510,6 @@ update_lock_info_ready (MMIfaceModem *self,
                           mm_simple_connect_properties_get_pin (ctx->properties),
                           (GAsyncReadyCallback)send_pin_ready,
                           ctx);
-    g_object_unref (sim);
 }
 
 static gboolean
@@ -517,6 +520,7 @@ completed_if_cancelled (ConnectionContext *ctx)
         return FALSE;
 
     /* Otherwise cancellable is valid and it's cancelled */
+    mm_obj_warn (ctx->self, "connection attempt cancelled");
     g_dbus_method_invocation_return_error (
         ctx->invocation, G_IO_ERROR, G_IO_ERROR_CANCELLED,
         "Connection attempt cancelled");
@@ -557,8 +561,8 @@ connection_step (ConnectionContext *ctx)
         /* fall through */
 
     case CONNECTION_STEP_UNLOCK_CHECK:
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): unlock check",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): unlock check",
+                    ctx->step, CONNECTION_STEP_LAST);
         mm_iface_modem_update_lock_info (MM_IFACE_MODEM (ctx->self),
                                          MM_MODEM_LOCK_UNKNOWN, /* ask */
                                          (GAsyncReadyCallback)update_lock_info_ready,
@@ -566,8 +570,8 @@ connection_step (ConnectionContext *ctx)
         return;
 
     case CONNECTION_STEP_WAIT_FOR_INITIALIZED:
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): wait to get fully initialized",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): wait to get fully initialized",
+                    ctx->step, CONNECTION_STEP_LAST);
         mm_iface_modem_wait_for_final_state (MM_IFACE_MODEM (ctx->self),
                                              MM_MODEM_STATE_DISABLED, /* disabled == initialized */
                                              (GAsyncReadyCallback)wait_for_initialized_ready,
@@ -575,16 +579,16 @@ connection_step (ConnectionContext *ctx)
         return;
 
     case CONNECTION_STEP_ENABLE:
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): enable",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): enable",
+                    ctx->step, CONNECTION_STEP_LAST);
         mm_base_modem_enable (MM_BASE_MODEM (ctx->self),
                               (GAsyncReadyCallback)enable_ready,
                               ctx);
         return;
 
     case CONNECTION_STEP_WAIT_FOR_ENABLED:
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): wait to get fully enabled",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): wait to get fully enabled",
+                    ctx->step, CONNECTION_STEP_LAST);
         mm_iface_modem_wait_for_final_state (MM_IFACE_MODEM (ctx->self),
                                              MM_MODEM_STATE_UNKNOWN, /* just a final state */
                                              (GAsyncReadyCallback)wait_for_enabled_ready,
@@ -592,8 +596,8 @@ connection_step (ConnectionContext *ctx)
         return;
 
     case CONNECTION_STEP_WAIT_AFTER_ENABLED:
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): wait after enabled",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): wait after enabled",
+                    ctx->step, CONNECTION_STEP_LAST);
         /* When we have just enabled, we want to give it some time before starting
          * the registration process, so that any pending registration update that may
          * have been scheduled during the enabling phase is applied. We don't want to
@@ -603,8 +607,8 @@ connection_step (ConnectionContext *ctx)
 
 
     case CONNECTION_STEP_REGISTER:
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): register",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): register",
+                    ctx->step, CONNECTION_STEP_LAST);
         if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (ctx->self)) ||
             mm_iface_modem_is_cdma (MM_IFACE_MODEM (ctx->self))) {
             /* 3GPP or CDMA registration */
@@ -622,8 +626,8 @@ connection_step (ConnectionContext *ctx)
         /* fall through */
 
     case CONNECTION_STEP_PACKET_SERVICE_ATTACH:
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): wait to get packet service state attached",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): wait to get packet service state attached",
+                    ctx->step, CONNECTION_STEP_LAST);
         if (mm_iface_modem_is_3gpp (MM_IFACE_MODEM (ctx->self))) {
             mm_iface_modem_3gpp_wait_for_packet_service_state (MM_IFACE_MODEM_3GPP (ctx->self),
                                                                MM_MODEM_3GPP_PACKET_SERVICE_STATE_ATTACHED,
@@ -638,8 +642,8 @@ connection_step (ConnectionContext *ctx)
     case CONNECTION_STEP_BEARER: {
         g_autoptr(MMBearerProperties) bearer_properties = NULL;
 
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): bearer",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): bearer",
+                    ctx->step, CONNECTION_STEP_LAST);
 
         bearer_properties = mm_simple_connect_properties_get_bearer_properties (ctx->properties);
 
@@ -660,8 +664,8 @@ connection_step (ConnectionContext *ctx)
     } /* fall through */
 
     case CONNECTION_STEP_CONNECT:
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): connect",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): connect",
+                    ctx->step, CONNECTION_STEP_LAST);
 
         /* At this point, we can cleanup the cancellation point in the Simple interface,
          * because the bearer connection has its own cancellation setup. */
@@ -676,15 +680,14 @@ connection_step (ConnectionContext *ctx)
             return;
         }
 
-        mm_obj_dbg (ctx->self, "bearer at '%s' is already connected...",
-                    mm_base_bearer_get_path (ctx->bearer));
+        mm_obj_info (ctx->self, "bearer at '%s' is already connected...", mm_base_bearer_get_path (ctx->bearer));
 
         ctx->step++;
         /* fall through */
 
     case CONNECTION_STEP_LAST:
-        mm_obj_info (ctx->self, "simple connect state (%d/%d): all done",
-                     ctx->step, CONNECTION_STEP_LAST);
+        mm_obj_msg (ctx->self, "simple connect state (%d/%d): all done",
+                    ctx->step, CONNECTION_STEP_LAST);
         /* All done, yey! */
         mm_gdbus_modem_simple_complete_connect (
             ctx->skeleton,
@@ -721,6 +724,9 @@ connect_auth_ready (MMBaseModem *self,
         return;
     }
 
+    mm_obj_info (self, "processing user request to connect modem...");
+    mm_log_simple_connect_properties (self, MM_LOG_LEVEL_INFO, "  ", ctx->properties);
+
     if (!setup_cancellation (ctx, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         connection_context_free (ctx);
@@ -740,64 +746,7 @@ connect_auth_ready (MMBaseModem *self,
         return;
     }
 
-    mm_obj_info (self, "simple connect started...");
-
-    /* Log about all the parameters being used for the simple connect */
-    {
-        MMBearerMultiplexSupport  multiplex;
-        MMBearerAllowedAuth       allowed_auth;
-        MMBearerApnType           apn_type;
-        gchar                    *str;
-        MMBearerIpFamily          ip_family;
-        gint                      profile_id;
-
-#define VALIDATE_UNSPECIFIED(str) (str ? str : "unspecified")
-
-        profile_id = mm_simple_connect_properties_get_profile_id (ctx->properties);
-        if (profile_id != MM_3GPP_PROFILE_ID_UNKNOWN)
-            mm_obj_dbg (self, "   profile ID: %d", profile_id);
-        else
-            mm_obj_dbg (self, "   profile ID: %s", VALIDATE_UNSPECIFIED (NULL));
-
-        mm_obj_dbg (self, "   PIN: %s", VALIDATE_UNSPECIFIED (mm_simple_connect_properties_get_pin (ctx->properties)));
-        mm_obj_dbg (self, "   operator ID: %s", VALIDATE_UNSPECIFIED (mm_simple_connect_properties_get_operator_id (ctx->properties)));
-        mm_obj_dbg (self, "   allowed roaming: %s", mm_simple_connect_properties_get_allow_roaming (ctx->properties) ? "yes" : "no");
-        mm_obj_dbg (self, "   APN: %s", VALIDATE_UNSPECIFIED (mm_simple_connect_properties_get_apn (ctx->properties)));
-
-        apn_type = mm_simple_connect_properties_get_apn_type (ctx->properties);
-        if (apn_type != MM_BEARER_APN_TYPE_NONE) {
-            str = mm_bearer_apn_type_build_string_from_mask (apn_type);
-            mm_obj_dbg (self, "   APN type: %s", str);
-            g_free (str);
-        } else
-            mm_obj_dbg (self, "   APN type: %s", VALIDATE_UNSPECIFIED (NULL));
-
-        ip_family = mm_simple_connect_properties_get_ip_type (ctx->properties);
-        if (ip_family != MM_BEARER_IP_FAMILY_NONE) {
-            str = mm_bearer_ip_family_build_string_from_mask (ip_family);
-            mm_obj_dbg (self, "   IP family: %s", str);
-            g_free (str);
-        } else
-            mm_obj_dbg (self, "   IP family: %s", VALIDATE_UNSPECIFIED (NULL));
-
-        allowed_auth = mm_simple_connect_properties_get_allowed_auth (ctx->properties);
-        if (allowed_auth != MM_BEARER_ALLOWED_AUTH_UNKNOWN) {
-            str = mm_bearer_allowed_auth_build_string_from_mask (allowed_auth);
-            mm_obj_dbg (self, "   allowed authentication: %s", str);
-            g_free (str);
-        } else
-            mm_obj_dbg (self, "   allowed authentication: %s", VALIDATE_UNSPECIFIED (NULL));
-
-        mm_obj_dbg (self, "   user: %s", VALIDATE_UNSPECIFIED (mm_simple_connect_properties_get_user (ctx->properties)));
-        mm_obj_dbg (self, "   password: %s", VALIDATE_UNSPECIFIED (mm_simple_connect_properties_get_password (ctx->properties)));
-
-        multiplex = mm_simple_connect_properties_get_multiplex (ctx->properties);
-        mm_obj_dbg (self, "   multiplex: %s", VALIDATE_UNSPECIFIED (multiplex != MM_BEARER_MULTIPLEX_SUPPORT_UNKNOWN ?
-                                                                    mm_bearer_multiplex_support_get_string (multiplex) :
-                                                                    NULL));
-
-#undef VALIDATE_UNSPECIFIED
-    }
+    mm_obj_msg (self, "simple connect started...");
 
     switch (current) {
     case MM_MODEM_STATE_FAILED:
@@ -842,20 +791,18 @@ connect_auth_ready (MMBaseModem *self,
 }
 
 static gboolean
-handle_connect (MmGdbusModemSimple *skeleton,
+handle_connect (MmGdbusModemSimple    *skeleton,
                 GDBusMethodInvocation *invocation,
-                GVariant *dictionary,
-                MMIfaceModemSimple *self)
+                GVariant              *dictionary,
+                MMIfaceModemSimple    *self)
 {
     ConnectionContext *ctx;
 
-    ctx = g_new0 (ConnectionContext, 1);
+    ctx = g_slice_new0 (ConnectionContext);
     ctx->skeleton = g_object_ref (skeleton);
     ctx->invocation = g_object_ref (invocation);
     ctx->self = g_object_ref (self);
     ctx->dictionary = g_variant_ref (dictionary);
-
-    mm_obj_dbg (self, "user request to connect modem");
 
     mm_base_modem_authorize (MM_BASE_MODEM (self),
                              invocation,
@@ -868,12 +815,12 @@ handle_connect (MmGdbusModemSimple *skeleton,
 /*****************************************************************************/
 
 typedef struct {
-    MMIfaceModemSimple *self;
-    MmGdbusModemSimple *skeleton;
+    MMIfaceModemSimple    *self;
+    MmGdbusModemSimple    *skeleton;
     GDBusMethodInvocation *invocation;
-    gchar *bearer_path;
-    GList *bearers;
-    MMBaseBearer *current;
+    gchar                 *bearer_path;
+    GList                 *bearers;
+    MMBaseBearer          *current;
 } DisconnectionContext;
 
 static void
@@ -883,22 +830,23 @@ disconnection_context_free (DisconnectionContext *ctx)
     g_object_unref (ctx->invocation);
     g_object_unref (ctx->self);
     g_free (ctx->bearer_path);
-    if (ctx->current)
-        g_object_unref (ctx->current);
+    g_clear_object (&ctx->current);
     g_list_free_full (ctx->bearers, g_object_unref);
-    g_free (ctx);
+    g_slice_free (DisconnectionContext, ctx);
 }
 
 static void disconnect_next_bearer (DisconnectionContext *ctx);
 
 static void
-disconnect_ready (MMBaseBearer *bearer,
-                  GAsyncResult *res,
+disconnect_ready (MMBaseBearer         *bearer,
+                  GAsyncResult         *res,
                   DisconnectionContext *ctx)
 {
     GError *error = NULL;
 
     if (!mm_base_bearer_disconnect_finish (bearer, res, &error)) {
+        mm_obj_warn (ctx->self, "failed to disconnect bearer '%s': %s",
+                     mm_base_bearer_get_path (bearer), error->message);
         g_dbus_method_invocation_take_error (ctx->invocation, error);
         disconnection_context_free (ctx);
         return;
@@ -915,8 +863,8 @@ disconnect_next_bearer (DisconnectionContext *ctx)
 
     /* No more bearers? all done! */
     if (!ctx->bearers) {
-        mm_gdbus_modem_simple_complete_disconnect (ctx->skeleton,
-                                                   ctx->invocation);
+        mm_obj_info (ctx->self, "all requested bearers disconnected");
+        mm_gdbus_modem_simple_complete_disconnect (ctx->skeleton, ctx->invocation);
         disconnection_context_free (ctx);
         return;
     }
@@ -924,13 +872,14 @@ disconnect_next_bearer (DisconnectionContext *ctx)
     ctx->current = MM_BASE_BEARER (ctx->bearers->data);
     ctx->bearers = g_list_delete_link (ctx->bearers, ctx->bearers);
 
+    mm_obj_info (ctx->self, "disconnecting bearer '%s'...", mm_base_bearer_get_path (ctx->current));
     mm_base_bearer_disconnect (ctx->current,
                                (GAsyncReadyCallback)disconnect_ready,
                                ctx);
 }
 
 static void
-build_connected_bearer_list (MMBaseBearer *bearer,
+build_connected_bearer_list (MMBaseBearer         *bearer,
                              DisconnectionContext *ctx)
 {
     if (!ctx->bearer_path ||
@@ -939,13 +888,13 @@ build_connected_bearer_list (MMBaseBearer *bearer,
 }
 
 static void
-disconnect_auth_ready (MMBaseModem *self,
-                       GAsyncResult *res,
+disconnect_auth_ready (MMBaseModem          *self,
+                       GAsyncResult         *res,
                        DisconnectionContext *ctx)
 {
-    GError *error = NULL;
-    MMBearerList *list = NULL;
-    Private *priv;
+    g_autoptr(MMBearerList)  list = NULL;
+    GError                  *error = NULL;
+    Private                 *priv;
 
     if (!mm_base_modem_authorize_finish (self, res, &error)) {
         g_dbus_method_invocation_take_error (ctx->invocation, error);
@@ -974,13 +923,17 @@ disconnect_auth_ready (MMBaseModem *self,
         return;
     }
 
+    if (ctx->bearer_path)
+        mm_obj_info (self, "processing user request to disconnect modem: bearer '%s'", ctx->bearer_path);
+    else
+        mm_obj_info (self, "processing user request to disconnect modem: all bearers");
+
     mm_bearer_list_foreach (list,
                             (MMBearerListForeachFunc)build_connected_bearer_list,
                             ctx);
-    g_object_unref (list);
 
-    if (ctx->bearer_path &&
-        !ctx->bearers) {
+    if (ctx->bearer_path && !ctx->bearers) {
+        mm_obj_warn (self, "failed to disconnect bearer '%s': not found", ctx->bearer_path);
         g_dbus_method_invocation_return_error (
             ctx->invocation,
             MM_CORE_ERROR,
@@ -996,14 +949,14 @@ disconnect_auth_ready (MMBaseModem *self,
 }
 
 static gboolean
-handle_disconnect (MmGdbusModemSimple *skeleton,
+handle_disconnect (MmGdbusModemSimple    *skeleton,
                    GDBusMethodInvocation *invocation,
-                   const gchar *bearer_path,
-                   MMIfaceModemSimple *self)
+                   const gchar           *bearer_path,
+                   MMIfaceModemSimple    *self)
 {
     DisconnectionContext *ctx;
 
-    ctx = g_new0 (DisconnectionContext, 1);
+    ctx = g_slice_new0 (DisconnectionContext);
     ctx->skeleton = g_object_ref (skeleton);
     ctx->self = g_object_ref (self);
     ctx->invocation = g_object_ref (invocation);
@@ -1015,11 +968,8 @@ handle_disconnect (MmGdbusModemSimple *skeleton,
      *
      * We will detect the '/' string and set the bearer path as NULL in the
      * context if so, and otherwise use the given input string as path */
-    if (g_strcmp0 (bearer_path, "/") != 0) {
-        mm_obj_dbg (self, "user request to disconnect modem (bearer '%s')", bearer_path);
+    if (g_strcmp0 (bearer_path, "/") != 0)
         ctx->bearer_path = g_strdup (bearer_path);
-    } else
-        mm_obj_dbg (self, "user request to disconnect modem (all bearers)");
 
     mm_base_modem_authorize (MM_BASE_MODEM (self),
                              invocation,
