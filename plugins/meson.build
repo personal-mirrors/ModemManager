@@ -776,6 +776,7 @@ if plugins_options['simtech']
   common_c_args = test_udev_rules_dir_c_args + ['-DMM_MODULE_NAME="simtech"']
 
   sources = files(
+    'simtech/mm-broadband-bearer-simtech-ecm.c',
     'simtech/mm-broadband-modem-simtech.c',
     'simtech/mm-plugin-simtech.c',
     'simtech/mm-shared-simtech.c',
