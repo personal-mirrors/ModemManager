@@ -29,7 +29,10 @@ mm_ifaces_modem = files(
   'org.freedesktop.ModemManager1.Modem.xml',
 )
 
-mm_ifaces_sim = files('org.freedesktop.ModemManager1.Sim.xml')
+mm_ifaces_sim = files(
+  'org.freedesktop.ModemManager1.Sim.xml',
+  'org.freedesktop.ModemManager1.Sim.Uicc.xml')
+
 mm_ifaces_sms = files('org.freedesktop.ModemManager1.Sms.xml',)
 
 install_data(

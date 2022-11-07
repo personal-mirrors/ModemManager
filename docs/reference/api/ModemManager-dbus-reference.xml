@@ -163,7 +163,13 @@
       expose up to one SIM object, which allows SIM-specific actions such as PIN
       unlocking.
     </para>
+    <para>
+      Esim on modems will be enumerated under
+      <link linkend="ref-dbus-object-sim">Sim</link> object as the,
+      <link linkend="gdbus-org.freedesktop.ModemManager1.Sim.Uicc">UICC interface</link>.
+    </para>
     <xi:include href="../../../../libmm-glib/generated/mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.xml"/>
+    <xi:include href="../../../../libmm-glib/generated/mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.Uicc.xml"/>
   </chapter>
 
   <chapter id="ref-dbus-object-sms">

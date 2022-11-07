@@ -35,6 +35,7 @@ expand_content_files = [
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Modem.Time.xml',
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Modem.xml',
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.xml',
+  generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.Uicc.xml',
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.Sms.xml',
   generated_build_dir / 'mm-gdbus-doc-org.freedesktop.ModemManager1.xml',
 ]

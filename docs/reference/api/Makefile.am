@@ -61,6 +61,7 @@ expand_content_files = \
 	ModemManager-migration-reference.xml \
 	$(top_builddir)/libmm-glib/generated/mm-gdbus-doc-org.freedesktop.ModemManager1.xml \
 	$(top_builddir)/libmm-glib/generated/mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.xml \
+	$(top_builddir)/libmm-glib/generated/mm-gdbus-doc-org.freedesktop.ModemManager1.Sim.Uicc.xml \
 	$(top_builddir)/libmm-glib/generated/mm-gdbus-doc-org.freedesktop.ModemManager1.Sms.xml \
 	$(top_builddir)/libmm-glib/generated/mm-gdbus-doc-org.freedesktop.ModemManager1.Bearer.xml \
 	$(top_builddir)/libmm-glib/generated/mm-gdbus-doc-org.freedesktop.ModemManager1.Modem.xml \
