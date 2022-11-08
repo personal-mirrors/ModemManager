@@ -155,6 +155,8 @@ struct _MMBroadbandModemMbimPrivate {
     MbimDataClass highest_available_data_class;
     MbimRegisterState reg_state;
     MbimPacketServiceState packet_service_state;
+    guint64 packet_service_uplink_speed;
+    guint64 packet_service_downlink_speed;
 
     MbimSubscriberReadyState last_ready_state;
 
@@ -4742,22 +4744,31 @@ basic_connect_notification_subscriber_ready_status (MMBroadbandModemMbim *self,
     }
 }
 
-typedef struct {
-    MMBroadbandModemMbim *self;
-    guint64               uplink_speed;
-    guint64               downlink_speed;
-} ReportSpeedsContext;
+/*****************************************************************************/
+/* Packet service updates */
+
+void
+mm_broadband_modem_mbim_get_speeds (MMBroadbandModemMbim *self,
+                                    guint64              *uplink_speed,
+                                    guint64              *downlink_speed)
+{
+    if (uplink_speed)
+        *uplink_speed = self->priv->packet_service_uplink_speed;
+    if (downlink_speed)
+        *downlink_speed = self->priv->packet_service_downlink_speed;
+}
 
 static void
-bearer_list_report_speeds (MMBaseBearer *bearer,
-                           gpointer      user_data)
+bearer_list_report_speeds (MMBaseBearer         *bearer,
+                           MMBroadbandModemMbim *self)
 {
-    ReportSpeedsContext *ctx = user_data;
+    if (!MM_IS_BEARER_MBIM (bearer))
+        return;
 
-    if (MM_IS_BEARER_MBIM (bearer)) {
-        mm_obj_dbg (ctx->self, "bearer '%s' speeds updated", mm_base_bearer_get_path (bearer));
-        mm_base_bearer_report_speeds (bearer, ctx->uplink_speed, ctx->downlink_speed);
-    }
+    mm_obj_dbg (self, "bearer '%s' speeds updated", mm_base_bearer_get_path (bearer));
+    mm_base_bearer_report_speeds (bearer,
+                                  self->priv->packet_service_uplink_speed,
+                                  self->priv->packet_service_downlink_speed);
 }
 
 static void
@@ -4869,19 +4880,15 @@ basic_connect_notification_packet_service (MMBroadbandModemMbim *self,
                                   g_strdup (self->priv->current_operator_name));
     }
 
+    self->priv->packet_service_uplink_speed = uplink_speed;
+    self->priv->packet_service_downlink_speed = downlink_speed;
     g_object_get (self,
                   MM_IFACE_MODEM_BEARER_LIST, &bearer_list,
                   NULL);
-    if (bearer_list) {
-        ReportSpeedsContext ctx = {
-            .uplink_speed = uplink_speed,
-            .downlink_speed = downlink_speed,
-        };
-
+    if (bearer_list)
         mm_bearer_list_foreach (bearer_list,
                                 (MMBearerListForeachFunc)bearer_list_report_speeds,
-                                &ctx);
-    }
+                                self);
 }
 
 static void
@@ -8959,53 +8966,72 @@ packet_service_set_ready (MbimDevice   *device,
                           GAsyncResult *res,
                           GTask        *task)
 {
+    MMBroadbandModemMbim   *self;
     g_autoptr(MbimMessage)  response = NULL;
-    GError                 *error = NULL;
+    g_autoptr(GError)       error = NULL;
     MbimPacketServiceState  requested_packet_service_state;
     MbimPacketServiceState  packet_service_state;
+    guint32                 nw_error;
+
+    self = g_task_get_source_object (task);
 
     response = mbim_device_command_finish (device, res, &error);
-    if (!response || !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error)) {
-        g_task_return_error (task, error);
-        g_object_unref (task);
-        return;
-    }
+    if (response &&
+        (mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
+         error->code == MBIM_STATUS_ERROR_FAILURE)) {
+        g_autoptr(GError) inner_error = NULL;
 
-    if (mbim_device_check_ms_mbimex_version (device, 3, 0)) {
-        mbim_message_ms_basic_connect_v3_packet_service_response_parse (
-            response,
-            NULL, /* &nw_error */
-            &packet_service_state,
-            NULL, /* data_class_v3 */
-            NULL, /* uplink_speed */
-            NULL, /* downlink_speed */
-            NULL, /* frequency_range */
-            NULL, /* data_subclass */
-            NULL, /* tai */
-            &error);
-    } else if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
-        mbim_message_ms_basic_connect_v2_packet_service_response_parse (
-            response,
-            NULL, /* nw_error */
-            &packet_service_state,
-            NULL, /* data_class */
-            NULL, /* uplink_speed */
-            NULL, /* downlink_speed */
-            NULL, /* frequency_range */
-            &error);
-    } else {
-        mbim_message_packet_service_response_parse (
-            response,
-            NULL, /* nw_error */
-            &packet_service_state,
-            NULL, /* data_class */
-            NULL, /* uplink_speed */
-            NULL, /* downlink_speed */
-            &error);
+        if (mbim_device_check_ms_mbimex_version (device, 3, 0)) {
+            mbim_message_ms_basic_connect_v3_packet_service_response_parse (
+                response,
+                &nw_error,
+                &packet_service_state,
+                NULL, /* data_class_v3 */
+                NULL, /* uplink_speed */
+                NULL, /* downlink_speed */
+                NULL, /* frequency_range */
+                NULL, /* data_subclass */
+                NULL, /* tai */
+                &inner_error);
+        } else if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
+            mbim_message_ms_basic_connect_v2_packet_service_response_parse (
+                response,
+                &nw_error,
+                &packet_service_state,
+                NULL, /* data_class */
+                NULL, /* uplink_speed */
+                NULL, /* downlink_speed */
+                NULL, /* frequency_range */
+                &inner_error);
+        } else {
+            mbim_message_packet_service_response_parse (
+                response,
+                &nw_error,
+                &packet_service_state,
+                NULL, /* data_class */
+                NULL, /* uplink_speed */
+                NULL, /* downlink_speed */
+                &inner_error);
+        }
+
+        if (!inner_error) {
+            /* Prefer the NW error if available */
+            if (nw_error) {
+                g_clear_error (&error);
+                error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error, self);
+            }
+        } else {
+            /* Prefer the error from the result to the parsing error */
+            if (!error)
+                error = g_steal_pointer (&inner_error);
+        }
     }
 
     if (error) {
-        g_task_return_error (task, error);
+        if (g_error_matches (error, MBIM_STATUS_ERROR, MBIM_STATUS_ERROR_NO_DEVICE_SUPPORT))
+            g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED, "%s", error->message);
+        else
+            g_task_return_error (task, g_steal_pointer (&error));
         g_object_unref (task);
         return;
     }
@@ -9064,7 +9090,7 @@ set_packet_service_state (MMIfaceModem3gpp              *self,
     message = mbim_message_packet_service_set_new (packet_service_action, NULL);
     mbim_device_command (device,
                          message,
-                         10,
+                         30,
                          NULL,
                          (GAsyncReadyCallback)packet_service_set_ready,
                          task);
