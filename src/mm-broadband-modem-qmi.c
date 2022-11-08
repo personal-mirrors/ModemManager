@@ -2722,6 +2722,76 @@ modem_3gpp_disable_facility_lock (MMIfaceModem3gpp *self,
 }
 
 /*****************************************************************************/
+/* Configure facility locks */
+
+static gboolean
+modem_3gpp_set_lock_configuration_finish (MMIfaceModem3gpp *self,
+                                          GAsyncResult *res,
+                                          GError **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+set_lock_configuration_ready (QmiClientUim *client,
+                              GAsyncResult *res,
+                              GTask *task)
+{
+    QmiMessageUimRemoteUnlockOutput *output;
+    GError *error = NULL;
+
+    output = qmi_client_uim_remote_unlock_finish (client, res, &error);
+    if (!output ||
+        !qmi_message_uim_remote_unlock_output_get_result (output, &error)) {
+        g_prefix_error (&error, "configuration of modem locks failed: ");
+        g_task_return_error (task, error);
+    } else {
+      g_task_return_boolean (task, TRUE);
+    }
+
+    if (output)
+        qmi_message_uim_remote_unlock_output_unref (output);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_set_lock_configuration (MMIfaceModem3gpp *self,
+                                   const gsize config_size,
+                                   const guint8 *config_ptr,
+                                   GAsyncReadyCallback callback,
+                                   gpointer user_data)
+{
+    QmiMessageUimRemoteUnlockInput *input;
+    QmiClient *client = NULL;
+    GArray *config_array;
+    GTask *task;
+
+    if (!mm_shared_qmi_ensure_client (MM_SHARED_QMI (self),
+                                      QMI_SERVICE_UIM, &client,
+                                      callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    mm_obj_dbg (self, "Trying to configure modem locks");,
+
+    input = qmi_message_uim_remote_unlock_input_new ();
+    config_array = g_array_sized_new (FALSE, FALSE, sizeof (guint8), config_size);
+    g_array_append_vals (config_array, config_ptr, config_size);
+    qmi_message_uim_remote_unlock_input_set_simlock_data (input,
+                                                          config_array,
+                                                          NULL);
+
+    qmi_client_uim_remote_unlock (QMI_CLIENT_UIM (client),
+                                  input,
+                                  30,
+                                  NULL,
+                                  (GAsyncReadyCallback) set_lock_configuration_ready,
+                                  task);
+    qmi_message_uim_remote_unlock_input_unref (input);
+}
+
+/*****************************************************************************/
 /* Scan networks (3GPP interface) */
 
 static GList *
@@ -13719,6 +13789,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->disable_facility_lock_finish = modem_3gpp_disable_facility_lock_finish;
     iface->set_packet_service_state = mm_shared_qmi_set_packet_service_state;
     iface->set_packet_service_state_finish = mm_shared_qmi_set_packet_service_state_finish;
+    iface->set_lock_configuration = modem_3gpp_set_lock_configuration;
+    iface->set_lock_configuration_finish = modem_3gpp_set_lock_configuration_finish;
 }
 
 static void

@@ -3616,6 +3616,73 @@ modem_3gpp_disable_facility_lock (MMIfaceModem3gpp *self,
 }
 
 /*****************************************************************************/
+/* Configure facility locks */
+
+static gboolean
+modem_3gpp_set_lock_configuration_finish (MMIfaceModem3gpp  *self,
+                                          GAsyncResult      *res,
+                                          GError           **error)
+{
+    return g_task_propagate_boolean (G_TASK (res), error);
+}
+
+static void
+set_lock_configuration_ready (MbimDevice   *device,
+                              GAsyncResult *res,
+                              GTask        *task)
+{
+    MbimMessage *response = NULL;
+    GError *error = NULL;
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response || !mbim_message_response_get_result (response,
+                                                        MBIM_MESSAGE_TYPE_COMMAND_DONE,
+                                                        &error) ||
+        !mbim_message_google_facility_lock_carrier_lock_response_parse (response,
+                                                                        &error)) {
+        g_prefix_error (&error, "lock configuration failed: ");
+        g_task_return_error (task, error);
+    } else {
+        g_task_return_boolean (task, TRUE);
+    }
+
+    if (response)
+        mbim_message_unref (response);
+    g_object_unref (task);
+}
+
+static void
+modem_3gpp_set_lock_configuration (MMIfaceModem3gpp    *self,
+                                   const gsize          config_size,
+                                   const guint8        *config_ptr,
+                                   GAsyncReadyCallback  callback,
+                                   gpointer             user_data)
+{
+    MbimMessage *message;
+    MbimDevice *device;
+    GTask *task;
+
+    if (!peek_device (self, &device, callback, user_data))
+        return;
+
+    task = g_task_new (self, NULL, callback, user_data);
+
+    mm_obj_dbg (self, "Trying to configure modem locks");
+
+    message = mbim_message_google_facility_lock_carrier_lock_set_new ((const guint32)config_size,
+                                                                      config_ptr,
+                                                                      NULL);
+
+    mbim_device_command (device,
+                         message,
+                         10,
+                         NULL,
+                         (GAsyncReadyCallback)set_lock_configuration_ready,
+                         task);
+    mbim_message_unref (message);
+}
+
+/*****************************************************************************/
 /* Initial EPS bearer info loading */
 
 static MMBearerProperties *
@@ -9299,6 +9366,8 @@ iface_modem_3gpp_init (MMIfaceModem3gpp *iface)
     iface->scan_networks_finish = modem_3gpp_scan_networks_finish;
     iface->disable_facility_lock = modem_3gpp_disable_facility_lock;
     iface->disable_facility_lock_finish = modem_3gpp_disable_facility_lock_finish;
+    iface->set_lock_configuration = modem_3gpp_set_lock_configuration;
+    iface->set_lock_configuration_finish = modem_3gpp_set_lock_configuration_finish;
     iface->set_packet_service_state = set_packet_service_state;
     iface->set_packet_service_state_finish = set_packet_service_state_finish;
 }
