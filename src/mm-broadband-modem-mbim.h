@@ -68,4 +68,9 @@ gboolean mm_broadband_modem_mbim_get_is_lte_attach_info_supported (MMBroadbandMo
 void mm_broadband_modem_mbim_set_unlock_retries (MMBroadbandModemMbim *self,
                                                  MMModemLock           lock_type,
                                                  guint32               remaining_attempts);
+
+void mm_broadband_modem_mbim_get_speeds (MMBroadbandModemMbim *self,
+                                         guint64              *uplink_speed,
+                                         guint64              *downlink_speed);
+
 #endif /* MM_BROADBAND_MODEM_MBIM_H */

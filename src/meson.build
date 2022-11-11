@@ -218,6 +218,7 @@ sources = files(
   'mm-iface-modem-simple.c',
   'mm-iface-modem-time.c',
   'mm-iface-modem-voice.c',
+  'mm-log-helpers.c',
   'mm-plugin.c',
   'mm-plugin-manager.c',
   'mm-port-probe.c',
@@ -246,10 +247,13 @@ daemon_enums_sources += gnome.mkenums(
 
 deps = [
   gmodule_dep,
-  libmm_test_generated_dep,
   libport_dep,
   libqcdm_dep,
 ]
+
+if enable_tests
+  deps += [libmm_test_generated_dep]
+endif
 
 c_args = [
   '-DMM_COMPILATION',

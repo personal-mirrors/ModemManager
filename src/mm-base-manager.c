@@ -41,7 +41,9 @@
 
 #include <mm-errors-types.h>
 #include <mm-gdbus-manager.h>
-#include <mm-gdbus-test.h>
+#if defined WITH_TESTS
+# include <mm-gdbus-test.h>
+#endif
 
 #include "mm-context.h"
 #include "mm-base-manager.h"
@@ -66,9 +68,11 @@ enum {
     PROP_CONNECTION,
     PROP_AUTO_SCAN,
     PROP_FILTER_POLICY,
-    PROP_ENABLE_TEST,
     PROP_PLUGIN_DIR,
     PROP_INITIAL_KERNEL_EVENTS,
+#if defined WITH_TESTS
+    PROP_ENABLE_TEST,
+#endif
     LAST_PROP
 };
 
@@ -79,8 +83,6 @@ struct _MMBaseManagerPrivate {
     gboolean auto_scan;
     /* Filter policy (mask of enabled rules) */
     MMFilterRule filter_policy;
-    /* Whether the test interface is enabled */
-    gboolean enable_test;
     /* Path to look for plugins */
     gchar *plugin_dir;
     /* Path to the list of initial kernel events */
@@ -99,8 +101,12 @@ struct _MMBaseManagerPrivate {
     /* The map of inhibited devices */
     GHashTable *inhibited_devices;
 
+#if defined WITH_TESTS
+    /* Whether the test interface is enabled */
+    gboolean enable_test;
     /* The Test interface support */
     MmGdbusTest *test_skeleton;
+#endif
 
 #if defined WITH_UDEV
     /* The UDev client */
@@ -204,8 +210,8 @@ device_support_check_ready (MMPluginManager          *plugin_manager,
     /* Receive plugin result from the plugin manager */
     plugin = mm_plugin_manager_device_support_check_finish (plugin_manager, res, &error);
     if (!plugin) {
-        mm_obj_info (ctx->self, "couldn't check support for device '%s': %s",
-                     mm_device_get_uid (ctx->device), error->message);
+        mm_obj_msg (ctx->self, "couldn't check support for device '%s': %s",
+                    mm_device_get_uid (ctx->device), error->message);
         g_error_free (error);
         g_hash_table_remove (ctx->self->priv->devices, mm_device_get_uid (ctx->device));
         find_device_support_context_free (ctx);
@@ -226,8 +232,8 @@ device_support_check_ready (MMPluginManager          *plugin_manager,
     }
 
     /* Modem now created */
-    mm_obj_info (ctx->self, "modem for device '%s' successfully created",
-                 mm_device_get_uid (ctx->device));
+    mm_obj_msg (ctx->self, "modem for device '%s' successfully created",
+                mm_device_get_uid (ctx->device));
     find_device_support_context_free (ctx);
 }
 
@@ -267,7 +273,7 @@ device_removed (MMBaseManager *self,
      * ourselves. */
     g_object_ref (device);
 
-    mm_obj_info (self, "port %s released by device '%s'", name, mm_device_get_uid (device));
+    mm_obj_msg (self, "port %s released by device '%s'", name, mm_device_get_uid (device));
     mm_device_release_port_name (device, subsystem, name);
 
     /* If port probe list gets empty, remove the device object iself */
@@ -741,7 +747,7 @@ base_modem_sync_ready (MMBaseModem  *self,
         mm_obj_warn (self, "synchronization failed: %s", error->message);
         return;
     }
-    mm_obj_info (self, "synchronization finished");
+    mm_obj_msg (self, "synchronization finished");
 }
 
 void
@@ -798,7 +804,7 @@ set_logging_auth_ready (MMAuthProvider    *authp,
     else if (!mm_log_set_level (ctx->level, &error))
         g_dbus_method_invocation_take_error (ctx->invocation, error);
     else {
-        mm_obj_info (ctx->self, "logging: level '%s'", ctx->level);
+        mm_obj_msg (ctx->self, "logging: level '%s'", ctx->level);
         mm_gdbus_org_freedesktop_modem_manager1_complete_set_logging (
             MM_GDBUS_ORG_FREEDESKTOP_MODEM_MANAGER1 (ctx->self),
             ctx->invocation);
@@ -1139,7 +1145,7 @@ inhibit_sender_lost (GDBusConnection          *connection,
                      const gchar              *sender_name,
                      InhibitSenderLostContext *lost_ctx)
 {
-    mm_obj_info (lost_ctx->self, "device inhibition teardown for uid '%s' (owner disappeared from bus)", lost_ctx->uid);
+    mm_obj_msg (lost_ctx->self, "device inhibition teardown for uid '%s' (owner disappeared from bus)", lost_ctx->uid);
     remove_device_inhibition (lost_ctx->self, lost_ctx->uid);
 }
 
@@ -1194,7 +1200,7 @@ device_inhibit_ready (MMDevice             *device,
 
     g_hash_table_insert (ctx->self->priv->inhibited_devices, g_strdup (ctx->uid), info);
 
-    mm_obj_info (ctx->self, "device inhibition setup for uid '%s'", ctx->uid);
+    mm_obj_msg (ctx->self, "device inhibition setup for uid '%s'", ctx->uid);
 
     mm_gdbus_org_freedesktop_modem_manager1_complete_inhibit_device (
         MM_GDBUS_ORG_FREEDESKTOP_MODEM_MANAGER1 (ctx->self),
@@ -1243,7 +1249,7 @@ base_manager_uninhibit_device (InhibitDeviceContext *ctx)
         return;
     }
 
-    mm_obj_info (ctx->self, "device inhibition teardown for uid '%s'", ctx->uid);
+    mm_obj_msg (ctx->self, "device inhibition teardown for uid '%s'", ctx->uid);
     remove_device_inhibition (ctx->self, ctx->uid);
 
     mm_gdbus_org_freedesktop_modem_manager1_complete_inhibit_device (
@@ -1297,6 +1303,8 @@ handle_inhibit_device (MmGdbusOrgFreedesktopModemManager1 *manager,
 /*****************************************************************************/
 /* Test profile setup */
 
+#if defined WITH_TESTS
+
 static gboolean
 handle_set_profile (MmGdbusTest *skeleton,
                     GDBusMethodInvocation *invocation,
@@ -1310,7 +1318,7 @@ handle_set_profile (MmGdbusTest *skeleton,
     gchar *physdev_uid;
     GError *error = NULL;
 
-    mm_obj_info (self, "test profile set to: '%s'", id);
+    mm_obj_msg (self, "test profile set to: '%s'", id);
 
     /* Create device and keep it listed in the Manager */
     physdev_uid = g_strdup_printf ("/virtual/%s", id);
@@ -1342,8 +1350,8 @@ handle_set_profile (MmGdbusTest *skeleton,
         goto out;
     }
 
-    mm_obj_info (self, "modem for virtual device '%s' successfully created",
-                 mm_device_get_uid (device));
+    mm_obj_msg (self, "modem for virtual device '%s' successfully created",
+                mm_device_get_uid (device));
 
 out:
 
@@ -1357,6 +1365,8 @@ out:
 
     return TRUE;
 }
+
+#endif
 
 /*****************************************************************************/
 
@@ -1374,7 +1384,9 @@ mm_base_manager_new (GDBusConnection  *connection,
                      gboolean          auto_scan,
                      MMFilterRule      filter_policy,
                      const gchar      *initial_kernel_events,
+#if defined WITH_TESTS
                      gboolean          enable_test,
+#endif
                      GError          **error)
 {
     g_return_val_if_fail (G_IS_DBUS_CONNECTION (connection), NULL);
@@ -1387,8 +1399,10 @@ mm_base_manager_new (GDBusConnection  *connection,
                            MM_BASE_MANAGER_AUTO_SCAN,             auto_scan,
                            MM_BASE_MANAGER_FILTER_POLICY,         filter_policy,
                            MM_BASE_MANAGER_INITIAL_KERNEL_EVENTS, initial_kernel_events,
-                           MM_BASE_MANAGER_ENABLE_TEST,           enable_test,
                            "version",                             MM_DIST_VERSION,
+#if defined WITH_TESTS
+                           MM_BASE_MANAGER_ENABLE_TEST,           enable_test,
+#endif
                            NULL);
 }
 
@@ -1415,11 +1429,13 @@ set_property (GObject      *object,
                 mm_obj_dbg (self, "stopping connection in object manager server");
                 g_dbus_object_manager_server_set_connection (self->priv->object_manager, NULL);
             }
+#if defined WITH_TESTS
             if (self->priv->test_skeleton &&
                 g_dbus_interface_skeleton_get_connection (G_DBUS_INTERFACE_SKELETON (self->priv->test_skeleton))) {
                 mm_obj_dbg (self, "stopping connection in test skeleton");
                 g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (self->priv->test_skeleton));
             }
+#endif
         }
         break;
     }
@@ -1429,9 +1445,6 @@ set_property (GObject      *object,
     case PROP_FILTER_POLICY:
         self->priv->filter_policy = g_value_get_flags (value);
         break;
-    case PROP_ENABLE_TEST:
-        self->priv->enable_test = g_value_get_boolean (value);
-        break;
     case PROP_PLUGIN_DIR:
         g_free (self->priv->plugin_dir);
         self->priv->plugin_dir = g_value_dup_string (value);
@@ -1440,6 +1453,11 @@ set_property (GObject      *object,
         g_free (self->priv->initial_kernel_events);
         self->priv->initial_kernel_events = g_value_dup_string (value);
         break;
+#if defined WITH_TESTS
+    case PROP_ENABLE_TEST:
+        self->priv->enable_test = g_value_get_boolean (value);
+        break;
+#endif
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -1464,15 +1482,17 @@ get_property (GObject    *object,
     case PROP_FILTER_POLICY:
         g_value_set_flags (value, self->priv->filter_policy);
         break;
-    case PROP_ENABLE_TEST:
-        g_value_set_boolean (value, self->priv->enable_test);
-        break;
     case PROP_PLUGIN_DIR:
         g_value_set_string (value, self->priv->plugin_dir);
         break;
     case PROP_INITIAL_KERNEL_EVENTS:
         g_value_set_string (value, self->priv->initial_kernel_events);
         break;
+#if defined WITH_TESTS
+    case PROP_ENABLE_TEST:
+        g_value_set_boolean (value, self->priv->enable_test);
+        break;
+#endif
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -1498,8 +1518,10 @@ mm_base_manager_init (MMBaseManager *self)
     /* By default, enable autoscan */
     self->priv->auto_scan = TRUE;
 
+#if defined WITH_TESTS
     /* By default, no test interface */
     self->priv->enable_test = FALSE;
+#endif
 
     /* Setup Object Manager Server */
     self->priv->object_manager = g_dbus_object_manager_server_new (MM_DBUS_PATH);
@@ -1565,6 +1587,7 @@ initable_init (GInitable     *initable,
     g_dbus_object_manager_server_set_connection (self->priv->object_manager,
                                                  self->priv->connection);
 
+#if defined WITH_TESTS
     /* Setup the Test skeleton and export the interface */
     if (self->priv->enable_test) {
         self->priv->test_skeleton = mm_gdbus_test_skeleton_new ();
@@ -1578,6 +1601,7 @@ initable_init (GInitable     *initable,
                                                error))
             return FALSE;
     }
+#endif
 
     /* All good */
     return TRUE;
@@ -1613,8 +1637,10 @@ finalize (GObject *object)
     if (self->priv->object_manager)
         g_object_unref (self->priv->object_manager);
 
+#if defined WITH_TESTS
     if (self->priv->test_skeleton)
         g_object_unref (self->priv->test_skeleton);
+#endif
 
     if (self->priv->connection)
         g_object_unref (self->priv->connection);
@@ -1679,14 +1705,6 @@ mm_base_manager_class_init (MMBaseManagerClass *manager_class)
                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
 
     g_object_class_install_property
-        (object_class, PROP_ENABLE_TEST,
-         g_param_spec_boolean (MM_BASE_MANAGER_ENABLE_TEST,
-                               "Enable tests",
-                               "Enable the Test interface",
-                               FALSE,
-                               G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
-
-    g_object_class_install_property
         (object_class, PROP_PLUGIN_DIR,
          g_param_spec_string (MM_BASE_MANAGER_PLUGIN_DIR,
                               "Plugin directory",
@@ -1701,4 +1719,14 @@ mm_base_manager_class_init (MMBaseManagerClass *manager_class)
                               "Path to a file with the list of initial kernel events",
                               NULL,
                               G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+#if defined WITH_TESTS
+    g_object_class_install_property
+        (object_class, PROP_ENABLE_TEST,
+         g_param_spec_boolean (MM_BASE_MANAGER_ENABLE_TEST,
+                               "Enable tests",
+                               "Enable the Test interface",
+                               FALSE,
+                               G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+#endif
 }

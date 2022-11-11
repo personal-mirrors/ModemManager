@@ -44,7 +44,7 @@ static MMBaseManager *manager;
 static gboolean
 quit_cb (gpointer user_data)
 {
-    mm_info ("caught signal, shutting down...");
+    mm_msg ("caught signal, shutting down...");
 
     if (manager)
         g_object_set (manager, MM_BASE_MANAGER_CONNECTION, NULL, NULL);
@@ -97,7 +97,9 @@ bus_acquired_cb (GDBusConnection *connection,
                                    !mm_context_get_no_auto_scan (),
                                    mm_context_get_filter_policy (),
                                    mm_context_get_initial_kernel_events (),
+#if defined WITH_TESTS
                                    mm_context_get_test_enable (),
+#endif
                                    &error);
     if (!manager) {
         mm_warn ("could not create manager: %s", error->message);
@@ -178,8 +180,8 @@ main (int argc, char *argv[])
     /* Early register all known errors */
     register_dbus_errors ();
 
-    mm_info ("ModemManager (version " MM_DIST_VERSION ") starting in %s bus...",
-             mm_context_get_test_session () ? "session" : "system");
+    mm_msg ("ModemManager (version " MM_DIST_VERSION ") starting in %s bus...",
+            mm_context_get_test_session () ? "session" : "system");
 
     /* Detect runtime charset conversion support */
     mm_modem_charsets_init ();
@@ -250,7 +252,7 @@ main (int argc, char *argv[])
 
     g_bus_unown_name (name_id);
 
-    mm_info ("ModemManager is shut down");
+    mm_msg ("ModemManager is shut down");
 
     mm_log_shutdown ();
 
