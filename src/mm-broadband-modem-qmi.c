@@ -11990,6 +11990,7 @@ signal_load_values_get_signal_info_ready (QmiClientNas *client,
     gint8                    rsrq;
     gint16                   rsrp;
     gint16                   snr;
+    gint16                   rscp_umts;
     gint16                   rsrq_5g;
     g_autoptr(QmiMessageNasGetSignalInfoOutput) output = NULL;
 
@@ -12049,6 +12050,14 @@ signal_load_values_get_signal_info_ready (QmiClientNas *client,
         mm_signal_set_ecio (ctx->values_result->umts, ((gdouble)ecio) * (-0.5));
     }
 
+    if (qmi_message_nas_get_signal_info_output_get_wcdma_rscp (output,
+                                                               &rscp_umts,
+                                                               NULL)) {
+        if (G_UNLIKELY (!ctx->values_result->umts))
+            ctx->values_result->umts = mm_signal_new ();
+        mm_signal_set_rscp (ctx->values_result->umts, (-1.0) * ((gdouble)rscp_umts));
+    }
+
     /* LTE... */
     if (qmi_message_nas_get_signal_info_output_get_lte_signal_strength (output,
                                                                         &rssi,
@@ -12076,6 +12085,8 @@ signal_load_values_get_signal_info_ready (QmiClientNas *client,
     if (qmi_message_nas_get_signal_info_output_get_5g_signal_strength_extended (output,
                                                                                 &rsrq_5g,
                                                                                 NULL)) {
+        if (G_UNLIKELY (!ctx->values_result->nr5g))
+            ctx->values_result->nr5g = mm_signal_new ();
         mm_signal_set_rsrq (ctx->values_result->nr5g, (gdouble)rsrq_5g);
     }
 
