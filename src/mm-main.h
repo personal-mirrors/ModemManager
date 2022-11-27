@@ -10,14 +10,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details:
  *
- * Copyright (C) 2008 - 2009 Novell, Inc.
- * Copyright (C) 2009 - 2011 Red Hat, Inc.
  */
 
-#include "mm-main.h"
+#ifndef MM_MAIN_H
+#define MM_MAIN_H
 
-int
-main (int argc, char *argv[])
-{
-    return mm_main(argc, argv);
-}
+int mm_main(int argc, char *argv[]);
+
+#endif /* MM_MAIN_H */
