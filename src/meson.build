@@ -185,7 +185,7 @@ headers = files(
 )
 
 sources = files(
-  'main.c',
+  'mm-main.c',
   'mm-auth-provider.c',
   'mm-base-bearer.c',
   'mm-base-call.c',
@@ -309,11 +309,23 @@ if enable_mbim
   )
 endif
 
-executable(
-  'ModemManager',
+libmm_int = shared_library(
+  'mm-int',
   sources: sources + daemon_enums_sources,
   include_directories: top_inc,
   dependencies: deps,
+  c_args: c_args,
+  install: true,
+)
+
+libmm_int_dep = declare_dependency(
+  link_with: libmm_int,
+)
+
+executable(
+  'ModemManager',
+  sources: 'main.c',
+  dependencies: libmm_int_dep,
   c_args: c_args,
   install: true,
   install_dir: mm_sbindir,

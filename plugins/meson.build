@@ -50,7 +50,10 @@ plugins_incs = [
   kerneldevice_inc,
 ]
 
-plugins_deps = [libmm_glib_dep]
+plugins_deps = [
+  libmm_glib_dep,
+  libmm_int_dep,
+]
 
 if enable_mbim
   plugins_deps += mbim_glib_dep
