@@ -52,6 +52,9 @@
 #define BEARER_CONNECTION_MONITOR_INITIAL_TIMEOUT 30
 #define BEARER_CONNECTION_MONITOR_TIMEOUT          5
 
+/* TODO(b/175305412): Use rmnet_data0 as the only link. */
+#define CHROMEOS_USE_RMNET_DATA0_HACK 1
+
 static void log_object_iface_init (MMLogObjectInterface *iface);
 
 G_DEFINE_TYPE_EXTENDED (MMBaseBearer, mm_base_bearer, MM_GDBUS_TYPE_BEARER_SKELETON, 0,
@@ -892,13 +895,23 @@ connect_succeeded (MMBaseBearer *self,
                    GTask        *task)
 {
     MMBearerConnectResult *result;
+    const gchar           *data_interface;
 
     result = g_task_get_task_data (task);
+
+    data_interface = mm_port_get_device (mm_bearer_connect_result_peek_data (result));
+
+    /* This hack runs in all modems, but the only ones affected would be the
+     * Qualcomm SoCs. */
+#ifdef CHROMEOS_USE_RMNET_DATA0_HACK
+    if (g_strcmp0 (data_interface, "rmnet_ipa0") == 0)
+        data_interface = "rmnet_data0";
+#endif
 
     /* Update bearer and interface status */
     bearer_update_status_connected (
         self,
-        mm_port_get_device (mm_bearer_connect_result_peek_data (result)),
+        data_interface,
         mm_bearer_connect_result_get_multiplexed (result),
         mm_bearer_connect_result_get_profile_id (result),
         mm_bearer_connect_result_peek_ipv4_config (result),
