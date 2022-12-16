@@ -65,6 +65,7 @@ static void shared_qmi_init                       (MMSharedQmi                  
 static MMIfaceModemLocation *iface_modem_location_parent;
 #endif
 static MMIfaceModemSignal *iface_modem_signal_parent;
+static MMIfaceModem       *iface_modem_parent;
 
 G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMbim, mm_broadband_modem_mbim, MM_TYPE_BROADBAND_MODEM, 0,
                         G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
@@ -825,12 +826,31 @@ qmi_load_model_ready (MMIfaceModem *self,
 #endif
 
 static void
+at_load_model_ready (MMIfaceModem *self,
+                     GAsyncResult *res,
+                     GTask        *task)
+{
+    gchar  *model = NULL;
+    GError *error = NULL;
+
+    model = iface_modem_parent->load_model_finish (self, res, &error);
+    if (!model) {
+        mm_obj_dbg (self, "couldn't load model using AT: %s", error->message);
+        model = modem_load_model_default (self);
+        g_clear_error (&error);
+    }
+
+    g_task_return_pointer (task, model, g_free);
+    g_object_unref (task);
+}
+
+static void
 modem_load_model (MMIfaceModem *self,
                   GAsyncReadyCallback callback,
                   gpointer user_data)
 {
-    gchar *model = NULL;
-    GTask *task;
+    gchar      *model = NULL;
+    GTask      *task;
     MMPortMbim *port;
 
     task = g_task_new (self, NULL, callback, user_data);
@@ -839,6 +859,11 @@ modem_load_model (MMIfaceModem *self,
     if (port) {
         model = g_strdup (mm_kernel_device_get_physdev_product (
             mm_port_peek_kernel_device (MM_PORT (port))));
+        if (model) {
+            g_task_return_pointer (task, model, g_free);
+            g_object_unref (task);
+            return;
+        }
     }
 
 #if defined WITH_QMI && QMI_MBIM_QMUX_SUPPORTED
@@ -848,11 +873,7 @@ modem_load_model (MMIfaceModem *self,
     }
 #endif
 
-    if (!model)
-        model = modem_load_model_default (self);
-
-    g_task_return_pointer (task, model, g_free);
-    g_object_unref (task);
+    iface_modem_parent->load_model (self, (GAsyncReadyCallback)at_load_model_ready, task);
 }
 
 /*****************************************************************************/
@@ -5108,17 +5129,20 @@ sms_notification (MMBroadbandModemMbim *self,
         break;
 
     case MBIM_CID_SMS_MESSAGE_STORE_STATUS: {
-        MbimSmsStatusFlag flag;
-        guint32 index;
+        MbimSmsStatusFlag flags;
+        guint32           index;
 
         if (self->priv->setup_flags & PROCESS_NOTIFICATION_FLAG_SMS_READ &&
             mbim_message_sms_message_store_status_notification_parse (
                 notification,
-                &flag,
+                &flags,
                 &index,
                 NULL)) {
-            mm_obj_dbg (self, "received SMS store status update: '%s'", mbim_sms_status_flag_get_string (flag));
-            if (flag & MBIM_SMS_STATUS_FLAG_NEW_MESSAGE)
+            g_autofree gchar *flags_str = NULL;
+
+            flags_str = mbim_sms_status_flag_build_string_from_mask (flags);
+            mm_obj_dbg (self, "received SMS store status update: '%s'", flags_str);
+            if (flags & MBIM_SMS_STATUS_FLAG_NEW_MESSAGE)
                 sms_notification_read_stored_sms (self, index);
         }
         break;
@@ -9258,6 +9282,7 @@ finalize (GObject *object)
 static void
 iface_modem_init (MMIfaceModem *iface)
 {
+    iface_modem_parent = g_type_interface_peek_parent (iface);
     /* Initialization steps */
     iface->load_supported_capabilities = modem_load_supported_capabilities;
     iface->load_supported_capabilities_finish = modem_load_supported_capabilities_finish;
