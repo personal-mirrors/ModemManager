@@ -12,14 +12,14 @@ stages:
   variables:
     FDO_UPSTREAM_REPO: mobile-broadband/ModemManager
     FDO_DISTRIBUTION_VERSION: '20.04'
-    FDO_DISTRIBUTION_TAG: '2021-11-05.1'
-    FDO_DISTRIBUTION_PACKAGES: ca-certificates git gcc autoconf automake libtool
+    FDO_DISTRIBUTION_TAG: '2023-01-03.1'
+    FDO_DISTRIBUTION_PACKAGES: ca-certificates git gcc meson ninja-build gawk
                                libgettextpo-dev libgirepository1.0-dev libglib2.0-dev
                                libgudev-1.0-dev python3-dbus python3-gi autopoint
                                xsltproc dbus gettext gtk-doc-tools libglib2.0-doc
                                gobject-introspection python-is-python3 libsystemd-dev
-                               libpolkit-gobject-1-dev valac meson ninja-build
-                               libdbus-1-dev bash-completion udev policykit-1 help2man
+                               libpolkit-gobject-1-dev valac libdbus-1-dev
+                               bash-completion udev policykit-1 help2man
 
 build container:
   extends:
@@ -33,6 +33,40 @@ build container:
     - tags
     - pushes
 
+before_script:
+    - export BUILD_MBIM=true
+    - export BUILD_QMI=true
+    - export BUILD_QRTR=true
+
+.prepare_deps: &prepare_deps
+    - >
+      if [ "$BUILD_MBIM" == "true" ]; then
+        git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
+        pushd libmbim
+        meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false
+        ninja -C build
+        ninja -C build install
+        popd
+      fi
+    - >
+      if [ "$BUILD_QRTR" == "true" ]; then
+        git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
+        pushd libqrtr-glib
+        meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false
+        ninja -C build
+        ninja -C build install
+        popd
+      fi
+    - >
+      if [ "$BUILD_QMI" == "true" ]; then
+        git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
+        pushd libqmi
+        meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false -Dmbim_qmux=$BUILD_MBIM -Dqrtr=$BUILD_QRTR -Dcollection=basic
+        ninja -C build
+        ninja -C build install
+        popd
+      fi
+
 build-no-qmi:
   stage: build
   extends:
@@ -44,12 +78,9 @@ build-no-qmi:
     - tags
     - schedules
   script:
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
-    - pushd libmbim
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
+    - export BUILD_QRTR=false
+    - export BUILD_QMI=false
+    - *prepare_deps
     - meson setup build --prefix=/usr -Dgtk_doc=false -Dqmi=false -Dqrtr=false -Dmbim=true
     - ninja -C build
     - ninja -C build install
@@ -65,18 +96,8 @@ build-qmi-qrtr-no-mbim:
     - tags
     - schedules
   script:
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
-    - pushd libqrtr-glib
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
-    - pushd libqmi
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false -Dmbim_qmux=false -Dcollection=basic
-    - ninja -C build
-    - ninja -C build install
-    - popd
+    - export BUILD_MBIM=false
+    - *prepare_deps
     - meson setup build --prefix=/usr -Dgtk_doc=false -Dqmi=true -Dqrtr=true -Dmbim=false
     - ninja -C build
     - ninja -C build install
@@ -92,12 +113,9 @@ build-qmi-no-qrtr-no-mbim:
     - tags
     - schedules
   script:
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
-    - pushd libqmi
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false -Dmbim_qmux=false -Dqrtr=false -Dcollection=basic
-    - ninja -C build
-    - ninja -C build install
-    - popd
+    - export BUILD_MBIM=false
+    - export BUILD_QRTR=false
+    - *prepare_deps
     - meson setup build --prefix=/usr -Dgtk_doc=false -Dqmi=true -Dqrtr=false -Dmbim=false
     - ninja -C build
     - ninja -C build install
@@ -113,6 +131,10 @@ build-no-qmi-no-mbim:
     - tags
     - schedules
   script:
+    - export BUILD_MBIM=false
+    - export BUILD_QRTR=false
+    - export BUILD_QMI=false
+    - *prepare_deps
     - meson setup build --prefix=/usr -Dgtk_doc=false -Dqmi=false -Dqrtr=false -Dmbim=false
     - ninja -C build
     - ninja -C build test
@@ -129,6 +151,10 @@ build-no-qmi-no-mbim-no-tests:
     - tags
     - schedules
   script:
+    - export BUILD_MBIM=false
+    - export BUILD_QRTR=false
+    - export BUILD_QMI=false
+    - *prepare_deps
     - meson setup build --prefix=/usr -Dgtk_doc=false -Dqmi=false -Dqrtr=false -Dmbim=false -Dtests=false
     - ninja -C build
     - ninja -C build install
@@ -139,27 +165,12 @@ build-no-suspend-resume:
   - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
+    - main
     - merge_requests
+    - tags
     - schedules
   script:
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
-    - pushd libmbim
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
-    - pushd libqrtr-glib
-    - meson setup build --prefix=/usr -Dgtk_doc=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
-    - pushd libqmi
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false -Dcollection=basic
-    - ninja -C build
-    - ninja -C build install
-    - popd
+    - *prepare_deps
     - meson setup build --prefix=/usr -Dgtk_doc=false -Dsystemd_suspend_resume=false -Dpowerd_suspend_resume=false
     - ninja -C build
     - ninja -C build install
@@ -170,27 +181,12 @@ build-suspend-resume-powerd:
   - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
+    - main
     - merge_requests
+    - tags
     - schedules
   script:
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
-    - pushd libmbim
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
-    - pushd libqrtr-glib
-    - meson setup build --prefix=/usr -Dgtk_doc=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
-    - pushd libqmi
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false -Dcollection=basic
-    - ninja -C build
-    - ninja -C build install
-    - popd
+    - *prepare_deps
     - meson setup build --prefix=/usr -Dgtk_doc=false -Dsystemd_suspend_resume=false -Dpowerd_suspend_resume=true
     - ninja -C build
     - ninja -C build install
@@ -201,34 +197,30 @@ build-single-plugins:
   - .fdo.distribution-image@ubuntu
   - .common_variables
   only:
+    - main
+    - tags
     - schedules
   script:
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
-    - pushd libmbim
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
-    - pushd libqrtr-glib
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
-    - pushd libqmi
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false -Dcollection=basic
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - for plugin in generic altair_lte anydata broadmobi cinterion
-                    dell dlink fibocom foxconn gosuncn haier huawei iridium
-                    linktop longcheer mbm motorola mtk nokia nokia_icera
-                    novatel novatel_lte option option_hso pantech
-                    qcom_soc quectel samsung sierra_legacy sierra simtech
-                    telit thuraya tplink ublox via wavecom x22x zte; do
-        meson setup build_$plugin --prefix=/usr -Dgtk_doc=false -Dintrospection=disabled -Dbash_completion=false -Dauto_features=disabled -Dqmi=enabled -Dmbim=enabled -Dqrtr=enabled -Dplugin_$plugin=enabled;
-        ninja -C build_$plugin;
+    - *prepare_deps
+    - for PLUGIN in $(grep "plugin_"  meson_options.txt | awk -F"'" '{ print $2 }'); do
+        meson setup build_$PLUGIN --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false -Dauto_features=disabled -D$PLUGIN=enabled;
+        ninja -C build_$PLUGIN;
+      done
+
+build-single-plugins-builtin:
+  stage: build
+  extends:
+  - .fdo.distribution-image@ubuntu
+  - .common_variables
+  only:
+    - main
+    - tags
+    - schedules
+  script:
+    - *prepare_deps
+    - for PLUGIN in $(grep "plugin_"  meson_options.txt | awk -F"'" '{ print $2 }'); do
+        meson setup build_$PLUGIN --prefix=/usr -Dgtk_doc=false -Dintrospection=false -Dbash_completion=false -Dauto_features=disabled -D$PLUGIN=enabled -Dbuiltin_plugins=true;
+        ninja -C build_$PLUGIN;
       done
 
 build-release:
@@ -242,25 +234,26 @@ build-release:
     - tags
     - schedules
   script:
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
-    - pushd libmbim
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqrtr-glib.git
-    - pushd libqrtr-glib
-    - meson setup build --prefix=/usr -Dgtk_doc=false
-    - ninja -C build
-    - ninja -C build install
-    - popd
-    - git clone --depth 1 https://gitlab.freedesktop.org/mobile-broadband/libqmi.git
-    - pushd libqmi
-    - meson setup build --prefix=/usr -Dgtk_doc=false -Dbash_completion=false -Dcollection=basic
-    - ninja -C build
-    - ninja -C build install
-    - popd
+    - *prepare_deps
     - meson setup build --buildtype=release --prefix=/usr -Dwerror=true -Dgtk_doc=true -Dpolkit=strict -Dsystemdsystemunitdir=/lib/systemd/system
+    - ninja -C build
+    - ninja -C build test
+    - ninja -C build install
+    - ninja -C build uninstall
+
+build-release-builtin:
+  stage: build
+  extends:
+  - .fdo.distribution-image@ubuntu
+  - .common_variables
+  only:
+    - main
+    - merge_requests
+    - tags
+    - schedules
+  script:
+    - *prepare_deps
+    - meson setup build --buildtype=release --prefix=/usr -Dwerror=true -Dgtk_doc=true -Dpolkit=strict -Dsystemdsystemunitdir=/lib/systemd/system -Dbuiltin_plugins=true
     - ninja -C build
     - ninja -C build test
     - ninja -C build install
