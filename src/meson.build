@@ -4,6 +4,7 @@
 # helpers library
 src_inc = include_directories('.')
 kerneldevice_inc = include_directories('kerneldevice')
+plugins_inc = include_directories('plugins')
 
 headers = files(
   'mm-modem-helpers.h',
@@ -177,13 +178,40 @@ libport_dep = declare_dependency(
   link_with: libport,
 )
 
-# ModemManager daemon
+# Daemon enums, required by plugins
 headers = files(
   'mm-base-bearer.h',
   'mm-filter.h',
   'mm-port-probe.h',
 )
 
+enums_types = 'mm-daemon-enums-types'
+
+daemon_enums_sources = []
+daemon_enums_sources += gnome.mkenums(
+  enums_types + '.c',
+  sources: headers,
+  c_template: build_aux_dir / enums_types + '.c.template',
+  fhead: '#include "mm-daemon-enums-types.h"',
+)
+
+daemon_enums_sources += gnome.mkenums(
+  enums_types + '.h',
+  sources: headers,
+  h_template: build_aux_dir / enums_types + '.h.template',
+  fhead: '#include "mm-filter.h"\n#include "mm-base-bearer.h"\n#include "mm-port-probe.h"\n#ifndef __MM_DAEMON_ENUMS_TYPES_H__\n#define __MM_DAEMON_ENUMS_TYPES_H__\n',
+  ftail: '#endif /* __MM_DAEMON_ENUMS_TYPES_H__ */\n',
+)
+
+daemon_enums_types_dep = declare_dependency(
+  sources: daemon_enums_sources[1],
+  include_directories: '.',
+)
+
+# Additional vendor plugins
+subdir('plugins')
+
+# ModemManager daemon
 sources = files(
   'main.c',
   'mm-auth-provider.c',
@@ -227,23 +255,7 @@ sources = files(
   'mm-sms-list.c',
 )
 
-enums_types = 'mm-daemon-enums-types'
-
-daemon_enums_sources = []
-daemon_enums_sources += gnome.mkenums(
-  enums_types + '.c',
-  sources: headers,
-  c_template: build_aux_dir / enums_types + '.c.template',
-  fhead: '#include "mm-daemon-enums-types.h"',
-)
-
-daemon_enums_sources += gnome.mkenums(
-  enums_types + '.h',
-  sources: headers,
-  h_template: build_aux_dir / enums_types + '.h.template',
-  fhead: '#include "mm-filter.h"\n#include "mm-base-bearer.h"\n#include "mm-port-probe.h"\n#ifndef __MM_DAEMON_ENUMS_TYPES_H__\n#define __MM_DAEMON_ENUMS_TYPES_H__\n',
-  ftail: '#endif /* __MM_DAEMON_ENUMS_TYPES_H__ */\n',
-)
+sources += daemon_enums_sources
 
 deps = [
   gmodule_dep,
@@ -311,10 +323,11 @@ endif
 
 executable(
   'ModemManager',
-  sources: sources + daemon_enums_sources,
-  include_directories: top_inc,
+  sources: [sources, builtin_sources],
+  include_directories: [ top_inc, plugins_inc ],
   dependencies: deps,
   c_args: c_args,
+  link_whole: builtin_plugins,
   install: true,
   install_dir: mm_sbindir,
 )

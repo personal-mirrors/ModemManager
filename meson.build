@@ -3,7 +3,7 @@
 
 project(
   'ModemManager', 'c',
-  version: '1.21.1',
+  version: '1.21.3',
   license: 'GPL2',
   default_options: [
     'buildtype=debugoptimized',
@@ -55,9 +55,9 @@ source_root = meson.current_source_dir()
 build_root = meson.current_build_dir()
 
 build_aux_dir = source_root / 'build-aux'
-plugins_dir = source_root / 'plugins'
 po_dir = source_root / 'po'
 src_dir = source_root / 'src'
+plugins_dir = source_root / 'src/plugins'
 
 top_inc = include_directories('.')
 
@@ -147,9 +147,10 @@ deps = [
 ]
 
 c_args = [
-  '-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_' + glib_version.underscorify(),
+  # In 2.46, g_simple_async_* calls. Disable deprecations from then on
+  # until everything is ported to GTask.
+  '-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_44',
   '-DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_' + glib_version.underscorify(),
-  '-DGLIB_DISABLE_DEPRECATION_WARNINGS',
 ]
 
 glib_deps = declare_dependency(
@@ -241,6 +242,10 @@ config_h.set('WITH_POLKIT', enable_polkit)
 # only if truly required.
 enable_at_command_via_dbus = get_option('at_command_via_dbus')
 config_h.set('WITH_AT_COMMAND_VIA_DBUS', enable_at_command_via_dbus)
+
+# Builtin plugin support (disabled by default)
+enable_builtin_plugins =  get_option('builtin_plugins')
+config_h.set('WITH_BUILTIN_PLUGINS', enable_builtin_plugins)
 
 # MBIM support (enabled by default)
 enable_mbim = get_option('mbim')
@@ -397,7 +402,6 @@ endif
 
 subdir('libmm-glib')
 subdir('src')
-subdir('plugins')
 subdir('cli')
 
 if enable_tests
@@ -445,6 +449,7 @@ summary({
   'powerd suspend/resume': enable_powerd_suspend_resume,
   'systemd journal': enable_systemd_journal,
   'at command via dbus': enable_at_command_via_dbus,
+  'builtin plugins': enable_builtin_plugins,
 }, section: 'Features')
 
 summary(plugins_shared, section: 'Shared utils')
