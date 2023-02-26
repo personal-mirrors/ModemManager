@@ -170,4 +170,14 @@ gdouble mm_earfcn_to_frequency (guint32  earfcn,
 gdouble mm_nrarfcn_to_frequency (guint32  nrarfcn,
                                  gpointer log_object);
 
+gboolean mm_signal_from_atds_signal_response (guint32    rssi,
+                                              guint32    rscp,
+                                              guint32    ecno,
+                                              guint32    rsrq,
+                                              guint32    rsrp,
+                                              guint32    snr,
+                                              MMSignal **out_gsm,
+                                              MMSignal **out_umts,
+                                              MMSignal **out_lte);
+
 #endif  /* MM_MODEM_HELPERS_MBIM_H */

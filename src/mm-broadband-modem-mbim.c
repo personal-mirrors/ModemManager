@@ -2154,6 +2154,14 @@ signal_state_query_ready (MbimDevice   *device,
     guint32                          rsrp_snr_count = 0;
     guint32                          rssi;
     guint                            quality;
+    MbimDataClass                    data_class;
+    g_autoptr(MMSignal)              cdma = NULL;
+    g_autoptr(MMSignal)              evdo = NULL;
+    g_autoptr(MMSignal)              gsm = NULL;
+    g_autoptr(MMSignal)              umts = NULL;
+    g_autoptr(MMSignal)              lte = NULL;
+    g_autoptr(MMSignal)              nr5g = NULL;
+
 
     self = g_task_get_source_object (task);
 
@@ -2195,6 +2203,14 @@ signal_state_query_ready (MbimDevice   *device,
     if (error)
         g_task_return_error (task, error);
     else {
+        /* Best guess of current data class */
+        data_class = self->priv->highest_available_data_class;
+        if (data_class == 0)
+                data_class = self->priv->available_data_classes;
+        if (mm_signal_from_mbim_signal_state (data_class, rssi, 99, rsrp_snr, rsrp_snr_count,
+                                                  self, &cdma, &evdo, &gsm, &umts, &lte, &nr5g))
+            mm_iface_modem_signal_update (MM_IFACE_MODEM_SIGNAL (self), cdma, evdo, gsm, umts, lte, nr5g);
+
         quality = mm_signal_quality_from_mbim_signal_state (rssi, rsrp_snr, rsrp_snr_count, self);
         g_task_return_int (task, quality);
     }
@@ -4437,6 +4453,76 @@ modem_3gpp_set_nr5g_registration_settings (MMIfaceModem3gpp           *_self,
 /*****************************************************************************/
 /* Signal state updates */
 
+typedef struct {
+    MMSignal *gsm;
+    MMSignal *umts;
+    MMSignal *lte;
+    MMSignal *nr5g;
+} SignalLoadValuesResult;
+
+static void
+signal_load_values_result_free (SignalLoadValuesResult *result)
+{
+    g_clear_object (&result->gsm);
+    g_clear_object (&result->umts);
+    g_clear_object (&result->lte);
+    g_clear_object (&result->nr5g);
+    g_slice_free (SignalLoadValuesResult, result);
+}
+
+static void
+atds_signal_query_after_indication_ready (MbimDevice           *device,
+                                          GAsyncResult         *res,
+                                          MMBroadbandModemMbim *self)
+{
+    MbimMessage            *response;
+    SignalLoadValuesResult *result;
+    GError                 *error = NULL;
+    guint32                 rssi;
+    guint32                 error_rate;
+    guint32                 rscp;
+    guint32                 ecno;
+    guint32                 rsrq;
+    guint32                 rsrp;
+    guint32                 snr;
+    GTask                  *task;
+
+    task = g_task_new (self, NULL, NULL, NULL);
+
+    response = mbim_device_command_finish (device, res, &error);
+    if (!response ||
+        !mbim_message_response_get_result (response, MBIM_MESSAGE_TYPE_COMMAND_DONE, &error) ||
+        !mbim_message_atds_signal_response_parse (response, &rssi, &error_rate, &rscp, &ecno, &rsrq, &rsrp, &snr, &error)) {
+        g_task_return_error (task, error);
+        goto out;
+    }
+
+    result = g_slice_new0 (SignalLoadValuesResult);
+
+    if (!mm_signal_from_atds_signal_response (rssi, rscp, ecno, rsrq, rsrp, snr, &result->gsm, &result->umts, &result->lte)) {
+        signal_load_values_result_free (result);
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "Failed to parse signal details from ATDS signal response");
+        goto out;
+    }
+
+    if (!result->gsm && !result->umts && !result->lte) {
+        signal_load_values_result_free (result);
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "No signal details given");
+        goto out;
+    }
+
+    mm_iface_modem_signal_update (MM_IFACE_MODEM_SIGNAL (self), NULL, NULL, result->gsm, result->umts, result->lte, NULL);
+
+    g_task_return_pointer (task, result, (GDestroyNotify) signal_load_values_result_free);
+
+out:
+    if (response)
+        mbim_message_unref (response);
+    g_object_unref (task);
+}
+
 static void
 basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
                                          MbimDevice           *device,
@@ -4446,7 +4532,7 @@ basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
     g_autoptr(MbimRsrpSnrInfoArray) rsrp_snr = NULL;
     guint32                         rsrp_snr_count = 0;
     guint32                         coded_rssi;
-    guint32                         coded_error_rate;
+    guint32                         coded_error_rate = 99;
     guint32                         quality;
     MbimDataClass                   data_class;
     g_autoptr(MMSignal)             cdma = NULL;
@@ -4455,6 +4541,7 @@ basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
     g_autoptr(MMSignal)             umts = NULL;
     g_autoptr(MMSignal)             lte = NULL;
     g_autoptr(MMSignal)             nr5g = NULL;
+    MbimMessage                    *message;
 
     if (mbim_device_check_ms_mbimex_version (device, 2, 0)) {
         if (!mbim_message_ms_basic_connect_v2_signal_state_notification_parse (
@@ -4484,6 +4571,17 @@ basic_connect_notification_signal_state (MMBroadbandModemMbim *self,
             return;
         }
         mm_obj_dbg (self, "processed signal state indication");
+        if (self->priv->is_atds_signal_supported) {
+            mm_obj_dbg (self, "triggering atds signal query");
+            message = mbim_message_atds_signal_query_new (NULL);
+            mbim_device_command (device,
+                                 message,
+                                 5,
+                                 NULL,
+                                 (GAsyncReadyCallback)atds_signal_query_after_indication_ready,
+                                 g_object_ref (self));
+            mbim_message_unref (message);
+        }
     }
 
     quality = mm_signal_quality_from_mbim_signal_state (coded_rssi, rsrp_snr, rsrp_snr_count, self);
@@ -6487,23 +6585,6 @@ modem_signal_check_support (MMIfaceModemSignal  *self,
 /*****************************************************************************/
 /* Load extended signal information (Signal interface) */
 
-typedef struct {
-    MMSignal *gsm;
-    MMSignal *umts;
-    MMSignal *lte;
-    MMSignal *nr5g;
-} SignalLoadValuesResult;
-
-static void
-signal_load_values_result_free (SignalLoadValuesResult *result)
-{
-    g_clear_object (&result->gsm);
-    g_clear_object (&result->umts);
-    g_clear_object (&result->lte);
-    g_clear_object (&result->nr5g);
-    g_slice_free (SignalLoadValuesResult, result);
-}
-
 static gboolean
 modem_signal_load_values_finish (MMIfaceModemSignal  *self,
                                  GAsyncResult        *res,
@@ -6566,47 +6647,11 @@ atds_signal_query_ready (MbimDevice   *device,
 
     result = g_slice_new0 (SignalLoadValuesResult);
 
-    if (rscp <= 96) {
-        result->umts = mm_signal_new ();
-        mm_signal_set_rscp (result->umts, -120.0 + rscp);
-    }
-
-    if (ecno <= 49) {
-        if (!result->umts)
-            result->umts = mm_signal_new ();
-        mm_signal_set_ecio (result->umts, -24.0 + ((gdouble) ecno / 2));
-    }
-
-    if (rsrq <= 34) {
-        result->lte = mm_signal_new ();
-        mm_signal_set_rsrq (result->lte, -19.5 + ((gdouble) rsrq / 2));
-    }
-
-    if (rsrp <= 97) {
-        if (!result->lte)
-            result->lte = mm_signal_new ();
-        mm_signal_set_rsrp (result->lte, -140.0 + rsrp);
-    }
-
-    if (snr <= 35) {
-        if (!result->lte)
-            result->lte = mm_signal_new ();
-        mm_signal_set_snr (result->lte, -5.0 + snr);
-    }
-
-    /* RSSI may be given for all 2G, 3G or 4G so we detect to which one applies */
-    if (rssi <= 31) {
-        gdouble value;
-
-        value = -113.0 + (2 * rssi);
-        if (result->lte)
-            mm_signal_set_rssi (result->lte, value);
-        else if (result->umts)
-            mm_signal_set_rssi (result->umts, value);
-        else {
-            result->gsm = mm_signal_new ();
-            mm_signal_set_rssi (result->gsm, value);
-        }
+    if (!mm_signal_from_atds_signal_response (rssi, rscp, ecno, rsrq, rsrp, snr, &result->gsm, &result->umts, &result->lte)) {
+        signal_load_values_result_free (result);
+        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                 "Failed to parse signal details from ATDS signal response");
+        goto out;
     }
 
     if (!result->gsm && !result->umts && !result->lte) {
