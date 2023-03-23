@@ -36,6 +36,32 @@
 #endif
 
 /*****************************************************************************/
+/* standard firmware info */
+
+/* Format of the string is:
+*    "[main version]_[modem and app version]"
+*    i.e. EM05GFAR07A07M1G_01.016.01.016
+*/
+#define QUECTEL_STD_FIRMWARE_RER_SEG  2
+
+/* Format of the string is:
+*    "modem_main.modem_minor.ap_main.ap_minor"
+*    i.e. 01.016.01.016
+*/
+#define QUECTEL_STD_MODEM_AP_FIRMWARE_RER_SEG  4
+#define QUECTEL_STD_MODEM_AP_FIRMWARE_RER_LEN  13
+
+#define QUECTEL_MAIN_RER_INVALID_TAG   "00"
+#define QUECTEL_MAIN_RER_TAG_LEN   2
+
+#define QUECTEL_MINOR_RER_INVALID_TAG   "000"
+#define QUECTEL_MINOR_RER_TAG_LAN   3
+
+/* Eg. Sometimes there are irresistible reasons. The standard app version number of the response was not obtained;
+fwupd(lvfs) cannot be upgraded. Therefore, we added the workround solution with the 16-second timeout retry mechanism*/
+#define QUECTEL_STD_AP_FIRMWARE_INVALID_RETRY_TIMEROUT  16
+
+/*****************************************************************************/
 /* Private context */
 
 #define PRIVATE_TAG "shared-quectel-private-tag"
@@ -210,6 +236,93 @@ quectel_get_firmware_update_methods (MMBaseModem *modem,
     return update_methods;
 }
 
+static gboolean quectel_check_standard_firmware_version_valid(const gchar *std_str)
+{
+    gboolean valid = TRUE ;
+    g_auto(GStrv) split_std_fw = NULL;
+    g_auto(GStrv) split_modem_ap_fw = NULL;
+    const gchar   *modem_ap_fw;
+    gsize          modem_ap_fw_l = 0;
+    const gchar   *modem_ap_rev_seg[QUECTEL_STD_MODEM_AP_FIRMWARE_RER_SEG];
+
+    if(std_str){
+        split_std_fw = g_strsplit (std_str, "_", QUECTEL_STD_FIRMWARE_RER_SEG);
+        /*
+        * quectel standard Format of the [main version]_[modem and app version]
+        * Sometimes we find that the [modem and app version] query is missing by [AT+QMGR]
+        * for example: we expect EM05GFAR07A07M1G_01.016.01.016,but exceed expect EM05GFAR07A07M1G_01.016.00.000
+        * quectel will check for this abnormal [modem and app version] and flag it
+        */
+        if ((g_strv_length(split_std_fw) == QUECTEL_STD_FIRMWARE_RER_SEG) && split_std_fw[1]) {
+            modem_ap_fw = split_std_fw[1];
+            modem_ap_fw_l  = strlen(modem_ap_fw);
+            if(modem_ap_fw_l == QUECTEL_STD_MODEM_AP_FIRMWARE_RER_LEN){
+
+                split_modem_ap_fw = g_strsplit (modem_ap_fw, ".", QUECTEL_STD_MODEM_AP_FIRMWARE_RER_SEG);
+
+                if ((g_strv_length (split_modem_ap_fw) == QUECTEL_STD_MODEM_AP_FIRMWARE_RER_SEG) &&
+                (split_modem_ap_fw[3] && split_modem_ap_fw[2])){
+
+                    modem_ap_rev_seg[3] = split_modem_ap_fw[3];
+                    modem_ap_rev_seg[2] = split_modem_ap_fw[2];
+
+                    if((strlen(modem_ap_rev_seg[2]) == QUECTEL_MAIN_RER_TAG_LEN) &&
+                    (strlen(modem_ap_rev_seg[3]) == QUECTEL_MINOR_RER_TAG_LAN) &&
+                    !g_strcmp0(modem_ap_rev_seg[3],QUECTEL_MINOR_RER_INVALID_TAG) &&
+                    !g_strcmp0(modem_ap_rev_seg[2],QUECTEL_MAIN_RER_INVALID_TAG)){
+						g_debug("[quectel] is standard  firmware version,but ap version invalid \n");
+                        valid = FALSE;
+
+                    }
+                }
+            }
+        }
+    }
+
+  return valid;
+}
+
+static void
+quectel_at_port_get_firmware_version_retry_ready (MMBaseModem  *modem,
+                                            GAsyncResult *res,
+                                            GTask        *task)
+{
+    MMFirmwareUpdateSettings *update_settings;
+    const gchar              *version;
+     gboolean  ap_firmware_version_valid = TRUE;
+
+    update_settings = g_task_get_task_data (task);
+
+    version = mm_base_modem_at_command_finish (modem, res, NULL);
+    if (version){
+        ap_firmware_version_valid = quectel_check_standard_firmware_version_valid(version);
+        if (ap_firmware_version_valid){
+            g_debug("[quectel] valid ap firmware version:%s,then re-update\n",version);
+            mm_firmware_update_settings_set_version (update_settings, version);
+        }
+    }
+    g_task_return_pointer (task, g_object_ref (update_settings), g_object_unref);
+    g_object_unref (task);
+}
+
+static gboolean
+quectel_at_port_get_firmware_version_retry (GTask *task)
+{
+    MMBaseModem *self;
+
+    self = g_task_get_source_object (task);
+
+	/* Fetch full firmware info */
+	mm_base_modem_at_command (self,
+							  "+QGMR?",
+							  3,
+							  FALSE,
+							  (GAsyncReadyCallback) quectel_at_port_get_firmware_version_retry_ready,
+							  task);
+
+    return G_SOURCE_REMOVE;
+}
+
 static void
 quectel_at_port_get_firmware_version_ready (MMBaseModem  *modem,
                                             GAsyncResult *res,
@@ -217,15 +330,25 @@ quectel_at_port_get_firmware_version_ready (MMBaseModem  *modem,
 {
     MMFirmwareUpdateSettings *update_settings;
     const gchar              *version;
+    gboolean  ap_firmware_version_valid = TRUE;
 
     update_settings = g_task_get_task_data (task);
 
     version = mm_base_modem_at_command_finish (modem, res, NULL);
-    if (version)
-        mm_firmware_update_settings_set_version (update_settings, version);
+    if (version){
+       ap_firmware_version_valid = quectel_check_standard_firmware_version_valid(version);
+       mm_firmware_update_settings_set_version (update_settings, version);
+    }
 
-    g_task_return_pointer (task, g_object_ref (update_settings), g_object_unref);
-    g_object_unref (task);
+	if (version && ap_firmware_version_valid){
+		g_task_return_pointer (task, g_object_ref (update_settings), g_object_unref);
+		g_object_unref (task);
+	}else {
+        if(version){
+          g_debug("[quectel] ap_firmware_version[%s]invalid,we retry it \n",version);
+        }
+        g_timeout_add_seconds (QUECTEL_STD_AP_FIRMWARE_INVALID_RETRY_TIMEROUT, (GSourceFunc)quectel_at_port_get_firmware_version_retry, task);
+	}
 }
 
 #if defined WITH_MBIM
